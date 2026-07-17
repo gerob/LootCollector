@@ -6,7 +6,7 @@
 > **Compatibility Notice:** This addon has been developed and tested specifically for the **Bronzebeard** realm of Project Ascension, with support recently extended to Conquest of Azeroth (CoA) realms. Its data-sharing model is designed for static world object spawns (e.g., clickable chests/nodes). On realms where items like Mystic Scrolls drop from random mobs, sharing coordinates is not useful, and this addon may not function as intended.
 
 > [!TIP]
-> **Support Development:** Keeping this complex codebase updated and stable takes continuous time and energy. If LootCollector helps streamline your progression, consider supporting the development on [GitHub Sponsors](https://github.com/sponsors/mmobrain) to help maintain compatibility, prevent regressions, and fund ongoing updates.
+> **Support Development:** Keeping this complex codebase updated and stable takes continuous time and energy. If LootCollector helps streamline your progression, consider supporting the development on [GitHub Sponsors](https://github.com/sponsors/gerob) to help maintain compatibility, prevent regressions, and fund ongoing updates.
 
 ---
 
@@ -107,7 +107,7 @@ This project is open to contributions from the community. If you are interested 
 
 #### Credits
 *   **Author:** Skulltrail
-*   **Contributors:** Deidre, Rhenyra, Morty, Markosz, Bandit Tech, xan, Stilnight and Xurkon
+*   **Contributors:** Deidre, Rhenyra, Morty, Markosz, Bandit Tech, xan, Stilnight, Xurkon and Jollygg
 *   **Early alpha Top Collectors:** Morty, Laya, Brokenheart, Mie, Rhen, Aaltrix, Insanestar, Harrydn, Blutact
 
 #### Sponsors
