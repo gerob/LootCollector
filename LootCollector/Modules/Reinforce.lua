@@ -320,6 +320,33 @@ local function ensureTicker()
     tickerFrame = CreateFrame("Frame", "LootCollectorReinforceTicker")
 end
 
+local function attachTickerScript()
+    if not tickerFrame then return end
+    tickerFrame:SetScript("OnUpdate", function(_, e)
+        local p = L and L.db and L.db.profile
+        if not (p and p.sharing and p.sharing.enabled) then
+            if next(Reinforce.queue) then wipe(Reinforce.queue) end
+            if next(Reinforce.ackQueue) then wipe(Reinforce.ackQueue) end
+            Reinforce.scanInProgress = false
+            return
+        end
+
+        if L:IsPaused() then return end
+
+        Reinforce.scanAccum = Reinforce.scanAccum + e
+        if Reinforce.scanAccum >= Reinforce.scanPeriod then
+            Reinforce.scanAccum = 0
+            startScan()
+        end
+
+        if Reinforce.scanInProgress then
+            processScanChunk()
+        end
+
+        drainQueueOnce()
+    end)
+end
+
 function Reinforce:OnInitialize()
 	if L.LEGACY_MODE_ACTIVE then return end
     self:RegisterMessage("LOOTCOLLECTOR_CONFIRMATION_RECEIVED", "HandleConfirmation")
@@ -330,29 +357,7 @@ function Reinforce:OnEnable()
     if L.LEGACY_MODE_ACTIVE then return end
     
     if tickerFrame then
-        tickerFrame:SetScript("OnUpdate", function(_, e)
-            local p = L and L.db and L.db.profile
-            if not (p and p.sharing and p.sharing.enabled) then
-                if next(Reinforce.queue) then wipe(Reinforce.queue) end
-                if next(Reinforce.ackQueue) then wipe(Reinforce.ackQueue) end
-                Reinforce.scanInProgress = false
-                return
-            end
-		
-		if L:IsPaused() then return end
-
-            Reinforce.scanAccum = Reinforce.scanAccum + e
-            if Reinforce.scanAccum >= Reinforce.scanPeriod then
-                Reinforce.scanAccum = 0
-                startScan()
-            end
-            
-            if Reinforce.scanInProgress then
-                processScanChunk()
-            end
-            
-            drainQueueOnce()
-        end)
+        attachTickerScript()
     end
     
     if C_Timer and C_Timer.After then
@@ -364,6 +369,18 @@ function Reinforce:OnDisable()
     if tickerFrame then
         tickerFrame:SetScript("OnUpdate", nil)
     end
+end
+
+function Reinforce:PauseBackground()
+    if tickerFrame then
+        tickerFrame:SetScript("OnUpdate", nil)
+    end
+end
+
+function Reinforce:ResumeBackground()
+    if L.LEGACY_MODE_ACTIVE then return end
+    ensureTicker()
+    attachTickerScript()
 end
 
 return Reinforce

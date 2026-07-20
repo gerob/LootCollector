@@ -1,5 +1,12 @@
 ## Version Beta-1.0r
 
+### Performance & hibernation pass
+- **Fixed minimap filter-cache thrash:** Zones (or filter sets) with zero matching discoveries no longer force a rebuild every minimap tick. An empty result is treated as valid.
+- **Fixed filter-cache wipe during ZoneIndex build:** The minimap cache is no longer wiped when the zone index is not ready yet, avoiding blank/flicker spins at login.
+- **Hibernation (`/lcpause`) now truly stops background work:** Leaves the public sync channel, cancels the Comm ticker, pauses Reinforce, and stops the minimap ticker. On resume, tickers and channel join are restored.
+- **Faster map/Arrow filters:** Equip-slot lookups cache `equipLoc` on the discovery when resolved; "Usable by" class filters use a precomputed IST set instead of nested loops per pin.
+- **Safer Deep Filter on the map:** Map/minimap rebuilds use Scanner RAM cache only and no longer call `SetHyperlink` per pin (avoids hitching when "Filter by Deep Filter" is on).
+
 - Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
 - Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.
 - Made Vendors discoverable and enabled 2 more types of vendors besides Blackmarket (1 broadcast per day)

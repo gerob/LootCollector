@@ -731,6 +731,74 @@ function LootCollector:IsAppearanceCollected(itemID)
     return isCollected
 end
 
+-- Precomputed usable-by IST sets (rebuilt when usableByClasses membership changes).
+local _filterIstCache = {
+    key = nil,
+    armor = {},
+    weapons = {},
+}
+
+local function _usableByClassesKey(usableByClasses)
+    if not usableByClasses or not next(usableByClasses) then return "" end
+    local parts = {}
+    for classToken, enabled in pairs(usableByClasses) do
+        if enabled then
+            parts[#parts + 1] = classToken
+        end
+    end
+    table.sort(parts)
+    return table.concat(parts, ",")
+end
+
+local function _ensureAllowedIstSets(usableByClasses, Constants)
+    local key = _usableByClassesKey(usableByClasses)
+    if _filterIstCache.key == key then
+        return _filterIstCache.armor, _filterIstCache.weapons
+    end
+    wipe(_filterIstCache.armor)
+    wipe(_filterIstCache.weapons)
+    _filterIstCache.key = key
+    if key == "" or not Constants or not Constants.CLASS_PROFICIENCIES then
+        return _filterIstCache.armor, _filterIstCache.weapons
+    end
+    for classToken, enabled in pairs(usableByClasses) do
+        if enabled then
+            local proficiencies = Constants.CLASS_PROFICIENCIES[classToken]
+            if proficiencies then
+                if proficiencies.armor then
+                    for _, ist in ipairs(proficiencies.armor) do
+                        _filterIstCache.armor[ist] = true
+                    end
+                end
+                if proficiencies.weapons then
+                    for _, ist in ipairs(proficiencies.weapons) do
+                        _filterIstCache.weapons[ist] = true
+                    end
+                end
+            end
+        end
+    end
+    return _filterIstCache.armor, _filterIstCache.weapons
+end
+
+local function _resolveEquipLoc(d, Constants)
+    -- Prefer persisted equipLoc written from a real GetItemInfo result.
+    if d.el and d.el ~= "" then
+        return d.el
+    end
+    local _, _, _, _, _, _, _, _, cachedEquipLoc = GetItemInfo(d.il or d.i or 0)
+    if cachedEquipLoc and cachedEquipLoc ~= "" then
+        d.el = cachedEquipLoc
+        return cachedEquipLoc
+    end
+    -- IST fallback matches prior filter behavior but is not a true equip slot —
+    -- do not persist it on the discovery record.
+    if d.ist and d.ist > 0 and Constants and Constants.IST_TO_EQUIPLOC and Constants.IST_TO_EQUIPLOC[d.ist] then
+        return Constants.IST_TO_EQUIPLOC[d.ist]
+    end
+    return nil
+end
+
 function LootCollector:DiscoveryPassesFilters(d)
     local Constants = self:GetModule("Constants", true)
     local f = self:GetFilters()
@@ -785,20 +853,11 @@ function LootCollector:DiscoveryPassesFilters(d)
             
             if isProficiencyArmor or isWeapon then
                 if not Constants.CLASS_PROFICIENCIES then return true end
-                for classToken, _ in pairs(f.usableByClasses) do
-                    local proficiencies = Constants.CLASS_PROFICIENCIES[classToken]
-                    if proficiencies then
-                        local listToSearch = isProficiencyArmor and proficiencies.armor or proficiencies.weapons
-                        if listToSearch then
-                            for _, allowed_ist in ipairs(listToSearch) do
-                                if itemSubType == allowed_ist then
-                                    canBeUsed = true
-                                    break
-                                end
-                            end
-                        end
-                    end
-                    if canBeUsed then break end
+                local allowedArmor, allowedWeapons = _ensureAllowedIstSets(f.usableByClasses, Constants)
+                if isProficiencyArmor then
+                    canBeUsed = allowedArmor[itemSubType] == true
+                else
+                    canBeUsed = allowedWeapons[itemSubType] == true
                 end
             else
                 canBeUsed = true
@@ -808,15 +867,7 @@ function LootCollector:DiscoveryPassesFilters(d)
     end
 
     if next(f.allowedEquipLoc) then
-        local equipLoc = nil
-        local _, _, _, _, _, _, _, _, cachedEquipLoc = GetItemInfo(d.il or d.i or 0)
-        if cachedEquipLoc and cachedEquipLoc ~= "" then
-            equipLoc = cachedEquipLoc
-        else
-            if d.ist and d.ist > 0 and Constants.IST_TO_EQUIPLOC and Constants.IST_TO_EQUIPLOC[d.ist] then
-                equipLoc = Constants.IST_TO_EQUIPLOC[d.ist]
-            end
-        end
+        local equipLoc = _resolveEquipLoc(d, Constants)
         
         if equipLoc and not f.allowedEquipLoc[equipLoc] then
             return false
@@ -1567,10 +1618,19 @@ function LootCollector:EnterHibernation()
     
     local Comm = self:GetModule("Comm", true)
     if Comm then
-        if Comm._rateLimitQueue then wipe(Comm._rateLimitQueue) end
-        if Comm._delayQueue then wipe(Comm._delayQueue) end
-        if Comm._incomingMessageQueue then wipe(Comm._incomingMessageQueue) end
-        if Comm.rawBuffer then wipe(Comm.rawBuffer) end
+        if Comm.StopBackgroundProcessing then
+            Comm:StopBackgroundProcessing()
+        else
+            if Comm._rateLimitQueue then wipe(Comm._rateLimitQueue) end
+            if Comm._delayQueue then wipe(Comm._delayQueue) end
+            if Comm._incomingMessageQueue then wipe(Comm._incomingMessageQueue) end
+            if Comm.rawBuffer then wipe(Comm.rawBuffer) end
+        end
+    end
+
+    local Reinforce = self:GetModule("Reinforce", true)
+    if Reinforce and Reinforce.PauseBackground then
+        Reinforce:PauseBackground()
     end
     
     
@@ -1587,6 +1647,7 @@ function LootCollector:EnterHibernation()
     
     local Map = self:GetModule("Map", true)
     if Map then
+        if Map.StopMinimapTicker then Map:StopMinimapTicker() end
         Map.cacheIsDirty = true
         if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then Map:Update() end
         if Map.UpdateMinimap then Map:UpdateMinimap() end
@@ -1600,6 +1661,16 @@ function LootCollector:ExitHibernation()
     
     local Core = self:GetModule("Core", true)
     if Core and Core.EnsureCachePump then Core:EnsureCachePump() end
+
+    local Comm = self:GetModule("Comm", true)
+    if Comm and Comm.StartBackgroundProcessing then
+        Comm:StartBackgroundProcessing()
+    end
+
+    local Reinforce = self:GetModule("Reinforce", true)
+    if Reinforce and Reinforce.ResumeBackground then
+        Reinforce:ResumeBackground()
+    end
     
     
     local Arrow = self:GetModule("Arrow", true)

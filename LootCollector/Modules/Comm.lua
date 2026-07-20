@@ -1630,6 +1630,13 @@ function Comm:OnUpdate(elapsed)
         if pTime then L:ProfileStop("Comm:OnUpdate", pTime) end
         return 
     end
+
+    -- Hibernation / pause: skip all queue/traffic work. Channel leave + ticker
+    -- cancel are handled by StopBackgroundProcessing; this is a safety gate.
+    if L and L.IsPaused and L:IsPaused() then
+        if pTime then L:ProfileStop("Comm:OnUpdate", pTime) end
+        return
+    end
     
     if elapsed > 0.5 then
         local bufferSize = #Comm.rawBuffer
@@ -2074,6 +2081,12 @@ local function _onChatMsgChannel(_, _, msg, sender, _, _, _, _, _, _, channelNam
         return 
     end
 
+    -- Pause before traffic metering / buffer work so hibernation is silent.
+    if L and L.IsPaused and L:IsPaused() then 
+        if pTime then L:ProfileStop("Comm:_onChatMsgChannel", pTime) end
+        return 
+    end
+
     if channelName then
         local chA = string.upper(channelName)
         local chB = string.upper(Comm.channelName or "")
@@ -2084,10 +2097,6 @@ local function _onChatMsgChannel(_, _, msg, sender, _, _, _, _, _, _, channelNam
     end
 
     if isSelfSender(sender) then 
-        if pTime then L:ProfileStop("Comm:_onChatMsgChannel", pTime) end
-        return 
-    end
-    if L and L.IsPaused and L:IsPaused() then 
         if pTime then L:ProfileStop("Comm:_onChatMsgChannel", pTime) end
         return 
     end
@@ -2919,22 +2928,7 @@ function Comm:OnInitialize()
     
     self:RegisterComm(self.addonPrefix, "OnCommReceived")
     
-    
-    if type(C_Timer) == "table" and type(C_Timer.NewTicker) == "function" then
-        if not self._commTicker then
-            self._commTicker = C_Timer.NewTicker(0.1, function()
-                Comm:OnUpdate(0.1)
-            end)
-        end
-    else
-        
-        if not self._tickerFrame then
-            self._tickerFrame = CreateFrame("Frame")
-            self._tickerFrame:SetScript("OnUpdate", function(_, elapsed)
-                Comm:OnUpdate(elapsed)
-            end)
-        end
-    end
+    self:StartBackgroundTicker()
     
     if not self._chatFrame then
         self._chatFrame = CreateFrame("Frame")
@@ -2942,20 +2936,23 @@ function Comm:OnInitialize()
         self._chatFrame:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
         self._chatFrame:SetScript("OnEvent", function(_, event, ...)
             if event == "CHAT_MSG_CHANNEL" then
-                -- Lightweight traffic meter (shown in the minimap button
-                -- tooltip): counts LC-channel messages per rolling minute.
-                -- Only the addon's own channel is counted -- General/Trade
-                -- chatter is irrelevant here.
-                local chanName = select(9, ...)
-                if chanName and Comm.channelName and string.lower(chanName) == string.lower(Comm.channelName) then
-                    Comm._trafficCount = (Comm._trafficCount or 0) + 1
-                    local tnowT = time()
-                    if not Comm._trafficWindowStart then
-                        Comm._trafficWindowStart = tnowT
-                    elseif (tnowT - Comm._trafficWindowStart) >= 60 then
-                        Comm._trafficLastRate = Comm._trafficCount
-                        Comm._trafficCount = 0
-                        Comm._trafficWindowStart = tnowT
+                -- Skip traffic metering while hibernating/paused.
+                if not (L and L.IsPaused and L:IsPaused()) then
+                    -- Lightweight traffic meter (shown in the minimap button
+                    -- tooltip): counts LC-channel messages per rolling minute.
+                    -- Only the addon's own channel is counted -- General/Trade
+                    -- chatter is irrelevant here.
+                    local chanName = select(9, ...)
+                    if chanName and Comm.channelName and string.lower(chanName) == string.lower(Comm.channelName) then
+                        Comm._trafficCount = (Comm._trafficCount or 0) + 1
+                        local tnowT = time()
+                        if not Comm._trafficWindowStart then
+                            Comm._trafficWindowStart = tnowT
+                        elseif (tnowT - Comm._trafficWindowStart) >= 60 then
+                            Comm._trafficLastRate = Comm._trafficCount
+                            Comm._trafficCount = 0
+                            Comm._trafficWindowStart = tnowT
+                        end
                     end
                 end
                 _onChatMsgChannel(_, event, ...)
@@ -2965,6 +2962,45 @@ function Comm:OnInitialize()
         end)
     end	    
     self:EvaluateKS()
+end
+
+function Comm:StartBackgroundTicker()
+    if type(C_Timer) == "table" and type(C_Timer.NewTicker) == "function" then
+        if not self._commTicker then
+            self._commTicker = C_Timer.NewTicker(0.1, function()
+                Comm:OnUpdate(0.1)
+            end)
+        end
+    else
+        if not self._tickerFrame then
+            self._tickerFrame = CreateFrame("Frame")
+        end
+        self._tickerFrame:SetScript("OnUpdate", function(_, elapsed)
+            Comm:OnUpdate(elapsed)
+        end)
+    end
+end
+
+function Comm:StopBackgroundProcessing()
+    if self._commTicker then
+        self._commTicker:Cancel()
+        self._commTicker = nil
+    end
+    if self._tickerFrame then
+        self._tickerFrame:SetScript("OnUpdate", nil)
+    end
+    self:LeavePublicChannel()
+    if self._rateLimitQueue then wipe(self._rateLimitQueue) end
+    if self._delayQueue then wipe(self._delayQueue) end
+    if self._incomingMessageQueue then wipe(self._incomingMessageQueue) end
+    if self.rawBuffer then wipe(self.rawBuffer) end
+    if self._outgoingSyncQueue then wipe(self._outgoingSyncQueue) end
+    if self._incomingTimestamps then wipe(self._incomingTimestamps) end
+end
+
+function Comm:StartBackgroundProcessing()
+    self:StartBackgroundTicker()
+    self:EnsureChannelJoined()
 end
 
 function Comm:OnEnable()

@@ -83,6 +83,34 @@ local function ExtractClassToken(lineText)
     return nil
 end
 
+-- Peek tooltip fullText without SetHyperlink. Used by map Deep Filter so pin
+-- rebuilds never hitch on tooltip scans. Returns "" when not yet cached.
+function Scanner:GetCachedFullText(itemID, itemLink)
+    if not self.ramCache then return "" end
+    local cacheKey = itemLink or itemID
+    if not cacheKey then return "" end
+    local ramData = self.ramCache[cacheKey]
+    if ramData and ramData.fullText then
+        return ramData.fullText
+    end
+    -- Also try numeric ID key when a link was passed (and vice versa).
+    if itemLink and itemID then
+        ramData = self.ramCache[itemID]
+        if ramData and ramData.fullText then
+            return ramData.fullText
+        end
+    elseif itemID and not itemLink then
+        local link = select(2, GetItemInfo(itemID))
+        if link then
+            ramData = self.ramCache[link]
+            if ramData and ramData.fullText then
+                return ramData.fullText
+            end
+        end
+    end
+    return ""
+end
+
 function Scanner:GetItemData(itemID, itemLink)
     local pTime = L.ProfileStart and L:ProfileStart() 
 

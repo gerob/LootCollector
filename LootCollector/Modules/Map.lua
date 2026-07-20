@@ -683,16 +683,19 @@ local function passesFiltersLocal(d, searchTerm)
     -- Optional "Filter by Deep Filter" integration: gate item discoveries by the
     -- Viewer's Deep Filter expressions (tooltip keyword logic). Vendors have no
     -- item tooltip so they are left unaffected.
+    -- Map path uses Scanner RAM cache only — never SetHyperlink here (avoids
+    -- hitching map/minimap rebuilds). Uncached items are treated as non-matches
+    -- until Viewer/Scanner has warmed fullText (same outcome as an empty scan).
     local mf = L.db and L.db.char and L.db.char.mapFilters
     if mf and mf.useDeepFilter then
         local Viewer = L:GetModule("Viewer", true)
         if Viewer and Viewer.HasDeepFilters and Viewer:HasDeepFilters() then
             local Constants = L:GetModule("Constants", true)
-            local isVendor = Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET
+            local isVendor = (Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET) or d.vendorType
             if not isVendor then
                 local Scanner = L:GetModule("Scanner", true)
-                local itemData = Scanner and Scanner:GetItemData(d.i, d.il)
-                if not Viewer:MatchesDeepFilter(itemData and itemData.fullText or "") then
+                local fullText = Scanner and Scanner.GetCachedFullText and Scanner:GetCachedFullText(d.i, d.il) or ""
+                if not Viewer:MatchesDeepFilter(fullText) then
                     return false
                 end
             end
@@ -1127,20 +1130,22 @@ function Map:RebuildFilteredCache()
         return 
     end
 
-    wipe(self.cachedVisibleDiscoveries)
-
-    local currentContinent, currentMapID = self:GetPlayerLocation()
-    if not currentContinent or not currentMapID then
-        self.cacheIsDirty = false
-        if pTime then L:ProfileStop("Map:RebuildFilteredCache", pTime) end 
-        return
-    end
-    
+    -- Bail before wiping when zone index is not ready so we keep any previous
+    -- cache and leave cacheIsDirty set for a later successful rebuild.
     local Core = L:GetModule("Core", true)
     if not Core or not Core.ZoneIndexBuilt then 
         if pTime then L:ProfileStop("Map:RebuildFilteredCache", pTime) end 
         return 
     end
+
+    local currentContinent, currentMapID = self:GetPlayerLocation()
+    if not currentContinent or not currentMapID then
+        -- No player map yet: keep dirty so the next zone/location tick rebuilds.
+        if pTime then L:ProfileStop("Map:RebuildFilteredCache", pTime) end 
+        return
+    end
+
+    wipe(self.cachedVisibleDiscoveries)
 
     local term = ""
 
@@ -2431,11 +2436,10 @@ function Map:UpdateMinimap()
   
     self:EnsureMinimapTicker()
   
-    if self.cachingEnabled then
-        if self.cacheIsDirty or #self.cachedVisibleDiscoveries == 0 then
-             self.cacheIsDirty = true
-             self:RebuildFilteredCache()
-        end
+    -- Only rebuild when explicitly dirty. An empty cache is a valid result
+    -- (zone with no matching discoveries) and must not force perpetual rebuilds.
+    if self.cachingEnabled and self.cacheIsDirty then
+        self:RebuildFilteredCache()
     end
 
     local currentContinent, currentMapID = self:GetPlayerLocation()
