@@ -55,12 +55,46 @@ local function CreateMinimapButton()
     
     button:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:SetText("|cffe5cc80LootCollector|r", 1, 1, 1)
+        GameTooltip:SetText("|cffe5cc80LootCollector|r |cff888888(build " .. (L.BuildStamp or "?") .. ")|r", 1, 1, 1)
         GameTooltip:AddLine("Left-click to open Discoveries", 0.7, 0.7, 1)
         GameTooltip:AddLine("Right-click to open Options", 0.7, 0.7, 1)
         GameTooltip:AddLine("Drag to move", 0.5, 0.5, 0.5)
+
+        -- Live status: what the addon is doing right now.
+        GameTooltip:AddLine(" ")
+        local queue = L.db and L.db.global and L.db.global.cacheQueue
+        local qn = queue and #queue or 0
+        if qn > 0 then
+            GameTooltip:AddLine(string.format("Caching item data: %d server lookups queued", qn), 0.6, 1, 0.6)
+        else
+            GameTooltip:AddLine("Item caching: idle", 0.6, 1, 0.6)
+        end
+        local p = L.db and L.db.profile
+        local sharingOn = p and p.sharing and p.sharing.enabled
+        local channelOn = sharingOn and p.sharing.publicChannelEnabled
+        if not sharingOn then
+            GameTooltip:AddLine("Sharing: |cffff5555disabled|r (not syncing with other players)", 0.9, 0.6, 0.6)
+        elseif not channelOn then
+            GameTooltip:AddLine("Public channel sync: |cffff5555off|r", 0.9, 0.6, 0.6)
+        else
+            local Comm = L:GetModule("Comm", true)
+            if Comm then
+                local rate = Comm._trafficLastRate
+                if rate then
+                    GameTooltip:AddLine(string.format("LC channel: ~%d msgs/min", rate), 0.6, 0.8, 1)
+                elseif (Comm._trafficCount or 0) > 0 then
+                    GameTooltip:AddLine(string.format("LC channel: %d msgs this minute so far", Comm._trafficCount), 0.6, 0.8, 1)
+                else
+                    GameTooltip:AddLine("LC channel: quiet", 0.6, 0.8, 1)
+                end
+                if Comm._outgoingSyncQueue and #Comm._outgoingSyncQueue > 0 then
+                    GameTooltip:AddLine(string.format("Outgoing shares queued: %d", #Comm._outgoingSyncQueue), 1, 0.8, 0.5)
+                end
+            end
+        end
+
         GameTooltip:Show()
-        GameTooltip:SetFrameStrata("TOOLTIP") 
+        GameTooltip:SetFrameStrata("TOOLTIP")
     end)
     
     button:SetScript("OnLeave", function() GameTooltip:Hide() end)

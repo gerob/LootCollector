@@ -1,3 +1,100 @@
+## Version Beta-1.0r
+
+- Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
+- Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.
+- Made Vendors discoverable and enabled 2 more types of vendors besides Blackmarket (1 broadcast per day)
+- Deep Search Tooltip Filtering: Search items by stats, spells, or effects, and filter map pins with matching keywords.
+- Added the ability to filter out specific addon version and made 0.8.5 the minimum version by default. People are still using very old versions of the addon.
+- Multiple ways of self-cleaning duplicates and bad items received from older addons.
+- A lot of other bug fixes and performance tweaks, like the big hang when you Alt+Tab back into the game.
+
+
+## LootCollector 0.8.9s - Worldforged Phase Fixes, Filter Repairs & Flood Performance
+
+### Eighth pass (build s8): the real vendor-detection fix + pump restarts
+- **FOUND AND FIXED the actual vendor-detection blocker:** HandleLocalLoot's very first gate rejected any discovery without an item link/ID - and vendor discoveries never carry one (their pseudo-item is synthesized later in the vendor branch). Every live vendor detection died silently at this gate; all vendors ever listed came from imports. Vendor payloads now bypass the two item-ID gates.
+- **Fixed caching freezing after phase switches:** The lookup pump self-cancels whenever its queue empties, and nothing restarted it when a phase switch (or a viewer rebuild) refilled the queue - progress froze at "0 / N". The pump is now re-ensured after phase warms, viewer cache builds, and priority bumps.
+- **/lcvendor reports truthfully:** It now checks whether THIS vendor (by name) exists in the database instead of just comparing entry counts.
+
+### Seventh pass (build s7): caching freeze fix
+- **Fixed the item-cache pump freezing at 0%:** IDs with no server data (unreleased items and their phase upgrades) were re-queued forever, each burning a verify delay - the queue churned without ever shrinking. Unresolvable IDs are now parked after two attempts, the verify delay dropped to 1.2s, and priority-bumping skips known-hopeless IDs.
+- **Row tooltips fall back to the base item** when an upgrade's data never arrives (no more permanent "Retrieving item information").
+- **Build stamp added:** the minimap tooltip and /lcvendor now show the installed build (s7) so version mismatches are visible at a glance. The addon-list title shows [beta.0.8.9s-7].
+
+### Sixth pass (same version): field-test round 3
+- **Fixed vendor pins never gating correctly on maps:** The core pin filter had no vendor handling at all - any active Slots filter silently removed every vendor pin (their pseudo-item can never resolve an equip slot), and the "Vendors" show-toggle only affected toasts. Vendors now honor exactly one filter: the Vendors checkbox.
+- **Vendor detection also bypasses moderation AOE tombstones** (last remaining zone gate that could block city vendors).
+- **Dragging the Viewer keeps rows visible again:** replaced the hide-while-dragging workaround with anchor-chain refreshes on show and on drag-start (rows are created while the window is hidden, which can leave stale rects for the first drag).
+- **Item caching is 2x faster** on Ascension's native cache API (0.25-0.35s per lookup, was 0.5-0.7s). The pace is an addon-side safety throttle, not a server limit; visible rows already jump the queue.
+- **Visible rows now cache first:** Items rendering as "Unknown Item" jump to the FRONT of the server-lookup queue instead of waiting behind thousands of background phase-upgrade lookups. Hovering is no longer the fastest way to fix a row.
+- **Stale upgrade lookups are pruned at login too:** The persistent lookup queue could carry thousands of upgrade queries from a phase selected in a previous session; it is now cleaned on login as well as on phase switch.
+- **Healed rows now re-filter:** When item data arrives and a row heals in place, the cached filtered list is invalidated (debounced), so CoA-hidden relics actually disappear instead of lingering until the next manual filter change.
+- **Vendors tab drag ghost, definitive fix:** Rows hide while the window moves and reappear on drop - no more list left behind on the first drag.
+- **Vendor icons forced square:** Explicit 20x20 texture sizing replaces fill-anchoring (icons rendered vertically stretched).
+- **Viewer frames are now named** (LootCollectorViewerRow1...) so /framestack identifies them instantly when debugging stray visuals.
+- **Minimap tooltip: sharing-aware:** Shows "Sharing: disabled" / "Public channel sync: off" when applicable; the traffic meter now counts ONLY the LootCollector channel (was counting all public channels).
+- **Hide Bags now also filters the Viewer list** (same checkbox, now labeled "map & list"), included in the filter cache key.
+- **New /lcvendor diagnostic:** Stand at a special vendor with the shop open and run /lcvendor - prints the NPC subname, rule match, every detection gate, and force-runs a scan.
+- **Fixed "UnifiedScanner: Unknown link type" errors:** Vendor records use synthetic negative item IDs that the client's tooltip system rejects; the scanner, toast tooltips and viewer row tooltips now detect them and show a proper vendor tooltip instead of erroring.
+- **Fixed city vendors being impossible to record (Ring Vendor):** Capital cities are forbidden zones for loot discoveries, which silently blocked vendors standing in cities from ever being recorded, synced, listed or pinned. Vendor-type discoveries are now exempt from the zone gates across detection, import, sharing, map pins and the viewer.
+- **Fixed the Vendors tab leaving a ghost of the name column when moving the window:** The vendor name hit-box was anchored to a text element and force-resized at the same time (an over-constrained rectangle that went stale during drags). It is now anchored conventionally; this should also fix the stretched vendor icons.
+- **CoA: Librams, Idols and Totems are now hidden everywhere:** List rows (discovered and undiscovered), dropdown options and the Undiscovered counter all skip relics on CoA realms as soon as item data is available - these item types were removed from the realm.
+- **Fixed the caching bar flickering between "kinds" of caching:** The label now classifies a sample of the queue ("Items & Upgrades" when mixed) instead of flipping per item; switching Worldforged phases also prunes now-stale upgrade lookups from the queue instead of letting them drain for minutes.
+- **Minimap button tooltip now shows live status:** current caching queue size, public channel traffic (msgs/min) and pending outgoing shares.
+
+### Third pass (same version): Starter Database v7.0
+- **Regenerated the Starter Database from live community data:** Now ships 4,524 discovery locations (up from 1,658) covering 1,600 of 1,838 Worldforged items, plus 16 special vendors. Fresh installs start with the community's knowledge instead of a mostly-empty map; existing users get a one-time merge prompt on login.
+- Built with the addon's own serializer/compressor (AceSerializer + LibDeflate, !LC1! format), round-trip verified, and guaranteed to only WIDEN the per-item zone validation lists so no existing player records get pruned.
+- Addon in-code version string aligned to beta-0.8.9s (was still reporting r).
+
+### Second pass (same version): item accuracy, vendors, and UI polish
+- **Fixed items staying tagged [NEW] forever:** The new-item flag was write-once. It is now cleared the moment any discovery of that item lands, and a login sweep prunes stale flags against every realm bucket.
+- **Fixed untaggable vanity Worldforged items (e.g. Frightened Kitten) never turning Discovered:** Items on the curated Worldforged list now qualify for discovery even when their tooltip carries no "Worldforged" tag.
+- **Re-enabled special vendor discoveries:** Blackmarket Artisan Supplies, Exquisite Collectables and Ring Vendor NPCs (case-insensitive subname match) are detected again, record their full sellable inventory, show a toast, and appear on the map/Vendors tab immediately.
+- **Added throttled vendor auto-sharing:** At most 1 automatic vendor broadcast per day (persistent), never the same vendor twice within 7 days, inventory capped at 25 item IDs, sent after a short random delay - designed to add near-zero load to the public channel. Older addon versions safely ignore these messages.
+- **Vendors tab is now inline-only:** The bottom split-pane inventory panel (source of visual glitches when moving the window) is retired; vendor inventories always expand in-line via the + button.
+- **Worldforged phase menu now toggles:** Clicking the Worldforged button while its phase menu is open closes it.
+- **Loading bar now says what it's doing:** e.g. "Caching Phase Upgrades: 646 / 1753 (36%) - server lookups, safe to play" instead of a bare item count.
+
+- **Fixed undiscovered Worldforged items vanishing when an upgrade phase is selected:** Undiscovered items from the curated list are no longer removed by a tooltip check against the upgraded variant's data; Worldforged status is now judged from the base item only.
+- **Fixed session-long item misclassification:** The Worldforged tooltip scanner now scans all tooltip lines (was lines 2-5 only), waits out "Retrieving item information", and no longer permanently caches negative results from incomplete tooltips.
+- **Fixed empty viewer after background rebuilds:** The async cache rebuild fed a queue the builder never read and completed instantly with an empty list (affected login prewarm, /lcviewer rebuild, and Block & Purge / delete-player flows).
+- **Added readable placeholders while upgrades load:** Rows borrow the base item's name/slot/type/levels while phase-upgrade data is in flight instead of rendering "Unknown Item" with empty columns; base items are cache-warmed alongside upgrades.
+- **Recovered 6 lost upgrade mappings:** Six rows are syntactically broken in AtlasLoot's own database (items 1262811, 2088888, 3595662, 4050651-4050653) and were silently dropped from the export; reconstructed them so their phase upgrades resolve.
+- **Fixed a comm memory leak:** The message dedupe table was never pruned due to a typo, making long sessions progressively heavier under high channel traffic until /reload.
+- **Faster channel-flood handling:** Duplicate discovery messages are now dropped before any parsing or allocation work; hot-path debug strings are no longer built when chat debug is off; stale per-sender rate windows are pruned.
+- **Removed an O(n) database scan per accepted discovery:** The zone-correction pass now only runs for the three zone IDs it can actually correct instead of scanning up to 10,000 rows on every message.
+- **Per-message profiler now defaults off:** Its instrumentation wrapped every hot-path function (measurable tax at 5-11k msgs/minute). New /lcprofiler command: on | off | report | reset.
+- **Fixed "Clear" not clearing the Favorites filter:** Both the toolbar Clear and dropdown "Clear All Filters" now reset Favorites, and the dropdown clear also resets vendor-type filters.
+- **Fixed unfavoriting an item not removing it from the Favorites-filtered view.**
+- **Fixed stale lists after changing Zone/Source/Quality/Vendor-Type filters:** These filters were missing from the result-cache key, so cached results could be served after they changed.
+- **Fixed Vendors tab sorting:** The Type header (default sort), Price and Continent silently ordered rows by internal GUID; Type now sorts by vendor type, Continent by continent, Price falls back to name.
+- **Fixed blank grid pages:** The list clamps the current page when the result set shrinks (e.g. clicking Refresh after new data arrives while browsing a deep page).
+- **Fixed dropdown filter options missing values contributed only by undiscovered items.**
+- **Faster Deep Search checkbox:** Toggling it no longer rebuilds the entire discovery cache; it only invalidates the filtered view.
+- **Fixed the addon title color code** (alpha/RGB were swapped, tinting the addon-list title the wrong color).
+
+
+## LootCollector 0.8.9r - Deep Filter & Performance Optimizations
+
+- **Added Undiscovered Worldforged Items:** Shows all undiscovered AtlasLoot items in the list so you can see what's left to find.
+- **Added "Undiscovered" filter button:** Toggle between showing missing items at the top (`Top`), mixed in the list (`Mixed`), or completely hidden (`Hidden`).
+- **Added a missing items counter:** Shows exactly how many items you are missing in parentheses on the Undiscovered filter button (e.g. `Undiscovered: Top (324)`).
+- **Added visual highlights:** Shows a flashy green `[NEW]` tag and grey `Unknown` zone text for missing items, and cleaned up list separators.
+- **Added archetype filters:** Automatically hides incompatible Relics, Idols, Totems, and Librams on CoA/classless realms so they don't clutter your list.
+- **Added Deep Search for Stats & Effects:** Search and filter item discoveries by specific stats, effects, or tooltip text.
+- **Added map pin filter integration:** Automatically hides or shows map pins based on your active Deep Search keywords.
+- **Fixed level 60 scaled Worldforged duplicates:** Dynamically maps upgraded versions back to their base item IDs to collapse duplicate list entries.
+- **Fixed wrong zone map pins:** Fixed bugs where coordinate issues caused map pins to display in incorrect zones like Wetlands or Moonglade.
+- **Fixed game freezes on Alt-Tab:** Fixed severe lag and client freezes when Alt-Tabbing back into the game under high public channel traffic.
+- **Added addon version filtering:** Block data sync from outdated versions using a checklist and a custom minimum version dropdown settings page.
+- **Added quick version selection:** Added "Select All" and "Deselect All" buttons to the addon version settings checklist.
+- **Blocked Auction House loot logging:** Prevents buying or retrieving items at the AH from recording your coordinates as drop locations.
+- **Blocked null coordinates:** Discards local/network loot events with `0, 0` coordinates and self-heals the database by removing legacy null entries on login.
+- **Added Starter DB zone validation:** Rejects network syncs for items in wrong zones and automatically prunes mis-mapped entries (e.g., Scarlet Crossbow in Elwynn Forest).
+- **Added "Block & Purge" context menu:** Right-click a player name in the Viewer to block them and immediately delete all entries discovered by them.
+
+
 ## LootCollector 0.8.8r - CoA & Map Pin Optimizations
 
 - Filtered out incompatible Relics, Idols and Totems on CoA.

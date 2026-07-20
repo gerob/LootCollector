@@ -161,7 +161,18 @@ function Detect:IsWorldforged(link)
     local c = self._cache.isWF[link]
     if c ~= nil then return c end
 
-    
+    -- Curated-list override: a handful of Worldforged world drops (vanity
+    -- companions/consumables like Frightened Kitten) carry NO "Worldforged"
+    -- line in their tooltip, so the tag scan alone can never detect their
+    -- discovery and they stayed "Undiscovered" forever even after looting.
+    -- Items whose (base) ID is on the dev-provided WorldforgedList qualify
+    -- regardless of tooltip text.
+    local itemID = L.ExtractItemID and L:ExtractItemID(link)
+    if itemID and L.IsWorldforgedListItem and L:IsWorldforgedListItem(itemID) then
+        self._cache.isWF[link] = true
+        return true
+    end
+
     local ok = TooltipHas(link, "worldforged")
     
     if ok == nil then
@@ -237,9 +248,32 @@ function Detect:OnRetroactiveSuppressionEvent(event, arg1, arg2)
     end
 end
 
-local function IsBlackmarketArtisan(unit)
+-- Special vendor subname rules. Matching is CASE-INSENSITIVE because some
+-- vendors present their subname in different capitalization (e.g. the Ring
+-- Vendor appears in capitals on some nameplates/tooltips).
+-- vendorType values: "BM" = Blackmarket Artisan, "EX" = Exquisite
+-- Collectables, "RING" = Ring Vendor. EX/RING reuse the legacy vendor types
+-- that the Viewer/Map/repair-pass already know how to label and render.
+local SPECIAL_VENDOR_SUBNAMES = {
+  { match = "blackmarket artisan supplies", vendorType = "BM" },
+  { match = "exquisite collectables",       vendorType = "EX" },
+  { match = "ring vendor",                  vendorType = "RING" },
+}
+
+local function GetSpecialVendorType(unit)
   local sub = GetNPCSubname(unit)
-  return sub and sub:find("Blackmarket Artisan Supplies", 1, true) ~= nil
+  if not sub or sub == "" then return nil end
+  local lowered = string.lower(sub)
+  for _, rule in ipairs(SPECIAL_VENDOR_SUBNAMES) do
+    if string.find(lowered, rule.match, 1, true) then
+      return rule.vendorType
+    end
+  end
+  return nil
+end
+
+local function IsBlackmarketArtisan(unit)
+  return GetSpecialVendorType(unit) == "BM"
 end
 
 function Detect:OnNPCInteraction()
@@ -255,7 +289,8 @@ if L:IsPaused() then return end
         return
     end
 
-    local isBMVendor = IsBlackmarketArtisan(unitToCheck)
+    local specialVendorType = GetSpecialVendorType(unitToCheck)
+    local isBMVendor = specialVendorType ~= nil
     local isMSVendor = false
 
     local merchantItems = {}
@@ -274,11 +309,11 @@ if L:IsPaused() then return end
     end
 
     if not isMSVendor and not isBMVendor then return end
-    
-    
+
+
     self.recentlyScannedNPCs[npcGUID] = time()
 
-    local vendorType = isMSVendor and "MS" or "BM"
+    local vendorType = isMSVendor and "MS" or specialVendorType
     local now = time()
     
     local px, py = GetPlayerMapPosition("player")
@@ -316,6 +351,64 @@ if L:IsPaused() then return end
     if Core and Core.HandleLocalLoot then
         L._ddebug("Detect", string.format("Passing Vendor %s (%s) to Core.", discovery.vendorName, vendorType))
         Core:HandleLocalLoot(discovery)
+    end
+end
+
+-- In-game diagnostic for vendor detection. Stand at the vendor, open their
+-- shop window, then type /lcvendor. Prints every gate so failures are
+-- identifiable without guesswork.
+SLASH_LCVENDORCHECK1 = "/lcvendor"
+SlashCmdList["LCVENDORCHECK"] = function()
+    print("|cffe5cc80LootCollector Vendor Check|r |cff888888(build " .. (L.BuildStamp or "pre-s7") .. ")|r:")
+    if L.LEGACY_MODE_ACTIVE then
+        print("  |cffff5555Legacy mode active - detection disabled.|r")
+        return
+    end
+    if L.IsPaused and L:IsPaused() then
+        print("  |cffff5555Addon is PAUSED - detection is disabled right now.|r")
+    end
+    local unit = (UnitExists("npc") and "npc") or (UnitExists("target") and "target") or nil
+    if not unit then
+        print("  No NPC found. OPEN the vendor's shop window (or target them) and try again.")
+        return
+    end
+    local name = UnitName(unit) or "?"
+    local sub = GetNPCSubname(unit)
+    local vtype = GetSpecialVendorType(unit)
+    local merch = (GetMerchantNumItems and GetMerchantNumItems()) or 0
+    print(string.format("  NPC: |cffffff00%s|r | subname: |cffffff00%s|r | rule match: %s | merchant items visible: %d",
+        name, tostring(sub or "none"), vtype and ("|cff00ff00" .. vtype .. "|r") or "|cffff5555NO MATCH|r", merch))
+    if not vtype then
+        print("  The subname above did not match any rule. Screenshot this line for the maintainer.")
+        return
+    end
+    if unit ~= "npc" or merch == 0 then
+        print("  |cffffff00Note:|r recording requires the SHOP WINDOW to be OPEN (merchant items > 0).")
+    end
+    if Detect.recentlyScannedNPCs then
+        local g = UnitGUID(unit)
+        if g then Detect.recentlyScannedNPCs[g] = nil end
+    end
+    local function scanDB()
+        local dbV = L.GetVendorsDB and L:GetVendorsDB()
+        local n, found = 0, false
+        if dbV then
+            for _, rec in pairs(dbV) do
+                n = n + 1
+                if rec and rec.vendorName == name then found = true end
+            end
+        end
+        return n, found
+    end
+    local before = select(1, scanDB())
+    Detect:OnNPCInteraction()
+    local after, foundNow = scanDB()
+    if after > before then
+        print("  |cff00ff00Recorded!|r New vendor entry added to your database.")
+    elseif foundNow then
+        print("  |cff00ff00This vendor has a database entry|r (name match). If it's missing from the Vendors tab, screenshot this line.")
+    else
+        print("  |cffff5555Scan ran but this vendor was NOT recorded.|r Screenshot this output for the maintainer.")
     end
 end
 
@@ -371,6 +464,8 @@ function Detect:OnInitialize()
   self:RegisterEvent("MERCHANT_CLOSED", function() self._ctx.lastMerchantAt = nil end)
   self:RegisterEvent("MAIL_SHOW", function() self._ctx.mailOpen = true end)
   self:RegisterEvent("MAIL_CLOSED", function() self._ctx.mailOpen = false end)
+  self:RegisterEvent("AUCTION_HOUSE_SHOW", function() self._ctx.auctionOpen = true end)
+  self:RegisterEvent("AUCTION_HOUSE_CLOSED", function() self._ctx.auctionOpen = false end)
   self:RegisterEvent("CHAT_MSG_LOOT", "OnChatMsgLoot")
   
   self:RegisterEvent("QUEST_COMPLETE", function() self._ctx.lastQuestCompleteAt = time() end)
@@ -408,6 +503,7 @@ local function classifySource(ctx, now)
 
   if ctx.mailOpen or (ctx.lastMailTakeAt and (now - ctx.lastMailTakeAt <= 3)) then return "mail" end
   if ctx.tradeOpen or (ctx.lastTradeAcceptedAt and (now - ctx.lastTradeAcceptedAt <= 3)) then return "trade" end
+  if ctx.auctionOpen then return "auction" end
   if ctx.bankOpen then return "bank" end
   if ctx.guildBankOpen then return "guild_bank" end
   
@@ -476,7 +572,7 @@ function Detect:OnChatMsgLoot(_, msg)
         end
     end
 
-    local deniedSources = { mail = true, quest_reward = true, trade = true, crafting = true, mystic_altar = true, vendor = true, bank = true, guild_bank = true, achievement = true }
+    local deniedSources = { mail = true, quest_reward = true, trade = true, crafting = true, mystic_altar = true, vendor = true, vendor_buyback = true, bank = true, guild_bank = true, achievement = true, auction = true }
     if deniedSources[src] then 
         L._ddebug("Detect", "Dropped: Source is in denied list (" .. tostring(src) .. ")")
         if pTime then L:ProfileStop("Detect:OnChatMsgLoot", pTime) end 
@@ -598,7 +694,7 @@ function Detect:ProcessPotentialDiscovery(link, sourceHint, looterName)
 		end			
     end
 
-    local deniedSources = { mail = true, quest_reward = true, trade = true, crafting = true, mystic_altar = true, vendor = true, vendor_buyback = true, bank = true, guild_bank = true, achievement = true }
+    local deniedSources = { mail = true, quest_reward = true, trade = true, crafting = true, mystic_altar = true, vendor = true, vendor_buyback = true, bank = true, guild_bank = true, achievement = true, auction = true }
     if deniedSources[src] then 
         if pTime then L:ProfileStop("Detect:ProcessPotentialDiscovery", pTime) end 
         return 

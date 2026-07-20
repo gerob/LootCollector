@@ -289,16 +289,21 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
     if Core.IsInsideAOETombstone and Core:IsInsideAOETombstone(c, z, iz_val, dt, x, y) then
         return
     end
-    if Core.IsInsideVendorDeadzone and Core:IsInsideVendorDeadzone(c, z, iz_val, dt, x, y) then
+    -- Special vendors legitimately stand inside capital cities (forbidden
+    -- zones for regular loot) and near other vendors; exempt them from the
+    -- location gates or city vendors can never sync in.
+    local isVendorRecord = (dt == Constants.DISCOVERY_TYPE.BLACKMARKET)
+
+    if not isVendorRecord and Core.IsInsideVendorDeadzone and Core:IsInsideVendorDeadzone(c, z, iz_val, dt, x, y) then
         return
     end
-    
-    if Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(c, z, foundBy) then
+
+    if not isVendorRecord and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(c, z, foundBy) then
         return
     end
 
     local target_db, guid
-    local isVendor = (dt == Constants.DISCOVERY_TYPE.BLACKMARKET)
+    local isVendor = isVendorRecord
     
     local finalQ = q
     if isVendor then 
@@ -515,11 +520,9 @@ function DBSync.Shares(scope, targetOrZone, zoneId)
             local isMSVendor = (d.vendorType == "MS" or (d.g and d.g:find("MS-", 1, true)))
             if not isMSVendor or msAllowed then
                 if not zoneFilterID or (d.z == zoneFilterID) then
-                    if Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.c, d.z, d.fp) then
-                        
-                    else
-                        table.insert(recordsToShare, d)
-                    end
+                    -- Vendors are exempt from the forbidden-zone check:
+                    -- special vendors legitimately stand inside cities.
+                    table.insert(recordsToShare, d)
                 end
             end
         end

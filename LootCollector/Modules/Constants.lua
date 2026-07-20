@@ -55,7 +55,11 @@ Constants.DISCOVERY_TYPE = {
 
 Constants.ALLOWED_DISCOVERY_TYPES = {
     [Constants.DISCOVERY_TYPE.WORLDFORGED] = true,
-	[Constants.DISCOVERY_TYPE.MYSTIC_SCROLL] = true,	
+	[Constants.DISCOVERY_TYPE.MYSTIC_SCROLL] = true,
+    -- Explicitly allowed: vendor discoveries were previously "allowed by
+    -- accident" (absent = nil, and only `== false` gates blocked). Making it
+    -- explicit protects against future gate refactors using truthiness.
+    [Constants.DISCOVERY_TYPE.BLACKMARKET] = true,
 }
 
 Constants.AcceptedLootSrcWF = {
@@ -636,6 +640,18 @@ function Constants:IsForbiddenZone(c, z, fp)
     end
     
     return false
+end
+
+local invalidLootZones = {
+    [302] = true, [322] = true, [342] = true, [363] = true, [382] = true, [383] = true,
+    [472] = true, [481] = true, [242] = true, [482] = true, [505] = true,
+}
+
+function Constants:IsLocationValidForItem(zoneID, reqLevel, isBlackmarket)
+    zoneID = tonumber(zoneID) or 0
+    if isBlackmarket then return true end
+    if invalidLootZones[zoneID] then return false end
+    return true
 end
 
 return Constants

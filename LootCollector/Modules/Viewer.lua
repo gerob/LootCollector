@@ -131,8 +131,18 @@ Viewer.sortColumn     = "name"
 Viewer.sortAscending  = true
 Viewer.pendingMapAreaID = nil
 
+local WORLDFORGED_PHASES = {
+    [0] = "Base Item",
+    [1] = "Phase 0: Pre-Raid",
+    [2] = "Phase 1: Zul'Gurub",
+    [3] = "Phase 2: Molten Core",
+    [4] = "Phase 3: Blackwing Lair",
+    [5] = "Phase 4: Ahn'Qiraj",
+    [6] = "Phase 5: Naxxramas",
+}
+
 Viewer.currentPage    = 1
-Viewer.itemsPerPage   = 100
+Viewer.itemsPerPage   = 500
 Viewer.totalItems     = 0
 
 Viewer.columnFilters  = {
@@ -191,6 +201,112 @@ local function GetItemTooltipText(itemLink)
     end
     if fullText == "" then return nil end
     return string.lower(fullText)
+end
+
+-- ============================================================================
+-- Deep Search filter expression engine.
+-- Each filter row is a typed expression of keywords joined by AND / OR, e.g.
+-- "intellect and spellpower" or "haste or spell crit". Rows are combined with
+-- AND (each added row narrows the results further). Keywords are matched as
+-- case-insensitive substrings of an item's tooltip text.
+--
+-- CompileDeepExpression turns a string into { tokens = {...}, ops = {...} }
+-- where ops[i] is the operator ("and"/"or") that joins tokens[i] and tokens[i+1].
+-- Splitting on the space-delimited operators preserves multi-word keywords
+-- ("spell power") and never splits inside a word ("command").
+-- ============================================================================
+local function CompileDeepExpression(expr)
+    if not expr then return nil end
+    local rest = strtrim(string.lower(expr))
+    if rest == "" then return nil end
+    local tokens, ops = {}, {}
+    while true do
+        local aStart = string.find(rest, " and ", 1, true)
+        local oStart = string.find(rest, " or ", 1, true)
+        local opStart, opLen, opName
+        if aStart and (not oStart or aStart < oStart) then
+            opStart, opLen, opName = aStart, 5, "and"
+        elseif oStart then
+            opStart, opLen, opName = oStart, 4, "or"
+        end
+        if not opStart then
+            local tok = strtrim(rest)
+            if tok ~= "" then tokens[#tokens + 1] = tok end
+            break
+        end
+        local tok = strtrim(string.sub(rest, 1, opStart - 1))
+        if tok ~= "" then
+            tokens[#tokens + 1] = tok
+            ops[#tokens] = opName  -- operator following this token
+        end
+        rest = string.sub(rest, opStart + opLen)
+    end
+    if #tokens == 0 then return nil end
+    return { tokens = tokens, ops = ops }
+end
+
+-- Evaluate one compiled row against a (lowercased) tooltip text, left-to-right,
+-- left-associative (AND/OR share precedence). Single-operator rows therefore
+-- behave as plain "all keywords" (AND) or "any keyword" (OR).
+local function EvalDeepRow(row, text)
+    local tokens = row.tokens
+    local n = #tokens
+    if n == 0 then return true end
+    local result = string.find(text, tokens[1], 1, true) ~= nil
+    for i = 2, n do
+        local op = row.ops[i - 1] or "and"
+        local hit = string.find(text, tokens[i], 1, true) ~= nil
+        if op == "or" then
+            result = result or hit
+        else
+            result = result and hit
+        end
+    end
+    return result
+end
+
+-- Recompile Viewer.deepSearchFilters (list of expression strings) into
+-- Viewer.deepSearchCompiled. Called whenever the filter list changes.
+function Viewer:RebuildDeepCompiled()
+    local out = {}
+    local filters = self.deepSearchFilters
+    if filters then
+        for i = 1, #filters do
+            local c = CompileDeepExpression(filters[i])
+            if c then out[#out + 1] = c end
+        end
+    end
+    self.deepSearchCompiled = out
+end
+
+-- True if any Deep Filter expression is currently set.
+function Viewer:HasDeepFilters()
+    return self.deepSearchCompiled ~= nil and #self.deepSearchCompiled > 0
+end
+
+-- Public matcher (used by the Viewer list and by the Map module's optional
+-- "Filter by Deep Filter" toggle). Returns true if the given tooltip text
+-- satisfies every Deep Filter expression, or if no filters are set.
+function Viewer:MatchesDeepFilter(tooltipText)
+    local compiled = self.deepSearchCompiled
+    if not compiled or #compiled == 0 then return true end
+    if not tooltipText or tooltipText == "" then return false end
+    for i = 1, #compiled do
+        if not EvalDeepRow(compiled[i], tooltipText) then return false end
+    end
+    return true
+end
+
+-- Refresh the map/minimap when the Deep Filter changes, but only if the map's
+-- "Filter by Deep Filter" toggle is currently on (otherwise it's a no-op).
+function Viewer:NotifyMapDeepFilterChanged()
+    if not (L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.useDeepFilter) then return end
+    local Map = L:GetModule("Map", true)
+    if Map then
+        Map.cacheIsDirty = true
+        if Map.Update then Map:Update() end
+        if Map.UpdateMinimap then Map:UpdateMinimap() end
+    end
 end
 
 local function copy(t)
@@ -338,14 +454,15 @@ local function GetItemTypeIDs(itemType, itemSubType)
 end
 
 local function GetItemInfoSafe(itemLink, itemID)
-    if not itemLink then return nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil end
+    local queryTarget = itemLink or itemID
+    if not queryTarget then return nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil end
 
     if itemID and Cache.itemInfo[itemID] then
         return unpack(Cache.itemInfo[itemID])
     end
 
     local name, link, quality, itemLevel, minLevel, itemType, itemSubType, stackCount, equipLoc, texture, sellPrice =
-        GetItemInfo(itemLink)
+        GetItemInfo(queryTarget)
 
     if itemID and name then
         Cache.itemInfo[itemID] = { name, link, quality, itemLevel, minLevel, itemType, itemSubType, stackCount, equipLoc,
@@ -444,9 +561,24 @@ local function IsWorldforged(itemLink)
     tooltip:ClearLines()
     tooltip:SetHyperlink(itemLink)
 
+    -- Guard: if the tooltip is incomplete (item data still in flight from
+    -- the server), do NOT cache a negative result. The old code scanned an
+    -- empty/partial tooltip, cached "false" for the whole session, and the
+    -- item stayed misclassified even after its data arrived.
+    local numLines = tooltip:NumLines() or 0
+    local line1 = _G[tooltipName .. 1]
+    local line1Text = line1 and line1:GetText()
+    if numLines < 2 or not line1Text or line1Text == RETRIEVING_TEXT then
+        return false
+    end
+
+    -- Scan ALL lines (the Scanner module does the same). The old 2-5 window
+    -- missed the Worldforged tag on tooltips with extra header lines (phase
+    -- upgrades, difficulty tags, etc.).
     local isWorldforged = false
-    for i = 2, 5 do
-        local text = _G[tooltipName .. i]:GetText()
+    for i = 2, numLines do
+        local lineObj = _G[tooltipName .. i]
+        local text = lineObj and lineObj:GetText()
         if text and _strfind(text, "orldforged", 1, true) then
             isWorldforged = true
             break
@@ -752,10 +884,22 @@ GetFilteredDatasetForUniqueValues = function(context)
         local data = Cache.discoveries[i]
         if data then
             local passed = true
-            
+
             local Constants = L:GetModule("Constants", true)
-            if Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(data.discovery.c, data.discovery.z, data.discovery.fp) then
+            -- FIXED: mirror mainFilter's guard -- undiscovered placeholder
+            -- rows live at c=0/z=0, which IsForbiddenZone treats as
+            -- forbidden, so they were silently excluded from the datasets
+            -- that build the slot/type/class/zone dropdown options.
+            -- Vendors are exempt (they stand in cities legitimately).
+            if not data.isUndiscovered and not data.isVendor and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(data.discovery.c, data.discovery.z, data.discovery.fp) then
                 passed = false
+            end
+            -- CoA realms removed relics (Librams/Idols/Totems).
+            if passed and data.equipLoc == "INVTYPE_RELIC" then
+                local CoreM = L:GetModule("Core", true)
+                if CoreM and CoreM.IsConfirmedCoARealm and CoreM:IsConfirmedCoARealm() then
+                    passed = false
+                end
             end
             
             if passed and context.currentFilter == "eq" then
@@ -1415,13 +1559,24 @@ function Viewer:ShowColumnFilterDropdown(column, anchor, values)
                 Viewer.columnFilters.source = {}
                 Viewer.columnFilters.quality = {}
                 Viewer.columnFilters.looted = {}
-                Viewer.columnFilters.duplicates = false 
-                
-                Viewer.lootedFilterState = nil 
-                Viewer.collectedMEFilterState = nil 
-                
+                Viewer.columnFilters.vendorType = {}
+                Viewer.columnFilters.duplicates = false
+
+                Viewer.lootedFilterState = nil
+                Viewer.collectedMEFilterState = nil
+                -- FIXED: Favorites was the only filter "Clear All" forgot,
+                -- leaving the list stuck on favorites with the Clear button
+                -- permanently lit.
+                Viewer.favoritesFilterState = nil
+
                 Viewer.searchTerm = ""
                 if Viewer.searchBox then Viewer.searchBox:SetText("") end
+
+                if Viewer.deepSearchFilters then wipe(Viewer.deepSearchFilters) end
+                if Viewer.RebuildDeepCompiled then Viewer:RebuildDeepCompiled() end
+                if Viewer.NotifyMapDeepFilterChanged then Viewer:NotifyMapDeepFilterChanged() end
+                if Viewer.RefreshDeepFilterPanel then Viewer:RefreshDeepFilterPanel() end
+                if Viewer.deepFilterPanel then Viewer.deepFilterPanel:Hide() end
                 
                 Viewer.minReqLevel = nil
                 Viewer.maxReqLevel = nil
@@ -1538,48 +1693,30 @@ function Viewer:ShowColumnFilterDropdown(column, anchor, values)
 end
 
 function Viewer:UpdateAllDiscoveriesCache(onCompleteCallback)
-    VDebug("UpdateAllDiscoveriesCache(async): start")
-    self.hasUncachedData = false
-    Cache.discoveriesBuilding = true
-    Cache.discoveriesBuilt    = false
+    -- FIXED: this entry point used to fill a local scanQueue that
+    -- ProcessCacheBuildChunk never read (it consumes self._cacheBuildQueue),
+    -- so every "async" rebuild completed instantly against an empty queue
+    -- and left the viewer cache empty-but-marked-built. All rebuilds now
+    -- delegate to the single chunked builder below.
+    VDebug("UpdateAllDiscoveriesCache: delegating to chunked builder")
 
-    scanQueue            = {}
-    scanCursor           = 0
-    scanProgressCallback = onCompleteCallback
-    Cache.uniqueValuesValid = false
-
-    Cache.discoveries    = {}
-    Cache.duplicateItems = {}
-
-    local totalItems  = 0
-    local itemCount   = 0
-    local vendorCount = 0
-
-    
-    local discoveries = L:GetDiscoveriesDB()
-    local vendors = L:GetVendorsDB()
-
-    for guid, discovery in pairs(discoveries or {}) do
-        _tinsert(scanQueue, { guid = guid, discovery = discovery, type = "item" })
-        itemCount  = itemCount  + 1
-        totalItems = totalItems + 1
+    if Cache.discoveriesBuilding then
+        -- A build is already in flight; adopt the callback instead of
+        -- restarting mid-chunk (restarts corrupt the build cursor).
+        if onCompleteCallback then
+            self.scanProgressCallback = onCompleteCallback
+        end
+        return
     end
 
-    for guid, discovery in pairs(vendors or {}) do
-        _tinsert(scanQueue, { guid = guid, discovery = discovery, type = "vendor" })
-        vendorCount = vendorCount + 1
-        totalItems  = totalItems  + 1
-    end
+    -- Callers of this entry point explicitly want fresh data (login
+    -- prewarm, /lcviewer rebuild, moderation purges), so force a rebuild
+    -- past the built-guard in UpdateAllDiscoveriesCacheSync.
+    Cache.discoveriesBuilt = false
+    Cache.lastFilterState  = nil
+    Cache.filteredResults  = {}
 
-    VDebug("UpdateAllDiscoveriesCache(async): queued items=" ..
-        tostring(itemCount) .. ", vendors=" .. tostring(vendorCount) ..
-        ", total=" .. tostring(totalItems))
-
-    if self.window and self.window:IsShown() then
-        self:UpdatePagination()
-    end
-
-    self:ProcessScanQueueBatch()
+    self:UpdateAllDiscoveriesCacheSync(onCompleteCallback)
 end
 
 function Viewer:UpdateAllDiscoveriesCacheSync(onCompleteCallback)
@@ -1607,8 +1744,31 @@ function Viewer:UpdateAllDiscoveriesCacheSync(onCompleteCallback)
     local discoveries = L:GetDiscoveriesDB()
     local vendors = L:GetVendorsDB()
     
+    local discoveredItemIDs = {}
     for guid, discovery in pairs(discoveries or {}) do
         table.insert(self._cacheBuildQueue, { guid = guid, d = discovery, isVendor = false })
+        -- Normalize to the BASE item ID so a discovery recorded under an
+        -- upgraded/scaled variant still suppresses the matching
+        -- "undiscovered" placeholder row (GetUndiscoveredCount already
+        -- normalizes this way; the grid builder didn't).
+        if discovery.i then discoveredItemIDs[L:GetBaseItemID(discovery.i)] = true end
+    end
+
+    local wfClassic = L.WorldforgedList
+    if wfClassic then
+        for _, itemID in ipairs(wfClassic) do
+            if itemID and not discoveredItemIDs[itemID] then
+                local fakeDiscovery = {
+                    i = itemID,
+                    c = 0,
+                    z = 0,
+                    iz = 0,
+                    q = 2,
+                    isUndiscovered = true
+                }
+                table.insert(self._cacheBuildQueue, { guid = "undiscovered-" .. itemID, d = fakeDiscovery, isVendor = false, isUndiscovered = true })
+            end
+        end
     end
     for guid, discovery in pairs(vendors or {}) do
         table.insert(self._cacheBuildQueue, { guid = guid, d = discovery, isVendor = true })
@@ -1663,6 +1823,15 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
         if not isVendor then
             local itemLink = discovery.il
             local itemID = discovery.i
+            local skipItem = false
+            local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+            if selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+                local upgradedID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+                if upgradedID and upgradedID ~= itemID then
+                    itemID = upgradedID
+                    itemLink = nil
+                end
+            end
             local itemName = nil
             
             if (not itemLink or itemLink == "") and itemID then
@@ -1678,8 +1847,7 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                 itemName = GetItemInfo(itemID) 
             end
             
-            
-            if not itemName or itemName == "" then
+            if not skipItem and (not itemName or itemName == "") then
                 if itemID then
                     itemName = "Unknown Item (" .. tostring(itemID) .. ")"
                 else
@@ -1687,14 +1855,53 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                 end
                 self.hasUncachedData = true
             end
+            
+            -- On CoA realm, filter out Relics/Idols/Totems/Librams for undiscovered items
+            if not skipItem and entry.isUndiscovered then
+                local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
+                if isCoA then
+                    local _, _, _, _, _, _, _, _, eqLoc = GetItemInfo(discovery.i)
+                    if eqLoc == "INVTYPE_RELIC" then
+                        skipItem = true
+                    end
+                end
+            end
                 
-            if itemName and itemName ~= "" then
+            if not skipItem and itemName and itemName ~= "" then
                 local Scanner = L:GetModule("Scanner", true)
-                local itemData = Scanner and Scanner:GetItemData(discovery.i, itemLink) or {}
+                local itemData = {}
+                if Scanner then
+                    local ok, res = pcall(Scanner.GetItemData, Scanner, discovery.i, itemLink)
+                    if ok and res then
+                        itemData = res
+                    end
+                end
 
                 local isMystic = IsMysticScroll(itemName)
                 local isWorldforged = itemData.isWF or false
+
+                if entry.isUndiscovered then
+                    -- Rows synthesized from the curated WorldforgedList are
+                    -- Worldforged by definition. Never veto them via tooltip
+                    -- heuristics: with an upgrade phase active, itemLink holds
+                    -- the UPGRADED variant, whose tooltip may lack the tag in
+                    -- the scanned window or may not be cached yet. That veto
+                    -- was what silently removed new/undiscovered Worldforged
+                    -- items whenever a phase was selected.
+                    isWorldforged = true
+                elseif not isWorldforged then
+                    -- Judge Worldforged status from the BASE item only; the
+                    -- phase-upgraded variant's tooltip is not authoritative.
+                    local baseLink = discovery.il
+                    if (not baseLink or baseLink == "") and discovery.i then
+                        baseLink = select(2, GetItemInfo(discovery.i))
+                    end
+                    if baseLink and baseLink ~= "" then
+                        isWorldforged = IsWorldforged(baseLink)
+                    end
+                end
                 
+             if not skipItem then
                 local characterClass = ""
                 local classToken = itemData.classToken
                 if classToken then
@@ -1711,23 +1918,87 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                     end
                 end
 
-                local name, _, _, itemLevelVal, minLevel, itemTypeVal, itemSubTypeVal, _, equipLocVal = GetItemInfoSafe(itemLink, discovery.i)
+                local name, _, _, itemLevelVal, minLevel, itemTypeVal, itemSubTypeVal, _, equipLocVal = GetItemInfoSafe(itemLink, itemID)
+
+                -- Phase-upgrade data still in flight: borrow the base item's
+                -- static metadata (name/slot/type/levels are shared across
+                -- upgrade tiers) so the row stays readable, searchable and
+                -- filterable instead of rendering as "Unknown Item" with
+                -- empty columns. The row heals to upgraded data on arrival
+                -- via GET_ITEM_INFO_RECEIVED (matched by displayItemID).
+                if (not name) and discovery.i and itemID ~= discovery.i then
+                    local bName, _, _, bIlvl, bMinLvl, bType, bSubType, _, bEquip = GetItemInfo(discovery.i)
+                    if bName then
+                        itemLevelVal   = itemLevelVal or bIlvl
+                        minLevel       = minLevel or bMinLvl
+                        itemTypeVal    = itemTypeVal or bType
+                        itemSubTypeVal = itemSubTypeVal or bSubType
+                        equipLocVal    = equipLocVal or bEquip
+                        if not itemName or itemName == "" or _strfind(itemName, "Unknown Item", 1, true) then
+                            itemName = bName
+                        end
+                    end
+                end
+
                 local finalMinLevel = itemData.reqLevel or minLevel or 0
                 
-                local it, ist = discovery.it, discovery.ist
-                if not it or not ist or it == 0 or ist == 0 then
-                    it, ist = GetItemTypeIDs(itemTypeVal, itemSubTypeVal)
+                if not entry.isUndiscovered then
+                    local dx = discovery.xy and discovery.xy.x or 0
+                    local dy = discovery.xy and discovery.xy.y or 0
+                    if dx == 0 and dy == 0 then
+                        local db = L:GetDiscoveriesDB()
+                        if db and db[guid] then
+                            db[guid] = nil
+                            L.DataHasChanged = true
+                            L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", guid, nil)
+                        end
+                        skipItem = true
+                    elseif L.StarterDBItemZones and L.StarterDBItemZones[discovery.i] and not L.StarterDBItemZones[discovery.i][discovery.z] then
+                        local db = L:GetDiscoveriesDB()
+                        if db and db[guid] then
+                            db[guid] = nil
+                            L.DataHasChanged = true
+                            L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", guid, nil)
+                        end
+                        skipItem = true
+                    else
+                        local Constants = L:GetModule("Constants", true)
+                        if Constants and Constants.IsLocationValidForItem then
+                            if not Constants:IsLocationValidForItem(discovery.z, 0, isVendor) then
+                                local db = L:GetDiscoveriesDB()
+                                if db and db[guid] then
+                                    db[guid] = nil
+                                    L.DataHasChanged = true
+                                    L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", guid, nil)
+                                end
+                                skipItem = true
+                            end
+                        end
+                    end
                 end
                 
-                if not itemTypeVal and not isMystic then
-                    self.hasUncachedData = true
-                end
+                if not skipItem then
+                    local it, ist = discovery.it, discovery.ist
+                    if not it or not ist or it == 0 or ist == 0 then
+                        it, ist = GetItemTypeIDs(itemTypeVal, itemSubTypeVal)
+                    end
+                    
+                    if not itemTypeVal and not isMystic then
+                        self.hasUncachedData = true
+                    end
 
                 row.guid          = guid
                 row.discovery     = discovery
+                row.displayItemID = itemID
                 row.itemName      = itemName
                 row.isMystic      = isMystic
-                row.isWorldforged = isWorldforged
+                local isNew = entry.isUndiscovered or false
+                if not isNew and discovery.i and L.db and L.db.global and L.db.global.newWorldforgedItems then
+                    isNew = L.db.global.newWorldforgedItems[discovery.i] or false
+                end
+                row.isNew = isNew
+                row.isWorldforged = isNew and true or isWorldforged
+                row.isUndiscovered = entry.isUndiscovered or false
                 row.itemType      = itemTypeVal
                 row.itemSubType   = itemSubTypeVal
                 row.it            = it
@@ -1740,14 +2011,20 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                 row.isVendor      = false
                 row.tooltipText   = itemData.fullText or ""
                 
-                row.zoneNameStr   = GetLocalizedZoneName(discovery)
-                row.sortQuality   = tonumber(discovery.q) or 1
+                row.zoneNameStr   = entry.isUndiscovered and "Undiscovered" or GetLocalizedZoneName(discovery)
+                row.sortQuality   = entry.isUndiscovered and (select(3, GetItemInfo(discovery.i)) or 2) or (tonumber(discovery.q) or 1)
                 row.sortName      = itemName or ""
                 row.sortClass     = characterClass or ""
                 row.sortType      = itemSubTypeVal or ""
                 row.sortSlot      = equipLocVal and _G[equipLocVal] or ""
 
-                if Core and discovery.i and not Core:IsItemCached(discovery.i) then
+                if Core and itemID and not Core:IsItemCached(itemID) then
+                    Core:QueueItemForCaching(itemID)
+                end
+                -- Also warm the BASE item when displaying an upgraded phase
+                -- variant: the metadata fallback, sort quality and the
+                -- undiscovered rows' tooltips all read the base item.
+                if Core and discovery.i and discovery.i ~= itemID and not Core:IsItemCached(discovery.i) then
                     Core:QueueItemForCaching(discovery.i)
                 end
 
@@ -1756,6 +2033,8 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                 end
                 
                 itemSuccessfullyLoaded = true
+                end
+                end
             end
         else
             row.guid       = guid
@@ -1817,9 +2096,18 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
         
         Cache.discoveriesBuilt = true
         Cache.discoveriesBuilding = false
-        
+
         wipe(self._cacheBuildQueue)
         self._cacheQueueCursor = nil
+
+        -- The build queues item lookups; make sure the (self-cancelling)
+        -- cache pump is running to drain them.
+        do
+            local CoreM = L:GetModule("Core", true)
+            if CoreM and CoreM.EnsureCachePump then
+                CoreM:EnsureCachePump()
+            end
+        end
         
         if self.scanProgressCallback then
             self.scanProgressCallback()
@@ -1832,6 +2120,19 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
             Cache.lastFilterState = nil 
             self:GetFilteredDiscoveries()
             self:UpdateRows()
+            self:UpdateFilterButtonStates()
+            
+            if self._rebuildNeeded then
+                self._rebuildNeeded = nil
+                if not self._refreshTimer then
+                    self._refreshTimer = C_Timer.After(0.3, function()
+                        self._refreshTimer = nil
+                        if self.window and self.window:IsShown() then
+                            self:RefreshData()
+                        end
+                    end)
+                end
+            end
         end
     end
 end
@@ -1874,13 +2175,31 @@ function Viewer:GetFilteredDiscoveries()
     local context = GetCascadedFilterContext(nil)
     local isVendorView = (self.currentFilter == "bmv")
 
+    local CoreMod = L:GetModule("Core", true)
+    local isCoARealm = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
+    local hideBagsOn = L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.hideBags
+
     local filterPredicates = {
         mainFilter = function(data)
             local Constants = L:GetModule("Constants", true)
-            if Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(data.discovery.c, data.discovery.z, data.discovery.fp) then
+            -- Vendors are exempt from the forbidden-zone check: special
+            -- vendors legitimately stand inside capital cities.
+            if not data.isUndiscovered and not data.isVendor and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(data.discovery.c, data.discovery.z, data.discovery.fp) then
                 return false
             end
-            
+
+            -- CoA realms removed Librams/Idols/Totems entirely: hide any
+            -- relic row (discovered or undiscovered) as soon as its equip
+            -- slot is known from item data.
+            if isCoARealm and data.equipLoc == "INVTYPE_RELIC" then
+                return false
+            end
+
+            -- "Hide Bags" (map filter) now also applies to the list.
+            if hideBagsOn and data.equipLoc == "INVTYPE_BAG" then
+                return false
+            end
+
             if self.currentFilter == "eq" then
                 return not data.isMystic and not data.isVendor
             elseif self.currentFilter == "ms" then
@@ -1909,6 +2228,14 @@ function Viewer:GetFilteredDiscoveries()
             
             data.matchedViaTooltip = (not nameMatch and not zoneMatch and tooltipMatch)
             return nameMatch or zoneMatch or tooltipMatch
+        end,
+
+        -- Deep Search FILTER: successive keyword expressions over tooltip text.
+        -- Separate from the Deep Search checkbox above (which augments the free
+        -- text search box). Each compiled row is its own AND/OR expression; an
+        -- item is kept only if it satisfies EVERY row (rows narrow further).
+        deepSearchFilter = function(data)
+            return self:MatchesDeepFilter(data.tooltipText)
         end,
 
         columnFilters = {
@@ -1992,6 +2319,8 @@ function Viewer:GetFilteredDiscoveries()
             
             if not filterPredicates.mainFilter(data) then passed = false end
             if passed and not filterPredicates.searchFilter(data) then passed = false end
+            -- Deep Search keyword filter (tooltip-based) applies to item views only
+            if passed and not isVendorView and not filterPredicates.deepSearchFilter(data) then passed = false end
 
             if passed and not data.isVendor and not data.isMystic then
                 if self.minReqLevel and (data.minLevel or 0) < self.minReqLevel then passed = false end
@@ -2092,6 +2421,13 @@ function Viewer:GetFilteredDiscoveries()
 
             if passed and not filterPredicates.columnFilters.duplicates(data) then passed = false end
 
+            if passed and data.isNew then
+                local undiscoveredFilter = L.db.profile.viewer.undiscoveredFilter or "TOP"
+                if undiscoveredFilter == "HIDDEN" then
+                    passed = false
+                end
+            end
+
             if passed then
                 table.insert(currentFiltered, data)
             end
@@ -2101,6 +2437,15 @@ function Viewer:GetFilteredDiscoveries()
     table.sort(currentFiltered, function(a, b)
         if not a or not b then return false end
         if not a.discovery or not b.discovery then return false end
+
+        local undiscoveredFilter = L.db.profile.viewer.undiscoveredFilter or "TOP"
+        if undiscoveredFilter == "TOP" then
+            if a.isNew and not b.isNew then
+                return true
+            elseif not a.isNew and b.isNew then
+                return false
+            end
+        end
 
         if self.lastSeenSortState == "new" then
             local la = tonumber(a.discovery.ls) or 0
@@ -2134,6 +2479,20 @@ function Viewer:GetFilteredDiscoveries()
             a_val = a_fav; b_val = b_fav
         elseif self.sortColumn == "level" then
             a_val = a.minLevel or 0; b_val = b.minLevel or 0
+        elseif self.sortColumn == "vendorType" then
+            -- FIXED: the Vendors tab defaults to sortColumn "vendorType",
+            -- but no comparator branch existed for it (nor for price /
+            -- continent), so all three silently fell through to GUID
+            -- ordering while the header showed an active sort arrow.
+            a_val = a.sortType or ""; b_val = b.sortType or ""
+            if a_val == b_val then a_val = a.sortName or ""; b_val = b.sortName or "" end
+        elseif self.sortColumn == "price" then
+            -- Vendor list rows carry no aggregate price; sort by name so
+            -- the header behaves predictably instead of GUID-ordering.
+            a_val = a.sortName or ""; b_val = b.sortName or ""
+        elseif self.sortColumn == "continent" then
+            a_val = tostring(a.discovery and a.discovery.c or 0) .. "|" .. (a.zoneNameStr or "")
+            b_val = tostring(b.discovery and b.discovery.c or 0) .. "|" .. (b.zoneNameStr or "")
         else
             a_val = a.guid or ""; b_val = b.guid or ""
         end
@@ -2175,9 +2534,22 @@ function Viewer:GetFilterStateHash()
         tostring(self.lastSeenSortState or "off")
     }
 
+    -- columnFilters mixes two shapes: eq/ms are double-nested
+    -- (eq.slot = {value=true}), while zone/source/quality/looted/vendorType
+    -- are flat maps (zone = {value=true}). The old loop assumed everything
+    -- was double-nested, so the flat filters NEVER contributed to the hash
+    -- and stale cached results could be served after changing them.
+    local FLAT_FILTER_KEYS = { zone = true, source = true, quality = true, looted = true, vendorType = true }
+
     local filterEntries = {}
     for filterType, filters in pairs(self.columnFilters) do
-        if type(filters) == "table" then
+        if FLAT_FILTER_KEYS[filterType] then
+            if type(filters) == "table" and size(filters) > 0 then
+                local sortedValues = keys(filters)
+                _tsort(sortedValues)
+                _tinsert(filterEntries, concatStrings(filterType, ":", _tconcat(sortedValues, ",")))
+            end
+        elseif type(filters) == "table" then
             for column, values in pairs(filters) do
                 if type(values) == "table" and size(values) > 0 then
                     local sortedValues = keys(values)
@@ -2198,6 +2570,27 @@ function Viewer:GetFilterStateHash()
     end
     if self.favoritesFilterState == true then
         _tinsert(filterEntries, "favorites:true")
+    end
+    if self.deepSearchFilters and #self.deepSearchFilters > 0 then
+        -- Order among rows doesn't change the result set (all AND), so sort for
+        -- a stable cache key.
+        local dsf = {}
+        for i = 1, #self.deepSearchFilters do dsf[i] = string.lower(self.deepSearchFilters[i]) end
+        _tsort(dsf)
+        _tinsert(filterEntries, concatStrings("deepx:", _tconcat(dsf, "|")))
+    end
+    
+    local undiscoveredFilter = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.undiscoveredFilter or "TOP"
+    _tinsert(filterEntries, "undiscovered:" .. undiscoveredFilter)
+
+    -- Belt-and-suspenders: the phase menu already force-clears the caches,
+    -- but include the phase in the hash so no future phase-changing code
+    -- path can ever be served a stale filtered list.
+    local wfPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+    _tinsert(filterEntries, "wfphase:" .. tostring(wfPhase))
+
+    if L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.hideBags then
+        _tinsert(filterEntries, "hidebags:1")
     end
 
     local hash = _tconcat(hashParts, "|")
@@ -2266,6 +2659,19 @@ function Viewer:GetPaginatedDiscoveries()
     self.totalItems = #allDiscoveries
 
     local effectiveItemsPerPage = self:GetEffectiveItemsPerPage()
+
+    -- FIXED: clamp the current page whenever the result set shrinks
+    -- (refresh with new data, unfavoriting the last item on the last page,
+    -- narrowing filters through code paths that don't reset the page).
+    -- Without this the grid rendered a blank out-of-range page.
+    local totalPages = math.max(1, math.ceil(self.totalItems / effectiveItemsPerPage))
+    if (self.currentPage or 1) > totalPages then
+        self.currentPage = totalPages
+    end
+    if (self.currentPage or 1) < 1 then
+        self.currentPage = 1
+    end
+
     local startIndex = (self.currentPage - 1) * effectiveItemsPerPage + 1
     local endIndex = math.min(startIndex + effectiveItemsPerPage - 1, self.totalItems)
 
@@ -2297,6 +2703,7 @@ end
 
 function Viewer:HasActiveFilters()    
     if self.searchTerm and self.searchTerm ~= "" then return true end
+    if self.deepSearchFilters and #self.deepSearchFilters > 0 then return true end
     if self.minReqLevel or self.maxReqLevel then return true end
     if size(self.columnFilters.zone) > 0 then return true end
  
@@ -2331,6 +2738,60 @@ function Viewer:UpdateClearAllButton()
         self.clearAllBtn:Hide()
         self.actionsLabel:Show()
     end
+end
+
+function Viewer:GetUndiscoveredCount()
+    if Cache.discoveriesBuilt and Cache.discoveries then
+        local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
+        local count = 0
+        for i = 1, #Cache.discoveries do
+            local data = Cache.discoveries[i]
+            if data and data.isUndiscovered then
+                -- Keep the badge consistent with the list: CoA hides relics.
+                if not (isCoA and data.equipLoc == "INVTYPE_RELIC") then
+                    count = count + 1
+                end
+            end
+        end
+        return count
+    end
+
+    local discoveries = L:GetDiscoveriesDB()
+    local discoveredItemIDs = {}
+    if discoveries then
+        for _, discovery in pairs(discoveries) do
+            if discovery.i then
+                local baseID = L:GetBaseItemID(discovery.i)
+                discoveredItemIDs[baseID] = true
+            end
+        end
+    end
+    
+    local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
+    local countedBases = {}
+    local count = 0
+    local wfClassic = L.WorldforgedList
+    if wfClassic then
+        for _, itemID in ipairs(wfClassic) do
+            if itemID then
+                local baseID = L:GetBaseItemID(itemID)
+                if not discoveredItemIDs[baseID] and not countedBases[baseID] then
+                    local skip = false
+                    if isCoA then
+                        local name, _, _, _, _, _, _, _, eqLoc = GetItemInfo(baseID)
+                        if eqLoc == "INVTYPE_RELIC" then
+                            skip = true
+                        end
+                    end
+                    if not skip then
+                        countedBases[baseID] = true
+                        count = count + 1
+                    end
+                end
+            end
+        end
+    end
+    return count
 end
 
 function Viewer:UpdateFilterButtonStates()
@@ -2484,6 +2945,22 @@ function Viewer:UpdateFilterButtonStates()
     if self.lsFilterBtn then self.lsFilterBtn:SetShown(showNormalFilters) end
     if self.duplicatesFilterBtn then self.duplicatesFilterBtn:SetShown(showDuplicates) end
 
+    if self.undiscoveredFilterBtn then
+        local current = L.db.profile.viewer.undiscoveredFilter or "TOP"
+        local count = self:GetUndiscoveredCount()
+        if current == "TOP" then
+            setButtonTextColor(self.undiscoveredFilterBtn, 1, 0.8, 0.2) 
+            self.undiscoveredFilterBtn:SetText("Undiscovered: Top (" .. count .. ")")
+        elseif current == "MIXED" then
+            setButtonTextColor(self.undiscoveredFilterBtn, 1, 0.8, 0.2) 
+            self.undiscoveredFilterBtn:SetText("Undiscovered: Mixed (" .. count .. ")")
+        else
+            setButtonTextColor(self.undiscoveredFilterBtn, 1, 1, 1) 
+            self.undiscoveredFilterBtn:SetText("Undiscovered: Hidden (" .. count .. ")")
+        end
+        self.undiscoveredFilterBtn:SetShown(isEq)
+    end
+
     local lastBtn = self.filtersLabel
     if lastBtn then
         local activeBtns = {
@@ -2496,7 +2973,8 @@ function Viewer:UpdateFilterButtonStates()
             self.lootedFilterBtn,
             self.collectedMEFilterBtn,
             self.lsFilterBtn,          
-            self.duplicatesFilterBtn   
+            self.duplicatesFilterBtn,
+            self.undiscoveredFilterBtn
         }
 
         for _, btn in ipairs(activeBtns) do
@@ -2544,6 +3022,98 @@ function Viewer:UpdateReloadHint()
     end
 end
 
+function Viewer:UpdateWorldforgedTabLabel()
+    if not self.equipmentBtn then return end
+    local phaseID = L.db.profile.viewer.worldforgedPhase or 0
+    local labelText = "Worldforged"
+    if phaseID > 0 then
+        labelText = string.format("Worldforged - |cff00ff00P%d|r", phaseID - 1)
+    end
+    self.equipmentBtn.label:SetText(labelText .. " ▼")
+end
+
+-- Drop queued server lookups for phase-upgrade variants that no longer
+-- match the selected phase. Without this, switching phases kept draining
+-- stale upgrade queries for a long time ("caching both types" flicker and
+-- wasted server traffic).
+function Viewer:PruneStaleUpgradeCacheQueue(newPhase)
+    local queue = L.db and L.db.global and L.db.global.cacheQueue
+    if not queue or #queue == 0 then return end
+    local CoreM = L:GetModule("Core", true)
+    local kept, removed = {}, 0
+    for i = 1, #queue do
+        local raw = queue[i]
+        local id = tonumber(raw)
+        local keep = true
+        if id then
+            local baseID = L:GetBaseItemID(id)
+            if baseID ~= id then
+                -- Upgrade variant: keep only if it belongs to the phase
+                -- that is selected right now.
+                keep = (tonumber(newPhase) or 0) > 0
+                    and L:GetWorldforgedPhaseItemID(baseID, newPhase) == id
+            end
+        end
+        if keep then
+            kept[#kept + 1] = raw
+        else
+            removed = removed + 1
+            if CoreM and CoreM._queueSet and id then CoreM._queueSet[id] = nil end
+        end
+    end
+    if removed > 0 then
+        wipe(queue)
+        for i = 1, #kept do queue[i] = kept[i] end
+        self.cacheQueueMax = 0
+    end
+end
+
+function Viewer:PrewarmActivePhaseUpgrades()
+    local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+    if selectedPhase <= 0 then return end
+    
+    local baseList = L.WorldforgedList
+    if not baseList then return end
+    
+    local upgradeIDs = {}
+    local added = {}
+    for _, baseID in ipairs(baseList) do
+        local upgradeID = L:GetWorldforgedPhaseItemID(baseID, selectedPhase)
+        if upgradeID and upgradeID ~= baseID and not added[upgradeID] then
+            table.insert(upgradeIDs, upgradeID)
+            added[upgradeID] = true
+        end
+    end
+
+    self:WarmItemIDs(upgradeIDs)
+
+    -- FIXED "caching stuck after switching phases": the pump self-cancels
+    -- when the queue empties, and nothing restarted it when a phase switch
+    -- refilled the queue -- the counter froze at 0 / N.
+    local CoreM = L:GetModule("Core", true)
+    if CoreM and CoreM.EnsureCachePump then
+        CoreM:EnsureCachePump()
+    end
+end
+
+function Viewer:WarmItemIDs(idList)
+    if not idList or #idList == 0 then return end
+    local BATCH = 50
+    local idx = 1
+    local function run()
+        local top = idx + BATCH - 1
+        if top > #idList then top = #idList end
+        for i = idx, top do
+            GetItemInfo(idList[i])
+        end
+        idx = top + 1
+        if idx <= #idList then
+            C_Timer.After(0.1, run)
+        end
+    end
+    run()
+end
+
 function Viewer:CreateWindow()
     local pTime = L.ProfileStart and L:ProfileStart() 
     
@@ -2585,7 +3155,19 @@ function Viewer:CreateWindow()
     window:SetResizable(true)
     window:EnableMouse(true)
     window:RegisterForDrag("LeftButton")
-    window:SetScript("OnDragStart", window.StartMoving)
+    window:SetScript("OnDragStart", function(self)
+        -- Rows stay VISIBLE while dragging. Frames whose anchors were
+        -- established while the window was hidden can carry stale screen
+        -- rects into the first drag (the "list left behind" ghost), so
+        -- refresh the anchor-chain heads right before the move begins.
+        if Viewer and Viewer.rows and Viewer.scrollFrame then
+            for i, r in ipairs(Viewer.rows) do
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", Viewer.scrollFrame, "TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
+            end
+        end
+        self:StartMoving()
+    end)
     window:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
 
@@ -2731,7 +3313,7 @@ function Viewer:CreateWindow()
     
     local versionText = window:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     versionText:SetPoint("TOPLEFT", 15, -18)    
-    versionText:SetTextColor(0.90, 0.20, 0.90, 0.8)
+    versionText:SetTextColor(1, 0.82, 0, 1)
     versionText:SetText(string.format("LootCollector %s", L.Version or "Unknown"))
 
     local versionBtn = CreateFrame("Button", nil, window)
@@ -2739,8 +3321,17 @@ function Viewer:CreateWindow()
     versionBtn:EnableMouse(true)
     versionBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT", 0, -2)
-        GameTooltip:SetText("LootCollector Changelog", 0.90, 0.20, 0.90)
+        GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
+Version Beta-1.0r:
+- Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
+- Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.
+- Made Vendors discoverable and enabled 2 more types of vendors besides Blackmarket (1 broadcast per day)
+- Deep Search Tooltip Filtering: Search items by stats, spells, or effects, and filter map pins with matching keywords.
+- Added the ability to filter out specific addon version and made 0.8.5 the minimum version by default. People are still using very old versions of the addon.
+- Multiple ways of self-cleaning duplicates and bad items received from older addons.
+- A lot of other bug fixes and performance tweaks, like the big hang when you Alt+Tab back into the game.
+
 beta-0.8.8r:
 - Filtered out incompatible Relics, Idols and Totems on CoA.
 - Fixed "Unknown Realm" database splits on login.
@@ -2876,6 +3467,8 @@ beta-0.8.6r:
         self:SetBackdropBorderColor(1, 1, 1, 1)
     end)
     scaleDown:SetScript("OnLeave", function(self) GameTooltip:Hide() self:SetBackdropBorderColor(1, 1, 1, 0.5) end)
+
+
     
     window.SkinScrollBar = function(self, scrollFrame)
         local name = scrollFrame:GetName()
@@ -2982,28 +3575,75 @@ beta-0.8.6r:
     local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
 
     local equipmentBtn = CreateTabBtn(window, "Worldforged", nil, nil, nil)
-    equipmentBtn:HookScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    equipmentBtn:SetWidth(150)
+    self.equipmentBtn = equipmentBtn
+    self:UpdateWorldforgedTabLabel()
+
+    local function OpenWorldforgedPhaseMenu(selfBtn)
+        -- Toggle behavior: clicking the button while our phase menu is open
+        -- closes it instead of instantly reopening.
+        if DropDownList1 and DropDownList1:IsShown()
+            and UIDROPDOWNMENU_OPEN_MENU == Viewer._worldforgedPhaseMenuFrame then
+            CloseDropDownMenus()
+            return
+        end
+        local menu = {}
+        for phase = 0, 6 do
+            local phaseID = phase
+            table.insert(menu, {
+                text = WORLDFORGED_PHASES[phaseID],
+                checked = (L.db.profile.viewer.worldforgedPhase or 0) == phaseID,
+                func = function()
+                    L.db.profile.viewer.worldforgedPhase = phaseID
+                    Viewer.currentPage = 1
+                    Cache.discoveriesBuilt = false
+                    Cache.filteredResults = {}
+                    Cache.lastFilterState = nil
+                    Viewer:UpdateWorldforgedTabLabel()
+                    Viewer:PruneStaleUpgradeCacheQueue(phaseID)
+                    Viewer:PrewarmActivePhaseUpgrades()
+                    Viewer:RefreshData()
+                    local Map = L:GetModule("Map", true)
+                    if Map then
+                        Map.cacheIsDirty = true
+                        Map:Update(true)
+                        Map:UpdateMinimap()
+                    end
+                end,
+            })
+        end
+        Viewer._worldforgedPhaseMenuFrame = Viewer._worldforgedPhaseMenuFrame or CreateFrame("Frame", "LootCollectorWorldforgedPhaseMenu", UIParent, "UIDropDownMenuTemplate")
+        EasyMenu(menu, Viewer._worldforgedPhaseMenuFrame, selfBtn, 0, -5, "MENU")
+    end
+
+    equipmentBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    equipmentBtn:HookScript("OnEnter", function(selfBtn)
+        GameTooltip:SetOwner(selfBtn, "ANCHOR_TOP")
         GameTooltip:SetText("Worldforged items found around the world by other players.", 1, 0.82, 0)
+        GameTooltip:AddLine("\nClick when active or Right-Click to change upgrade phase.", 1, 1, 1)
         GameTooltip:Show()
         GameTooltip:SetFrameStrata("TOOLTIP")
     end)
     equipmentBtn:SetPoint("TOPLEFT", 20, -47)
-    equipmentBtn:SetScript("OnClick", function()
-        self.currentFilter = "eq"
-        self.currentPage   = 1
-        
-        self.sortColumn    = "name"
-        self.sortAscending = true
-        
-        self:SetSelectedRow(nil)
-        if self.vendorInventoryFrame then
-            self.vendorInventoryFrame:Hide()
-            self.selectedVendorGuid = nil
+    equipmentBtn:SetScript("OnClick", function(selfBtn, button)
+        if button == "RightButton" or (selfBtn._isActive and self.currentFilter == "eq") then
+            OpenWorldforgedPhaseMenu(selfBtn)
+        else
+            self.currentFilter = "eq"
+            self.currentPage   = 1
+            
+            self.sortColumn    = "name"
+            self.sortAscending = true
+            
+            self:SetSelectedRow(nil)
+            if self.vendorInventoryFrame then
+                self.vendorInventoryFrame:Hide()
+                self.selectedVendorGuid = nil
+            end
+            self:UpdateFilterButtons()
+            self:UpdateSortHeaders()
+            self:RefreshData()
         end
-        self:UpdateFilterButtons()
-        self:UpdateSortHeaders()
-        self:RefreshData()
     end)
 
     local mysticBtn = CreateTabBtn(window, "Mystic Scrolls", equipmentBtn, "RIGHT", nil)
@@ -3207,7 +3847,198 @@ beta-0.8.6r:
     local tooltipLabel = tooltipCheck:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
     tooltipLabel:SetPoint("LEFT", tooltipCheck, "RIGHT", 2, 0)
     tooltipLabel:SetText("Deep Search")    
+
+
     
+    ------------------------------------------------------------------
+    -- Deep Search FILTER (multi-term tooltip keyword filter, AND/OR)
+    ------------------------------------------------------------------
+    -- deepSearchFilters is a list of expression strings, shared by reference with
+    -- the saved profile so edits persist. deepSearchCompiled is the parsed form.
+    if L.db and L.db.profile then
+        if type(L.db.profile.deepSearchFilters) ~= "table" then L.db.profile.deepSearchFilters = {} end
+        Viewer.deepSearchFilters = L.db.profile.deepSearchFilters
+    else
+        Viewer.deepSearchFilters = Viewer.deepSearchFilters or {}
+    end
+    Viewer:RebuildDeepCompiled()
+
+    local DFB_H = BUTTON_HEIGHT or 22
+
+    local deepFilterBtn = CreateFrame("Button", nil, window)
+    deepFilterBtn:SetSize(96, DFB_H)
+    deepFilterBtn:SetPoint("LEFT", tooltipLabel, "RIGHT", 12, 0)
+    deepFilterBtn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    deepFilterBtn:SetBackdropColor(0.10, 0.10, 0.16, 0.90)
+    deepFilterBtn:SetBackdropBorderColor(0.30, 0.30, 0.45, 0.85)
+    local dfbText = deepFilterBtn:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    dfbText:SetPoint("CENTER", 0, 0)
+    deepFilterBtn:SetFontString(dfbText)
+
+    -- The popup panel
+    local deepPanel = CreateFrame("Frame", "LCDeepFilterPanel", window)
+    deepPanel:SetSize(250, 210)
+    deepPanel:SetPoint("TOPLEFT", deepFilterBtn, "BOTTOMLEFT", 0, -4)
+    -- Top normal strata so it stays above the window even when the Viewer is
+    -- shown over the world map (a FULLSCREEN-strata frame). Frame level is also
+    -- bumped explicitly on each open (see the button OnClick).
+    deepPanel:SetFrameStrata("FULLSCREEN_DIALOG")
+    deepPanel:SetToplevel(true)
+    deepPanel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    deepPanel:SetBackdropColor(0.06, 0.06, 0.10, 0.97)
+    deepPanel:SetBackdropBorderColor(0.35, 0.35, 0.55, 0.9)
+    deepPanel:EnableMouse(true)
+    deepPanel:Hide()
+    deepPanel.rows = {}
+
+    local dpTitle = deepPanel:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    dpTitle:SetPoint("TOPLEFT", 10, -8)
+    dpTitle:SetText("Deep Search Filter")
+    dpTitle:SetTextColor(1, 0.82, 0)
+
+    local addBox = CreateFrame("EditBox", nil, deepPanel)
+    addBox:SetSize(170, 18)
+    addBox:SetPoint("TOPLEFT", 10, -30)
+    addBox:SetAutoFocus(false)
+    addBox:SetFontObject(UI_FONT_NAME)
+    addBox:SetTextColor(1, 1, 1, 1)
+    addBox:SetTextInsets(4, 4, 0, 0)
+    local abBg = addBox:CreateTexture(nil, "BACKGROUND"); abBg:SetAllPoints(true); abBg:SetTexture("Interface\\Buttons\\WHITE8X8"); abBg:SetVertexColor(0.08, 0.08, 0.14, 0.90)
+    local abBorder = addBox:CreateTexture(nil, "BORDER"); abBorder:SetPoint("TOPLEFT", -1, 1); abBorder:SetPoint("BOTTOMRIGHT", 1, -1); abBorder:SetTexture("Interface\\Buttons\\WHITE8X8"); abBorder:SetVertexColor(0.30, 0.30, 0.40, 0.80)
+
+    local addBtn = CreateFrame("Button", nil, deepPanel)
+    addBtn:SetSize(48, 18)
+    addBtn:SetPoint("LEFT", addBox, "RIGHT", 6, 0)
+    addBtn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    addBtn:SetBackdropColor(0.12, 0.20, 0.14, 0.90)
+    addBtn:SetBackdropBorderColor(0.40, 0.60, 0.40, 0.90)
+    local addBtnText = addBtn:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    addBtnText:SetPoint("CENTER", 0, 0); addBtnText:SetText("Add")
+    addBtn:SetFontString(addBtnText)
+
+    local listContainer = CreateFrame("Frame", nil, deepPanel)
+    listContainer:SetPoint("TOPLEFT", 10, -56)
+    listContainer:SetPoint("TOPRIGHT", -10, -56)
+    listContainer:SetHeight(140)
+
+    local dpHint = deepPanel:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    dpHint:SetPoint("BOTTOMLEFT", 10, 8)
+    dpHint:SetPoint("BOTTOMRIGHT", -10, 8)
+    dpHint:SetJustifyH("LEFT")
+    dpHint:SetTextColor(0.55, 0.55, 0.60)
+    dpHint:SetText("Each row narrows further (AND). Use AND / OR inside a row. Keywords match tooltips.")
+
+    -- Highlight the AND / OR operators inside a displayed expression.
+    local function colorizeExpr(s)
+        s = s:gsub("(%s)([Aa][Nn][Dd])(%s)", "%1|cff66ccff%2|r%3")
+        s = s:gsub("(%s)([Oo][Rr])(%s)", "%1|cffff9944%2|r%3")
+        return s
+    end
+
+    -- Rebuilds the panel widgets from Viewer.deepSearchFilters (the expression
+    -- list). Exposed as a method so the Clear-All handlers can refresh it too.
+    function Viewer:RefreshDeepFilterPanel()
+        local filters = self.deepSearchFilters or {}
+        local n = #filters
+        if n > 0 then
+            dfbText:SetText("Deep Filter (" .. n .. ")")
+            dfbText:SetTextColor(1, 0.82, 0)
+            deepFilterBtn:SetBackdropBorderColor(1, 0.82, 0, 0.95)
+        else
+            dfbText:SetText("Deep Filter")
+            dfbText:SetTextColor(0.90, 0.90, 0.90)
+            deepFilterBtn:SetBackdropBorderColor(0.30, 0.30, 0.45, 0.85)
+        end
+
+        for _, r in ipairs(deepPanel.rows) do r:Hide() end
+        for i = 1, n do
+            local row = deepPanel.rows[i]
+            if not row then
+                row = CreateFrame("Frame", nil, listContainer)
+                row:SetHeight(18)
+                row.label = row:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+                row.label:SetPoint("LEFT", 2, 0)
+                row.label:SetPoint("RIGHT", -20, 0)
+                row.label:SetJustifyH("LEFT")
+                row.del = CreateFrame("Button", nil, row)
+                row.del:SetSize(16, 16)
+                row.del:SetPoint("RIGHT", 0, 0)
+                row.del:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+                row.del:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
+                row.del:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight")
+                row.del:SetScript("OnClick", function(self2)
+                    local idx = self2.filterIndex
+                    if idx then
+                        _tremove(Viewer.deepSearchFilters, idx)
+                        Viewer:RebuildDeepCompiled()
+                        Viewer:RefreshDeepFilterPanel()
+                        Viewer.currentPage = 1
+                        Viewer:RefreshData()
+                        Viewer:UpdateClearAllButton()
+                        Viewer:NotifyMapDeepFilterChanged()
+                    end
+                end)
+                deepPanel.rows[i] = row
+            end
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", 0, -(i - 1) * 20)
+            row:SetPoint("TOPRIGHT", 0, -(i - 1) * 20)
+            row.label:SetText(colorizeExpr(filters[i]))
+            row.del.filterIndex = i
+            row:Show()
+        end
+    end
+
+    local function addDeepExpr()
+        local t = addBox:GetText()
+        t = t and strtrim(t) or ""
+        if t ~= "" then
+            local lower = string.lower(t)
+            local exists = false
+            for i = 1, #Viewer.deepSearchFilters do
+                if string.lower(Viewer.deepSearchFilters[i]) == lower then exists = true; break end
+            end
+            if not exists then _tinsert(Viewer.deepSearchFilters, t) end
+        end
+        addBox:SetText("")
+        Viewer:RebuildDeepCompiled()
+        Viewer:RefreshDeepFilterPanel()
+        Viewer.currentPage = 1
+        Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
+        Viewer:NotifyMapDeepFilterChanged()
+    end
+    addBox:SetScript("OnEnterPressed", addDeepExpr)
+    addBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    addBtn:SetScript("OnClick", addDeepExpr)
+
+    deepFilterBtn:SetScript("OnClick", function()
+        if deepPanel:IsShown() then
+            deepPanel:Hide()
+        else
+            Viewer:RefreshDeepFilterPanel()
+            -- Force above the window (and anything it may be stacked over) on
+            -- every open, so re-opening never lands behind the UI.
+            deepPanel:SetFrameStrata("FULLSCREEN_DIALOG")
+            deepPanel:SetFrameLevel((window:GetFrameLevel() or 1) + 50)
+            deepPanel:Show()
+            deepPanel:Raise()
+            addBox:SetFocus()
+        end
+    end)
+    deepFilterBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Deep Search Filter", 1, 1, 1)
+        GameTooltip:AddLine("Filter items by keywords in their tooltip.", 1, 0.82, 0, true)
+        GameTooltip:AddLine("Add rows like 'intellect and spell power', then 'haste or spell crit'.", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("Each row narrows further; use AND / OR within a row.", 0.8, 0.8, 0.8, true)
+        GameTooltip:Show(); GameTooltip:SetFrameStrata("TOOLTIP")
+    end)
+    deepFilterBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    Viewer.deepFilterPanel = deepPanel
+    Viewer:RefreshDeepFilterPanel()
+
     local function showDeepSearchTooltip(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText("Deep Search", 1, 1, 1)
@@ -3217,7 +4048,7 @@ beta-0.8.6r:
     end
     
     refreshDataBtn:ClearAllPoints()
-    refreshDataBtn:SetPoint("LEFT", tooltipLabel, "RIGHT", 20, 0)
+    refreshDataBtn:SetPoint("LEFT", deepFilterBtn, "RIGHT", 20, 0)
     refreshDataBtn:SetSize(110, BUTTON_HEIGHT)
     
     local bugBtn = CreateFrame("Button", nil, window)
@@ -3242,8 +4073,8 @@ beta-0.8.6r:
 
     bugBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
-        GameTooltip:SetText("Report a Bug", 1, 0.4, 0.4)
-        GameTooltip:AddLine("Generate a bug report and debug payload to help troubleshoot LootCollector issues.", 1, 1, 1, true)
+        GameTooltip:SetText("Report a Bug & Feedback", 1, 0.82, 0)
+        GameTooltip:AddLine("Click to get the Discord link to report bugs and leave feedback in #lootcollector.", 1, 1, 1, true)
         GameTooltip:Show()
         GameTooltip:SetFrameStrata("TOOLTIP")
     end)
@@ -3251,12 +4082,8 @@ beta-0.8.6r:
     bugBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     
     bugBtn:SetScript("OnClick", function()
-        local ImportExport = L:GetModule("ImportExport", true)
-        if ImportExport and ImportExport.ShowReportGenerator then
-            ImportExport:ShowReportGenerator()
-        else
-            print("|cffff0000LootCollector:|r ImportExport module is not available.")
-        end
+        StaticPopup_Show("LOOTCOLLECTOR_DISCORD_BUG_REPORT")
+        print("|cff00ff00LootCollector Discord Invite:|r https://discord.gg/GmeSCJGdzs")
     end)
 
     local tooltipLabelHover = CreateFrame("Button", nil, window)
@@ -3275,7 +4102,12 @@ beta-0.8.6r:
             L.db.profile.searchTooltipsEnabled = Viewer.searchTooltipsEnabled
         end
         Viewer.currentPage = 1
-        Cache.discoveriesBuilt = false
+        -- PERF: this used to force a full chunked rebuild of the entire
+        -- discoveries cache (thousands of rows) just to flip a flag that is
+        -- only read by the search predicate. Invalidate the filtered-results
+        -- cache instead; the underlying row cache is untouched.
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
         Viewer:RefreshData()
     end)
 
@@ -3705,6 +4537,26 @@ beta-0.8.6r:
     end)
     duplicatesFilterBtn:RegisterForClicks("LeftButtonUp")
     
+    local undiscoveredFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Undiscovered: Top", 170, duplicatesFilterBtn, "RIGHT")
+    undiscoveredFilterBtn:SetScript("OnClick", function(self, button)
+        local current = L.db.profile.viewer.undiscoveredFilter or "TOP"
+        local nextState
+        if current == "TOP" then
+            nextState = "MIXED"
+        elseif current == "MIXED" then
+            nextState = "HIDDEN"
+        else
+            nextState = "TOP"
+        end
+        L.db.profile.viewer.undiscoveredFilter = nextState
+        Viewer.currentPage = 1
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+        Viewer:RefreshData()
+        Viewer:UpdateFilterButtonStates()
+    end)
+    undiscoveredFilterBtn:RegisterForClicks("LeftButtonUp")
+    
     self.sourceFilterBtn = sourceFilterBtn
     self.qualityFilterBtn = qualityFilterBtn
     self.vendorTypeFilterBtn = vendorTypeFilterBtn
@@ -3715,6 +4567,7 @@ beta-0.8.6r:
     self.collectedMEFilterBtn = collectedMEFilterBtn
     self.duplicatesFilterBtn = duplicatesFilterBtn
     self.lsFilterBtn = lsFilterBtn
+    self.undiscoveredFilterBtn = undiscoveredFilterBtn
 
     local headerFrame = CreateFrame("Frame", nil, window)
     headerFrame:SetSize(WINDOW_WIDTH - 40, HEADER_HEIGHT)
@@ -3966,15 +4819,24 @@ beta-0.8.6r:
         Viewer.columnFilters.quality = {}
         Viewer.columnFilters.looted = {}
         Viewer.columnFilters.vendorType = {}
-        Viewer.columnFilters.duplicates = false 
-        
-        Viewer.lootedFilterState = nil 
-        Viewer.collectedMEFilterState = nil 
+        Viewer.columnFilters.duplicates = false
+
+        Viewer.lootedFilterState = nil
+        Viewer.collectedMEFilterState = nil
+        -- FIXED: Favorites was the only filter this Clear button forgot,
+        -- leaving the list stuck on favorites with the button still lit.
+        Viewer.favoritesFilterState = nil
         Viewer.hasUncachedData = false
         Viewer.lastSeenSortState = "off"
         
         Viewer.searchTerm = ""
         searchBox:SetText("")
+
+        if Viewer.deepSearchFilters then wipe(Viewer.deepSearchFilters) end
+        if Viewer.RebuildDeepCompiled then Viewer:RebuildDeepCompiled() end
+        if Viewer.NotifyMapDeepFilterChanged then Viewer:NotifyMapDeepFilterChanged() end
+        if Viewer.RefreshDeepFilterPanel then Viewer:RefreshDeepFilterPanel() end
+        if Viewer.deepFilterPanel then Viewer.deepFilterPanel:Hide() end
         
         Viewer.minReqLevel = nil
         Viewer.maxReqLevel = nil
@@ -4136,6 +4998,7 @@ beta-0.8.6r:
     itemsLabel:SetText("Items per page:")
 
     local items25Btn = CreateFlatBtn(paginationFrame, "25", 30)
+    self.items25Btn = items25Btn
     items25Btn:SetPoint("LEFT", itemsLabel, "RIGHT", 5, 0)
     items25Btn:SetScript("OnClick", function()
         local oldItemsPerPage = Viewer.itemsPerPage
@@ -4148,6 +5011,7 @@ beta-0.8.6r:
     end)
 
     local items50Btn = CreateFlatBtn(paginationFrame, "50", 30)
+    self.items50Btn = items50Btn
     items50Btn:SetPoint("LEFT", items25Btn, "RIGHT", 2, 0)
     items50Btn:SetScript("OnClick", function()
         local oldItemsPerPage = Viewer.itemsPerPage
@@ -4160,6 +5024,7 @@ beta-0.8.6r:
     end)
 
     local items100Btn = CreateFlatBtn(paginationFrame, "100", 35)
+    self.items100Btn = items100Btn
     items100Btn:SetPoint("LEFT", items50Btn, "RIGHT", 2, 0)
     items100Btn:SetScript("OnClick", function()
         local oldItemsPerPage = Viewer.itemsPerPage
@@ -4172,6 +5037,7 @@ beta-0.8.6r:
     end)
 
     local items500Btn = CreateFlatBtn(paginationFrame, "500", 35)
+    self.items500Btn = items500Btn
     items500Btn:SetPoint("LEFT", items100Btn, "RIGHT", 2, 0)
     items500Btn:SetScript("OnClick", function()
         local oldItemsPerPage = Viewer.itemsPerPage
@@ -4184,6 +5050,7 @@ beta-0.8.6r:
     end)
 
     local itemsAllBtn = CreateFlatBtn(paginationFrame, "All", 35)
+    self.itemsAllBtn = itemsAllBtn
     itemsAllBtn:SetPoint("LEFT", items500Btn, "RIGHT", 2, 0)
     itemsAllBtn:SetScript("OnClick", function()
         local oldItemsPerPage = Viewer.itemsPerPage
@@ -4403,7 +5270,9 @@ function Viewer:CreateRows(count)
     for i = 1, count do
         local row = self.rows[i]
         if not row then
-            row = CreateFrame("Frame", nil, self.scrollFrame:GetParent())
+            -- Named so /framestack can identify our frames when debugging
+            -- stray visuals.
+            row = CreateFrame("Frame", "LootCollectorViewerRow" .. i, self.scrollFrame:GetParent())
             row:SetHeight(ROW_HEIGHT)
             row:SetFrameLevel(self.scrollFrame:GetFrameLevel() + 1)
             row:SetFrameStrata(FRAME_STRATA)
@@ -4435,13 +5304,21 @@ function Viewer:CreateRows(count)
             row.highlight:SetBlendMode("ADD")
             row.highlight:Hide()
 
+            row.separatorLine = row:CreateTexture(nil, "OVERLAY")
+            row.separatorLine:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, -2)
+            row.separatorLine:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, -2)
+            row.separatorLine:SetHeight(1)
+            row.separatorLine:SetTexture("Interface\\Buttons\\WHITE8X8")
+            row.separatorLine:SetVertexColor(0.25, 0.28, 0.38, 0.7)  -- fine dark blue-grey separator line
+            row.separatorLine:Hide()
+
             local nameFrame = CreateFrame("Frame", nil, row)
             nameFrame:SetSize(currentNameWidth, ROW_HEIGHT) 
             
             nameFrame:SetPoint("LEFT", row, "LEFT", 5, 0)
             nameFrame:EnableMouse(true)
 
-            local iconFrame = CreateFrame("Frame", nil, nameFrame)
+            local iconFrame = CreateFrame("Frame", "LootCollectorViewerRowIcon" .. i, nameFrame)
             iconFrame:SetSize(20, 20)
             iconFrame:SetPoint("LEFT", 0, 0)
             iconFrame:SetFrameLevel(row:GetFrameLevel() + 10)
@@ -4480,7 +5357,34 @@ function Viewer:CreateRows(count)
                         end
                     else
                         local d = self.discoveryData.discovery
-                        if d and d.il then
+                        local displayItemID = self.discoveryData.displayItemID
+                        -- Vendor records carry negative pseudo item IDs which
+                        -- SetHyperlink rejects ("Unknown link type").
+                        if d and (tonumber(d.i) or 0) < 0 then
+                            GameTooltip:SetOwner(self, "ANCHOR_RIGHT", 20, 10)
+                            GameTooltip:SetText(d.vendorName or "Special Vendor", 1, 0.82, 0)
+                            if d.vendorItems and #d.vendorItems > 0 then
+                                GameTooltip:AddLine(string.format("%d items for sale", #d.vendorItems), 0.8, 0.8, 0.8)
+                            end
+                            GameTooltip:Show()
+                            GameTooltip:SetFrameStrata("TOOLTIP")
+                            return
+                        end
+                        if displayItemID then
+                            GameTooltip:SetOwner(self, "ANCHOR_RIGHT", 20, 10)
+                            -- Unreleased phase upgrades never resolve
+                            -- ("Retrieving item information" forever); show
+                            -- the BASE item instead when that happens.
+                            local baseI = d and tonumber(d.i)
+                            if not GetItemInfo(displayItemID) and baseI and baseI ~= displayItemID and GetItemInfo(baseI) then
+                                GameTooltip:SetHyperlink("item:" .. baseI)
+                                GameTooltip:AddLine("Upgrade data not available yet - showing base item.", 0.7, 0.7, 0.7, true)
+                            else
+                                GameTooltip:SetHyperlink("item:" .. displayItemID)
+                            end
+                            GameTooltip:Show()
+                            GameTooltip:SetFrameStrata("TOOLTIP")
+                        elseif d and d.il then
                             GameTooltip:SetOwner(self, "ANCHOR_RIGHT", 20, 10)
                             GameTooltip:SetHyperlink(d.il)
                             GameTooltip:Show()
@@ -4612,7 +5516,15 @@ function Viewer:CreateRows(count)
                         favIcon:SetDesaturated(false)
                         favIcon:SetVertexColor(1, 1, 1, 1)
                     end
-                    if Viewer.favoritesFilterState then Viewer:RefreshData() end
+                    if Viewer.favoritesFilterState then
+                        -- FIXED: the filter-state hash cannot see favorites
+                        -- CONTENT changes (only the toggle), so without this
+                        -- invalidation the cached filtered list was reused
+                        -- and the just-unfavorited row stayed visible.
+                        Cache.filteredResults = {}
+                        Cache.lastFilterState = nil
+                        Viewer:RefreshData()
+                    end
                 end
             end)
 
@@ -4666,7 +5578,10 @@ function Viewer:CreateRows(count)
             foundByFrame.ShowFoundByContextMenu = function(self)
                 if not self.discoveryData or not self.discoveryData.discovery.fp then return end
                 local playerName = self.discoveryData.discovery.fp
-                local buttons = { { text = "Delete all from " .. playerName, onClick = function() Viewer:ConfirmDeleteAllFromPlayer(playerName) end } }
+                local buttons = {
+                    { text = "Delete all from " .. playerName, onClick = function() Viewer:ConfirmDeleteAllFromPlayer(playerName) end },
+                    { text = "Block & Purge " .. playerName, onClick = function() Viewer:BlockAndPurgePlayer(playerName) end }
+                }
                 CreateContextMenu(self, "Player: " .. playerName, buttons)
             end
 
@@ -4681,20 +5596,31 @@ function Viewer:CreateRows(count)
             vendorNameText:Hide()
 
             local vendorNameFrame = CreateFrame("Frame", nil, row)
-            vendorNameFrame:SetPoint("TOPLEFT", vendorNameText, "TOPLEFT", 0, 0)
-            vendorNameFrame:SetPoint("BOTTOMRIGHT", vendorNameText, "BOTTOMRIGHT", 0, 0)
+            -- FIXED: this frame used to be two-point-anchored to the
+            -- vendorNameText FontString AND then hit with SetWidth in
+            -- UpdateRows -- an over-constrained rect that went stale while
+            -- dragging the window (the vendor name column visually stayed
+            -- behind at the old screen position and snapped back when the
+            -- drag ended). Use a conventional single anchor + explicit size.
+            vendorNameFrame:SetPoint("LEFT", row, "LEFT", 38, 0)
+            vendorNameFrame:SetSize(GRID_LAYOUT.VENDOR_NAME_WIDTH_INLINE, ROW_HEIGHT)
             vendorNameFrame:EnableMouse(true)
             vendorNameFrame:Hide()
 
-            local vendorIconFrame = CreateFrame("Frame", nil, row)
+            local vendorIconFrame = CreateFrame("Frame", "LootCollectorViewerRowVendorIcon" .. i, row)
             vendorIconFrame:SetSize(20, 20)
-            
+
             vendorIconFrame:SetPoint("LEFT", row, "LEFT", 5, 0)
             vendorIconFrame:SetFrameLevel(row:GetFrameLevel() + 10)
             row.vendorIconFrame = vendorIconFrame
 
             local vendorIconTex = vendorIconFrame:CreateTexture(nil, "ARTWORK")
-            vendorIconTex:SetAllPoints(vendorIconFrame)
+            -- Explicit size instead of SetAllPoints: guarantees a square
+            -- 20x20 icon regardless of any frame-rect weirdness (icons were
+            -- rendering vertically stretched on the Vendors tab).
+            vendorIconTex:SetPoint("CENTER", vendorIconFrame, "CENTER", 0, 0)
+            vendorIconTex:SetSize(20, 20)
+            vendorIconTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
             local rawSetDesaturated = vendorIconTex.SetDesaturated
             vendorIconTex.SetDesaturated = function(self, desaturated) rawSetDesaturated(self, false) end
             local rawSetVertexColor = vendorIconTex.SetVertexColor
@@ -4946,17 +5872,15 @@ function Viewer:CreateRows(count)
             end
 
             nameFrame.LinkItemToChat = function(self)
-                if not self.discoveryData or not self.discoveryData.discovery then return end
-                local discovery = self.discoveryData.discovery
-                local itemID = discovery.i
-                local itemLink = discovery.il
-                if not itemID and itemLink and type(itemLink) == "string" then
-                    local id = itemLink:match("item:(%d+)")
-                    if id then itemID = tonumber(id) end
-                end
+                if not self.discoveryData then return end
+                local itemID = self.discoveryData.displayItemID or (self.discoveryData.discovery and self.discoveryData.discovery.i)
                 if not itemID then return end
+                local _, itemLink = GetItemInfo(itemID)
+                if not itemLink then
+                    itemLink = "item:" .. itemID
+                end
                 if IsShiftKeyDown() and ChatFrameEditBox and ChatFrameEditBox:IsShown() then
-                    ChatFrameEditBox:Insert(itemLink or ("item:" .. itemID))
+                    ChatFrameEditBox:Insert(itemLink)
                 end
             end
             
@@ -5204,7 +6128,30 @@ function Viewer:UpdatePagination()
                 if self.cacheQueueMax > 0 then
                     progress = (cachedCount / self.cacheQueueMax) * 100
                 end
-                self.pageInfo:SetText(string.format("Caching Items: %d / %d (%d%%)", cachedCount, self.cacheQueueMax, math.floor(progress)))
+                -- Tell the user WHAT is being cached. Classify a SAMPLE of
+                -- the queue (not just the head) so the label doesn't
+                -- flicker between kinds when base items and phase upgrades
+                -- are interleaved.
+                local nUpg, nWF = 0, 0
+                for qi = 1, math.min(40, currentQueueSize) do
+                    local qid = tonumber(cacheQueue[qi])
+                    if qid then
+                        if L.GetBaseItemID and L:GetBaseItemID(qid) ~= qid then
+                            nUpg = nUpg + 1
+                        elseif L.IsWorldforgedListItem and L:IsWorldforgedListItem(qid) then
+                            nWF = nWF + 1
+                        end
+                    end
+                end
+                local kindText = "Item Data"
+                if nUpg > 0 and nWF > 0 then
+                    kindText = "Items & Upgrades"
+                elseif nUpg > 0 then
+                    kindText = "Phase Upgrades"
+                elseif nWF > 0 then
+                    kindText = "Worldforged Items"
+                end
+                self.pageInfo:SetText(string.format("Caching %s: %d / %d (%d%%) - server lookups, safe to play", kindText, cachedCount, self.cacheQueueMax, math.floor(progress)))
                 
                 if self.progressBar then
                     if not self.progressBar:IsShown() then
@@ -5234,26 +6181,29 @@ function Viewer:UpdatePagination()
 end
 
 function Viewer:UpdateItemsPerPageButtons()
-    
     local function setButtonTextColor(button, r, g, b)
-        local fontString = button:GetFontString()
+        local fontString = button and button:GetFontString()
         if fontString then
             fontString:SetTextColor(r, g, b)
         end
     end
 
-    
-    if self.items25Btn then setButtonTextColor(self.items25Btn, 1, 1, 1) end
-    if self.items50Btn then setButtonTextColor(self.items50Btn, 1, 1, 1) end
-    if self.items100Btn then setButtonTextColor(self.items100Btn, 1, 1, 1) end
+    if self.items25Btn then setButtonTextColor(self.items25Btn, 0.8, 0.8, 0.8) end
+    if self.items50Btn then setButtonTextColor(self.items50Btn, 0.8, 0.8, 0.8) end
+    if self.items100Btn then setButtonTextColor(self.items100Btn, 0.8, 0.8, 0.8) end
+    if self.items500Btn then setButtonTextColor(self.items500Btn, 0.8, 0.8, 0.8) end
+    if self.itemsAllBtn then setButtonTextColor(self.itemsAllBtn, 0.8, 0.8, 0.8) end
 
-    
     if self.itemsPerPage == 25 and self.items25Btn then
-        setButtonTextColor(self.items25Btn, 0.2, 0.8, 1)
+        setButtonTextColor(self.items25Btn, 1, 0.82, 0)
     elseif self.itemsPerPage == 50 and self.items50Btn then
-        setButtonTextColor(self.items50Btn, 0.2, 0.8, 1)
+        setButtonTextColor(self.items50Btn, 1, 0.82, 0)
     elseif self.itemsPerPage == 100 and self.items100Btn then
-        setButtonTextColor(self.items100Btn, 0.2, 0.8, 1)
+        setButtonTextColor(self.items100Btn, 1, 0.82, 0)
+    elseif self.itemsPerPage == 500 and self.items500Btn then
+        setButtonTextColor(self.items500Btn, 1, 0.82, 0)
+    elseif self.itemsPerPage >= 99999 and self.itemsAllBtn then
+        setButtonTextColor(self.itemsAllBtn, 1, 0.82, 0)
     end
 end
 
@@ -5338,11 +6288,26 @@ function Viewer:UpdateRows()
                 else
                     row.highlight:Hide()
                 end
+
+                local isSeparator = false
+                local undiscoveredFilter = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.undiscoveredFilter or "TOP"
+                if undiscoveredFilter == "TOP" and data.isNew then
+                    local nextData = discoveries[i + offset + 1]
+                    if nextData and not nextData.isNew then
+                        isSeparator = true
+                    end
+                end
+
+                if isSeparator and row.separatorLine then
+                    row.separatorLine:Show()
+                elseif row.separatorLine then
+                    row.separatorLine:Hide()
+                end
                 
                 if isVendorView then
-                    
+
                     row.vendorNameText:SetWidth(currentVendorNameWidth)
-                    row.vendorNameFrame:SetWidth(currentVendorNameWidth)
+                    row.vendorNameFrame:SetSize(currentVendorNameWidth, ROW_HEIGHT)
                     
                     
                     
@@ -5446,14 +6411,18 @@ function Viewer:UpdateRows()
                         end
                         row.vendorIconTex:Show()
                         row.vendorNameText:ClearAllPoints()
-                        
+
                         row.vendorNameText:SetPoint("LEFT", row, "LEFT", 38, 0)
+                        row.vendorNameFrame:ClearAllPoints()
+                        row.vendorNameFrame:SetPoint("LEFT", row, "LEFT", 38, 0)
                     else
                         row.vendorIconTex:Hide()
                         if row.vendorIconFrame then row.vendorIconFrame:Hide() end
                         row.vendorNameText:ClearAllPoints()
-                        
+
                         row.vendorNameText:SetPoint("LEFT", row, "LEFT", 16, 0)
+                        row.vendorNameFrame:ClearAllPoints()
+                        row.vendorNameFrame:SetPoint("LEFT", row, "LEFT", 16, 0)
                     end
                     
                     if not row.toggleText then
@@ -5503,15 +6472,68 @@ function Viewer:UpdateRows()
                     local isLooted = self:IsLootedByChar(data.guid)
                     local alpha = (not isLooted) and 1.0 or 0.5
                     local itemName = data.itemName
+                    if not itemName or itemName:find("Unknown Item", 1, true) or (not data.itemType and not data.isMystic) then
+                        local itemID = data.displayItemID or data.discovery.i
+                        local name, link, quality, itemLevelVal, minLevel, itemTypeVal, itemSubTypeVal, _, equipLocVal = GetItemInfo(itemID)
+                        if name and name ~= "" then
+                            local Scanner = L:GetModule("Scanner", true)
+                            local itemData = Scanner and Scanner:GetItemData(itemID, link or itemID) or {}
+                            local isMystic = IsMysticScroll(name)
+                            local isWorldforged = itemData.isWF or false
+                            
+                            local characterClass = ""
+                            local classToken = itemData.classToken
+                            if classToken then
+                                characterClass = _G.LOCALIZED_CLASS_NAMES_MALE[classToken] or _G.LOCALIZED_CLASS_NAMES_FEMALE[classToken] or classToken
+                            end
+
+                            local finalMinLevel = itemData.reqLevel or minLevel or 0
+                            
+                            itemName = name
+                            data.itemName = name
+                            data.isMystic = isMystic
+                            data.isWorldforged = data.isNew and true or isWorldforged
+                            data.itemType = itemTypeVal
+                            data.itemSubType = itemSubTypeVal
+                            data.equipLoc = equipLocVal
+                            data.characterClass = characterClass
+                            data.itemLevel = itemLevelVal
+                            data.minLevel = finalMinLevel
+                            data.sortName = name
+                            data.sortClass = characterClass or ""
+                            data.sortType = itemSubTypeVal or ""
+                            data.sortSlot = equipLocVal and _G[equipLocVal] or ""
+                            -- Healed data can change filtering (e.g. CoA
+                            -- relic hiding) and sorting; refilter soon.
+                            Viewer:ScheduleFilterInvalidation()
+                        elseif not data._prioCached then
+                            -- Visible but uncached: jump this item to the
+                            -- FRONT of the lookup queue instead of waiting
+                            -- behind thousands of background upgrades.
+                            data._prioCached = true
+                            local CoreM = L:GetModule("Core", true)
+                            if CoreM and CoreM.QueueItemForCachingPriority then
+                                CoreM:QueueItemForCachingPriority(itemID)
+                            end
+                        end
+                    end
                     
-                    local r, g, b = GetColorForDiscovery(discovery, discovery.i)
+                    local r, g, b = GetColorForDiscovery(discovery, data.displayItemID or discovery.i)
                     itemName = string.format("|cff%02x%02x%02x%s|r", r * 255, g * 255, b * 255, itemName)
                     
+                    local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+                    if selectedPhase > 0 and data.displayItemID and data.discovery.i and data.displayItemID ~= data.discovery.i then
+                        itemName = itemName .. " |cff00ff00▲|r"
+                    end
                     if data.matchedViaTooltip then
                         itemName = itemName .. " |cffffd100[DS]|r"
                     end
+                    if data.isNew then
+                        itemName = itemName .. " |cffff7f00[NEW]|r"
+                    end
                     
-                    local icon = data.discovery.il and GetItemIcon(data.discovery.il) or nil
+                    local icon = data.displayItemID and GetItemIcon(data.displayItemID) or nil
+                    if not icon then icon = data.discovery.il and GetItemIcon(data.discovery.il) or nil end
                     if not icon and data.discovery.i then icon = GetItemIcon(data.discovery.i) end
                     if icon then
                         row.iconTex:SetTexture(icon)
@@ -5565,12 +6587,18 @@ function Viewer:UpdateRows()
                          row.zoneText:SetPoint("LEFT", row.levelText, "RIGHT", GRID_LAYOUT.COLUMN_SPACING, 0)
                     end
 
-                    row.zoneText:SetText(GetLocalizedZoneName(discovery))
+                    if data.isUndiscovered then
+                        row.zoneText:SetText("|cff888888Unknown|r")
+                        row.levelText:SetText("")
+                        row.foundByText:SetText("|cff888888Undiscovered|r")
+                    else
+                        row.zoneText:SetText(GetLocalizedZoneName(discovery))
+                        local levelTextVal = data.minLevel or 0
+                        row.levelText:SetText(levelTextVal > 0 and tostring(levelTextVal) or "")
+                        row.foundByText:SetText(discovery.fp or "Unknown")
+                    end
                     row.zoneText:SetAlpha(alpha)
-                    local levelTextVal = data.minLevel or 0
-                    row.levelText:SetText(levelTextVal > 0 and tostring(levelTextVal) or "")
                     row.levelText:SetAlpha(alpha)
-                    row.foundByText:SetText(discovery.fp or "Unknown")
                     row.foundByText:SetAlpha(alpha)
                     
                     if row.favIcon then
@@ -5586,17 +6614,21 @@ function Viewer:UpdateRows()
                 end
                 
                 local isLooted = self:IsLootedByChar(data.guid)
-                row.lootedBtn:SetEnabled(not isVendorView and not isLooted and not isLoading)
-                row.unlootedBtn:SetEnabled(not isVendorView and isLooted and not isLoading)
+                local isUndiscovered = data.isUndiscovered
+                row.lootedBtn:SetEnabled(not isVendorView and not isLooted and not isLoading and not isUndiscovered)
+                row.unlootedBtn:SetEnabled(not isVendorView and isLooted and not isLoading and not isUndiscovered)
                 row.lootedBtn:SetShown(not isVendorView)
                 row.unlootedBtn:SetShown(not isVendorView)
-                row.lootedBtn:SetAlpha((isLooted and not isLoading) and 1.0 or 0.3)
-                row.unlootedBtn:SetAlpha((not isLooted and not isLoading) and 1.0 or 0.3)
+                row.lootedBtn:SetAlpha((isLooted and not isLoading and not isUndiscovered) and 1.0 or 0.2)
+                row.unlootedBtn:SetAlpha((not isLooted and not isLoading and not isUndiscovered) and 1.0 or 0.2)
                 
-                row.deleteBtn:SetEnabled(not isLoading)
-                row.navBtn:SetEnabled(not isLoading)
-                row.showBtn:SetEnabled(not isLoading)
+                row.deleteBtn:SetEnabled(not isLoading and not isUndiscovered)
+                row.navBtn:SetEnabled(not isLoading and not isUndiscovered)
+                row.showBtn:SetEnabled(not isLoading and not isUndiscovered)
                 row.nameFrame:EnableMouse(not isLoading)
+                row.deleteBtn:SetAlpha(isUndiscovered and 0.2 or 1.0)
+                row.navBtn:SetAlpha(isUndiscovered and 0.2 or 1.0)
+                row.showBtn:SetAlpha(isUndiscovered and 0.2 or 1.0)
                 if not isVendorItem then
                     row.deleteBtn:Show()
                     row.navBtn:Show()
@@ -5652,6 +6684,23 @@ function Viewer:InvalidateFilterCache()
     Cache.lastFilterState = nil
 end
 
+-- Debounced filter invalidation + refresh. Used when row data heals in
+-- place (item data arriving from the server): healed fields can change
+-- filtering -- e.g. a healed row turning out to be a Libram that CoA
+-- realms must hide -- but the filter-state hash doesn't change, so the
+-- cached filtered list would otherwise keep serving the stale row set.
+function Viewer:ScheduleFilterInvalidation()
+    if self._invalidateTimer then return end
+    self._invalidateTimer = C_Timer.After(0.4, function()
+        Viewer._invalidateTimer = nil
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+        if Viewer.window and Viewer.window:IsShown() then
+            Viewer:RefreshData()
+        end
+    end)
+end
+
 function Viewer:RefreshData()
 local pTime = L.ProfileStart and L:ProfileStart() 
     local t0 = time()
@@ -5675,7 +6724,12 @@ local pTime = L.ProfileStart and L:ProfileStart()
         ", shouldRebuild=" .. tostring(shouldRebuildCache))
 
     if shouldRebuildCache and not Cache.discoveriesBuilding then
-        VDebug("RefreshData: calling UpdateAllDiscoveriesCache(async)")
+        VDebug("RefreshData: rebuilding discovery cache (chunked)")
+        -- UpdateAllDiscoveriesCacheSync refuses to run while discoveriesBuilt
+        -- is true. When we get here because the data changed (count drift),
+        -- clear the flag so the rebuild actually happens instead of silently
+        -- keeping stale rows.
+        Cache.discoveriesBuilt = false
         self:UpdateAllDiscoveriesCacheSync(function()
             VDebug("RefreshData callback: async cache build complete, running GetFilteredDiscoveries + UpdateRows")
             local t1 = time()
@@ -5936,6 +6990,19 @@ function Viewer:ConfirmDeleteAllFromPlayer(playerName)
     )
 end
 
+function Viewer:BlockAndPurgePlayer(playerName)
+    if not playerName or playerName == "" then return end
+
+    local fpName = L:normalizeSenderName(playerName)
+    if not fpName then return end
+
+    StaticPopup_Show("LOOTCOLLECTOR_VIEWER_BLOCK_AND_PURGE_PLAYER",
+        string.format("Block player '%s' and permanently purge all their discoveries? You will no longer receive or display data from them.", playerName),
+        nil,
+        { fpName = fpName, viewer = self }
+    )
+end
+
 function Viewer:ShowOnMap(discoveryData)
     local discovery = discoveryData.discovery or discoveryData
     if not discovery.g and discoveryData.guid then discovery.g = discoveryData.guid end
@@ -5976,7 +7043,12 @@ function Viewer:ApplySettings()
         ROW_FONT_PATH = L.db.profile.viewer.rowFont or "Fonts\\ARIALN.TTF"
         UI_FONT_SIZE = L.db.profile.viewer.uiFontSize or 13
         UI_FONT_PATH = L.db.profile.viewer.uiFont or "Fonts\\ARIALN.TTF"
-        self.inlineVendorView = L.db.profile.viewer.inlineVendorView or false
+        -- Inline vendor expansion is now the ONLY vendor view. The old
+        -- bottom split-pane (vendorInventoryFrame + splitterBar) caused
+        -- visual glitches when dragging the window on the Vendors tab and
+        -- has been retired; all its code paths are gated behind this flag.
+        self.inlineVendorView = true
+        L.db.profile.viewer.inlineVendorView = true
         self.splitRatio = L.db.profile.viewer.splitRatio or 0.64
     end
     
@@ -6015,11 +7087,15 @@ function Viewer:OnGetItemInfoReceived(itemID)
 
     Cache.uniqueValuesContext = {}
 
+    local baseID = L:GetBaseItemID(itemID)
+    local isWF = L.WorldforgedSet and L.WorldforgedSet[baseID]
+
     if Cache.discoveriesBuilt and Cache.discoveries then
         local updatedAny = false
         for _, row in ipairs(Cache.discoveries) do
-            if not row.isVendor and row.discovery and tonumber(row.discovery.i) == tonumber(itemID) then
-                local itemLink = row.discovery.il or row.discovery.i
+            local currentID = row.displayItemID or (row.discovery and row.discovery.i)
+            if not row.isVendor and currentID and tonumber(currentID) == tonumber(itemID) then
+                local itemLink = row.discovery.il or currentID
                 local name, link, quality, itemLevelVal, minLevel, itemTypeVal, itemSubTypeVal, _, equipLocVal = GetItemInfoSafe(itemLink, itemID)
                 if name then
                     local Scanner = L:GetModule("Scanner", true)
@@ -6039,9 +7115,14 @@ function Viewer:OnGetItemInfoReceived(itemID)
                         it, ist = GetItemTypeIDs(itemTypeVal, itemSubTypeVal)
                     end
 
+                    local isNew = row.isUndiscovered or false
+                    if not isNew and itemID and L.db and L.db.global and L.db.global.newWorldforgedItems then
+                        isNew = L.db.global.newWorldforgedItems[itemID] or false
+                    end
+                    row.isNew         = isNew
                     row.itemName      = name
                     row.isMystic      = isMystic
-                    row.isWorldforged = isWorldforged
+                    row.isWorldforged = isNew and true or isWorldforged
                     row.itemType      = itemTypeVal
                     row.itemSubType   = itemSubTypeVal
                     row.it            = it
@@ -6072,9 +7153,26 @@ function Viewer:OnGetItemInfoReceived(itemID)
             self.hasUncachedData = stillHasUncached
             self:UpdateReloadHint()
 
+            -- Healed rows may now be filterable differently (CoA relics,
+            -- name searches); invalidate the cached filtered list too.
+            self:ScheduleFilterInvalidation()
+        elseif isWF then
+            -- Check if this is a Worldforged item/upgrade that was skipped because it was uncached
             if self.window and self.window:IsShown() then
-                self:RefreshData()
+                if not self._refreshTimer then
+                    self._refreshTimer = C_Timer.After(0.3, function()
+                        self._refreshTimer = nil
+                        if self.window and self.window:IsShown() then
+                            self:RefreshData()
+                        end
+                    end)
+                end
             end
+        end
+    else
+        -- Rebuild needed once current cache finishes building
+        if isWF then
+            self._rebuildNeeded = true
         end
     end
 end
@@ -6142,17 +7240,23 @@ function Viewer:OnInitialize()
     end)
 
     if WorldMapFrame then
-        WorldMapFrame:HookScript("OnHide", function()
-            if Viewer.restoreToSpecialFrames and Viewer.windowNameToRestore then
-                createTimer(0.1, function()
-                    if Viewer.window and Viewer.window:IsShown() then
-                        addToSpecialFrames(Viewer.windowNameToRestore)
-                    end
-                    Viewer.restoreToSpecialFrames = false
-                    Viewer.windowNameToRestore = nil
-                    Viewer.inMapOperation = false 
-                end)
+        local poller = CreateFrame("Frame")
+        poller.lastVisible = WorldMapFrame:IsShown() and true or false
+        poller:SetScript("OnUpdate", function(self)
+            local isVisible = WorldMapFrame:IsShown() and true or false
+            if self.lastVisible and not isVisible then
+                if Viewer.restoreToSpecialFrames and Viewer.windowNameToRestore then
+                    createTimer(0.1, function()
+                        if Viewer.window and Viewer.window:IsShown() then
+                            addToSpecialFrames(Viewer.windowNameToRestore)
+                        end
+                        Viewer.restoreToSpecialFrames = false
+                        Viewer.windowNameToRestore = nil
+                        Viewer.inMapOperation = false 
+                    end)
+                end
             end
+            self.lastVisible = isVisible
         end)
     end
 
@@ -6160,11 +7264,22 @@ function Viewer:OnInitialize()
     self:UpdateFilterButtonStates()
     
     
+    -- Clean the PERSISTENT lookup queue once per login: drop upgrade
+    -- variants that don't match the currently selected phase (the queue
+    -- lives in db.global and can carry thousands of stale upgrade lookups
+    -- from a phase selected in a previous session, starving base items).
+    C_Timer.After(8, function()
+        local phase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+        if Viewer.PruneStaleUpgradeCacheQueue then
+            Viewer:PruneStaleUpgradeCacheQueue(phase)
+        end
+    end)
+
     C_Timer.After(12, function()
         local useAsync = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.asyncLoading
         if useAsync == nil then useAsync = true end
-        
-        
+
+
         if useAsync and Viewer.PrewarmCache then
             Viewer:PrewarmCache()
         end
@@ -6205,6 +7320,15 @@ function Viewer:Show()
     self:UpdateRefreshButton()
 
     self.window:Show()
+
+    -- Cheap re-anchor after showing: rows are created while the window is
+    -- hidden and can carry stale rects into the first drag.
+    if self.rows and self.scrollFrame then
+        for i, r in ipairs(self.rows) do
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", self.scrollFrame, "TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
+        end
+    end
     self.currentPage = self.currentPage or 1
     self.currentFilter = self.currentFilter or "eq"
     self:UpdateFilterButtons()
@@ -6226,6 +7350,30 @@ end
 function Viewer:Toggle()
     if self.window and self.window:IsShown() then self:Hide() else self:Show() end
 end
+
+StaticPopupDialogs["LOOTCOLLECTOR_DISCORD_BUG_REPORT"] = {
+    text = "Join our Discord to give feedback or report issues in #lootcollector:\n\nPress Ctrl+C to copy the link below.",
+    button1 = "Close",
+    hasEditBox = true,
+    editBoxWidth = 260,
+    OnShow = function(self)
+        local editBox = _G[self:GetName() .. "EditBox"]
+        if editBox then
+            editBox:SetText("https://discord.gg/GmeSCJGdzs")
+            editBox:SetFocus()
+            editBox:HighlightText()
+        end
+    end,
+    EditBoxOnEnterPressed = function(self)
+        self:GetParent():Hide()
+    end,
+    EditBoxOnEscapePressed = function(self)
+        self:GetParent():Hide()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
 
 StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_DELETE"] = {
     text = "%s",
@@ -6284,6 +7432,36 @@ StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_DELETE_ALL_FROM_PLAYER"] = {
     OnAccept = function(self, data)
         if data and data.viewer and data.playerName then
             data.viewer:DeleteAllFromPlayer(data.playerName)
+        end
+    end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+    showAlert = true,
+}
+
+StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_BLOCK_AND_PURGE_PLAYER"] = {
+    text = "%s",
+    button1 = "Yes, Block and Purge",
+    button2 = "No, Cancel",
+    OnAccept = function(self, data)
+        if data and data.viewer and data.fpName then
+            local targetName = data.fpName
+            L.db.profile.sharing = L.db.profile.sharing or {}
+            L.db.profile.sharing.blockList = L.db.profile.sharing.blockList or {}
+            L.db.profile.sharing.blockList[targetName] = true
+            
+            local Core = L:GetModule("Core", true)
+            if Core and Core.PurgeDiscoveriesFromBlockedPlayers then
+                Core:PurgeDiscoveriesFromBlockedPlayers()
+            end
+            
+            print(string.format("|cff00ff00LootCollector:|r Player '%s' has been blocked and all their discoveries purged.", targetName))
+            
+            data.viewer:UpdateAllDiscoveriesCache(function()
+                data.viewer:GetFilteredDiscoveries()
+                data.viewer:UpdateRows()
+            end)
         end
     end,
     timeout = 0,

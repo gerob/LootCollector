@@ -12,7 +12,11 @@ LootCollector.addonPrefix = "BBLC25AM"
 LootCollector.chatChannel = "BBLC25C"
 LootCollector.DEBUG_MODE = false
 
-LootCollector._profilerEnabled = true
+-- PERF: profiler now defaults OFF. It wraps nearly every function in the
+-- comm/core hot path (two debugprofilestop() calls plus stats bookkeeping
+-- per invocation, 10-14 profiled calls per incoming channel message), which
+-- is a constant tax at 5-11k msgs/minute. Toggle at runtime: /lcprofiler on
+LootCollector._profilerEnabled = false
 LootCollector._profilerStats = {}
 LootCollector._normalizedNameCache = {}
 
@@ -239,6 +243,8 @@ local dbDefaults = {
         inlineVendorView = false,
         splitRatio = 0.64,
         asyncLoading = true,
+        undiscoveredFilter = "TOP",
+        worldforgedPhase = 0,
         
         width = 1150,
         height = 674,
@@ -637,6 +643,7 @@ function LootCollector:GetFilters()
     combined.showMysticScrolls = f.showMysticScrolls ~= false
     combined.showWorldforged = f.showWorldforged ~= false
     combined.showVendors = f.showVendors ~= false
+    combined.useDeepFilter = f.useDeepFilter or false
     combined.autoTrackNearest = f.autoTrackNearest or false
 
     
@@ -729,6 +736,11 @@ function LootCollector:DiscoveryPassesFilters(d)
     local f = self:GetFilters()
     if not d or f.hideAll then return false end
 
+    local dt = d and (d.dt or (Constants and Constants.DISCOVERY_TYPE.UNKNOWN) or 0)
+    if (Constants and dt == Constants.DISCOVERY_TYPE.BLACKMARKET) or (d and d.vendorType) then
+        return f.showVendors ~= false
+    end
+
     local s = self:GetDiscoveryStatus(d)
     if (s == STATUS_UNCONFIRMED and f.hideUnconfirmed) or
        (s == STATUS_FADING and f.hideFaded) or
@@ -754,7 +766,6 @@ function LootCollector:DiscoveryPassesFilters(d)
 
     if not Constants then return true end
 
-    local dt = d.dt or Constants.DISCOVERY_TYPE.UNKNOWN
     if dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL and not f.showMysticScrolls then return false end
     if dt == Constants.DISCOVERY_TYPE.WORLDFORGED  and not f.showWorldforged  then return false end
 
@@ -1398,7 +1409,11 @@ function LootCollector:OnInitialize()
 
     self.channelReady = false
     self.name         = "LootCollector"
-    self.Version      = "beta-0.8.8r"
+    self.Version      = "beta-1.0r"
+    -- Build stamp: NOT part of the comm-version string (which other
+    -- clients' version filters compare); purely for humans to verify which
+    -- fix pass is actually installed (minimap tooltip + /lcvendor).
+    self.BuildStamp   = "1.0r"
 
     local Constants = self:GetModule("Constants", true)
     if Constants and Constants.GetDefaultChannel then
@@ -1471,7 +1486,43 @@ function LootCollector:OnInitialize()
         end
     end
 
+    self:InitializeStarterDBLookup()
 end
+
+function LootCollector:InitializeStarterDBLookup()
+    if self.StarterDBItemZones then return end
+    self.StarterDBItemZones = {}
+    
+    local loaded = LoadAddOn("LootCollector_StarterDB")
+    if loaded and _G.LootCollector_OptionalDB_Data and type(_G.LootCollector_OptionalDB_Data) == "table" then
+        local dataStr = _G.LootCollector_OptionalDB_Data.data
+        if dataStr and dataStr ~= "" then
+            local body = dataStr:match("^!LC1!(.+)$")
+            if body then
+                local LibDeflate = LibStub:GetLibrary("LibDeflate", true)
+                local AceSerializer = LibStub:GetLibrary("AceSerializer-3.0", true)
+                if LibDeflate and AceSerializer then
+                    local bytes = LibDeflate:DecodeForPrint(body)
+                    if bytes then
+                        local unz = LibDeflate:DecompressDeflate(bytes)
+                        if unz then
+                            local ok, _, tbl = pcall(AceSerializer.Deserialize, AceSerializer, unz)
+                            if ok and type(tbl) == "table" and tbl.discoveries then
+                                for _, d in pairs(tbl.discoveries) do
+                                    if d.itemID and d.zoneID then
+                                        self.StarterDBItemZones[d.itemID] = self.StarterDBItemZones[d.itemID] or {}
+                                        self.StarterDBItemZones[d.itemID][d.zoneID] = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 
 LootCollector.isHibernating = false
 
@@ -1663,5 +1714,121 @@ SlashCmdList["LCCLEANUP"] = function()
         Core:RunManualDatabaseCleanup()
     else
         print("|cffff7f00LootCollector:|r Core module not available.")
+    end
+end
+
+-- Membership test against the curated WorldforgedList (accepts upgraded /
+-- variant IDs by normalizing through GetBaseItemID). Used by Detect to
+-- qualify untagged vanity Worldforged items, and by UI code that needs to
+-- know whether an item belongs to the dev-provided list.
+function LootCollector:IsWorldforgedListItem(id)
+    id = tonumber(id)
+    if not id or id == 0 then return false end
+    local set = self._wfListSet
+    if not set then
+        set = {}
+        if self.WorldforgedList then
+            for _, itemID in ipairs(self.WorldforgedList) do
+                set[itemID] = true
+            end
+        end
+        self._wfListSet = set
+    end
+    if set[id] then return true end
+    local baseID = self:GetBaseItemID(id)
+    return set[baseID] == true
+end
+
+function LootCollector:GetBaseItemID(id)
+    id = tonumber(id) or 0
+    if id == 0 then return 0 end
+    if not self.upgradeToBase then
+        self.upgradeToBase = {}
+        local db = self.WorldforgedUpgrades
+        if db then
+            for baseID, upgrades in pairs(db) do
+                for _, upgradeID in pairs(upgrades) do
+                    if upgradeID then
+                        self.upgradeToBase[upgradeID] = tonumber(baseID) or baseID
+                    end
+                end
+            end
+        end
+    end
+    return self.upgradeToBase[id] or id
+end
+
+-- Phase 0 is the first level-60 upgrade. The bundled table is sparse for
+-- items unavailable in an earlier phase, so nil means "not in this phase".
+function LootCollector:GetWorldforgedPhaseItemID(id, phase)
+    local baseID = self:GetBaseItemID(id)
+    phase = tonumber(phase) or 0
+    if phase <= 0 then return baseID end
+
+    local upgrades = self.WorldforgedUpgrades and self.WorldforgedUpgrades[baseID]
+    return (upgrades and upgrades[phase + 3]) or baseID
+end
+
+function LootCollector:IsWorldforgedUpgradeable(id)
+    local baseID = self:GetBaseItemID(id)
+    if not self.WorldforgedUpgrades or not self.WorldforgedUpgrades[baseID] then
+        return false
+    end
+
+    -- Memoized: this runs inside map/minimap pin refresh loops, and each
+    -- un-memoized call costs a GetItemInfo lookup (a server query when the
+    -- item is uncached). The answer is static per item.
+    local memo = self._wfUpgradeableMemo
+    if not memo then
+        memo = {}
+        self._wfUpgradeableMemo = memo
+    end
+    local cached = memo[baseID]
+    if cached ~= nil then return cached end
+
+    local name, _, _, _, _, _, _, _, equipSlot, _, _, classID = GetItemInfo(baseID)
+    local result = true
+    if classID == 1 or equipSlot == "INVTYPE_BAG" then
+        result = false
+    end
+    -- Only memoize once item data is actually available: uncached items
+    -- fail open (treated as upgradeable) but must stay re-checkable so
+    -- bags get excluded correctly once their data arrives.
+    if name then
+        memo[baseID] = result
+    end
+    return result
+end
+
+SLASH_LCPROFILER1 = "/lcprofiler"
+SlashCmdList["LCPROFILER"] = function(msg)
+    msg = string.lower(msg or "")
+    if msg == "on" then
+        LootCollector._profilerEnabled = true
+        print("|cffff7f00LootCollector:|r Profiler |cff00ff00enabled|r.")
+    elseif msg == "off" then
+        LootCollector._profilerEnabled = false
+        print("|cffff7f00LootCollector:|r Profiler |cffff5555disabled|r.")
+    elseif msg == "reset" then
+        if LootCollector._profilerStats then wipe(LootCollector._profilerStats) end
+        print("|cffff7f00LootCollector:|r Profiler stats reset.")
+    elseif msg == "report" then
+        local stats = LootCollector._profilerStats
+        if not stats or not next(stats) then
+            print("|cffff7f00LootCollector:|r No profiler data. Use /lcprofiler on first.")
+            return
+        end
+        local rows = {}
+        for name, s in pairs(stats) do
+            table.insert(rows, { name = name, total = s.total or 0, calls = s.calls or 0, max = s.max or 0 })
+        end
+        table.sort(rows, function(a, b) return a.total > b.total end)
+        print("|cffff7f00LootCollector:|r Top functions by total ms:")
+        for i = 1, math.min(15, #rows) do
+            local r = rows[i]
+            print(string.format("  %2d. %s - total %.1fms, calls %d, max %.2fms", i, r.name, r.total, r.calls, r.max))
+        end
+    else
+        print("|cffff7f00LootCollector:|r /lcprofiler on | off | report | reset")
     end
 end

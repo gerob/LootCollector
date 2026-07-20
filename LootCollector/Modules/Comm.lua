@@ -509,12 +509,27 @@ local function pruneCaches()
         end
     end
         
-    local mSeen = Comm.seen
+    -- FIXED: this read "Comm.seen" -- a field that is never assigned
+    -- anywhere -- so the mid+op dedupe table (Comm._seen) was NEVER pruned:
+    -- an unbounded memory leak that made long sessions get progressively
+    -- heavier under high channel traffic until /reload.
+    local mSeen = Comm._seen
     if mSeen then
         local mTtl = Comm.seenTTL or 900
         for k, ts in pairs(mSeen) do
             if (tnow - (tonumber(ts) or 0)) > mTtl then
                 mSeen[k] = nil
+            end
+        end
+    end
+
+    -- Prune stale per-sender injection-rate windows as well; entries for
+    -- players who logged off otherwise linger for the whole session.
+    local injRates = Comm._senderInjectionRates
+    if injRates then
+        for sender, data in pairs(injRates) do
+            if data and data.resetAt and (tnow - (tonumber(data.resetAt) or 0)) > 600 then
+                injRates[sender] = nil
             end
         end
     end
@@ -554,8 +569,25 @@ local function _shouldDropDedupe(mid, op)
     end
     
     Comm._seen[key] = tnow
-    
-    if pTime then L:ProfileStop("Comm:_shouldDropDedupe", pTime) end 
+
+    if pTime then L:ProfileStop("Comm:_shouldDropDedupe", pTime) end
+    return false
+end
+
+-- Read-only variant of _shouldDropDedupe: answers "have we recently seen
+-- this mid+op?" WITHOUT recording it. Used as a cheap early-out at the top
+-- of the routing pipeline during channel floods; the authoritative
+-- recording check further down RouteIncoming stays the single writer, so
+-- every other routing semantic (spam sentinel, blacklists, ignore lists)
+-- is unchanged for first-time messages.
+local function _isRecentDupe(mid, op)
+    if not mid or mid == "" then return false end
+    local Constants = L:GetModule("Constants", true)
+    local seenTTL = (Constants and Constants.SEEN_TTL_SECONDS) or (Comm.seenTTL or 900)
+    local prev = Comm._seen[mid .. "_" .. tostring(op or "DISC")]
+    if prev and (now() - prev) < seenTTL then
+        return true
+    end
     return false
 end
 
@@ -591,13 +623,32 @@ end
 
 function Comm:GetCurrentChannelTrafficRate()
     local timestamps = self._incomingTimestamps
-    if not timestamps then return 0 end
+    if not timestamps or #timestamps == 0 then return 0 end
     
     local tnow = now()
     local oneMinAgo = tnow - 60
-    while #timestamps > 0 and timestamps[1] < oneMinAgo do
-        table.remove(timestamps, 1)
+    
+    local firstValidIndex = nil
+    for i = 1, #timestamps do
+        if timestamps[i] >= oneMinAgo then
+            firstValidIndex = i
+            break
+        end
     end
+    
+    if not firstValidIndex then
+        wipe(timestamps)
+        return 0
+    elseif firstValidIndex > 1 then
+        local newSize = #timestamps - firstValidIndex + 1
+        for i = 1, newSize do
+            timestamps[i] = timestamps[firstValidIndex + i - 1]
+        end
+        for i = newSize + 1, #timestamps do
+            timestamps[i] = nil
+        end
+    end
+    
     return #timestamps
 end
 
@@ -1274,14 +1325,93 @@ function Comm:BroadcastReinforcement(discovery)
     end
     
     local w = self:buildWireV5CONF(discovery)
-    if not w then 
+    if not w then
         if pTime then L:ProfileStop("Comm:BroadcastReinforcement", pTime) end
-        return 
+        return
     end
-    
+
     self:EnqueueOutgoingSync(w)
-    
-    if pTime then L:ProfileStop("Comm:BroadcastReinforcement", pTime) end 
+
+    if pTime then L:ProfileStop("Comm:BroadcastReinforcement", pTime) end
+end
+
+-- === Vendor auto-share (throttled) =====================================
+-- Public channel traffic already peaks at 5-11k msgs/minute, so vendor
+-- discoveries are shared very conservatively:
+--   * at most VENDOR_SHARE_MAX_PER_DAY automatic vendor broadcasts per day
+--     (persistent across sessions via db.global.vendorAutoShare),
+--   * the same vendor record is never auto-shared more than once per
+--     VENDOR_RESHARE_COOLDOWN,
+--   * the inventory list is capped at VENDOR_SHARE_MAX_ITEMS item IDs,
+--   * the send fires after a small random delay to spread channel load.
+-- Old clients that don't know the "VEND" op validate the payload (it carries
+-- the generic required fields) and either ignore it or record a bare vendor
+-- pin -- no errors on their side.
+local VENDOR_SHARE_MAX_PER_DAY  = 1
+local VENDOR_RESHARE_COOLDOWN   = 7 * 86400
+local VENDOR_SHARE_MAX_ITEMS    = 25
+
+function Comm:QueueVendorAutoShare(record)
+    if not record then return end
+    local g = L and L.db and L.db.global
+    if not g then return end
+
+    local tnow = time()
+    local today = math.floor(tnow / 86400)
+    g.vendorAutoShare = g.vendorAutoShare or { day = today, count = 0 }
+    local vas = g.vendorAutoShare
+    if vas.day ~= today then
+        vas.day = today
+        vas.count = 0
+    end
+    if (vas.count or 0) >= VENDOR_SHARE_MAX_PER_DAY then return end
+    if record.lastAutoShared and (tnow - tonumber(record.lastAutoShared)) < VENDOR_RESHARE_COOLDOWN then
+        return
+    end
+
+    vas.count = (vas.count or 0) + 1
+    record.lastAutoShared = tnow
+
+    local delay = math.random(5, 30)
+    if L.ScheduleAfter then
+        L:ScheduleAfter(delay, function()
+            Comm:BroadcastVendorDiscovery(record)
+        end)
+    else
+        Comm:BroadcastVendorDiscovery(record)
+    end
+end
+
+function Comm:BroadcastVendorDiscovery(discovery)
+    if not discovery then return end
+    if L:IsPaused() then return end
+    local Core = L:GetModule("Core", true)
+    if Core and Core.isSB and Core:isSB() then return end
+    if not isSharingEnabled() or not canSendMessages() then return end
+    local p = L and L.db and L.db.profile
+    if not (p and p.sharing and p.sharing.enabled and p.sharing.publicChannelEnabled) then return end
+
+    -- Reuse the SHOW builder: it is the one wire shape that already carries
+    -- vendorType/vendorName/vendorItemIDs end-to-end.
+    local w = self:_buildWireV5_SHOW(discovery)
+    if not w then return end
+    w.op = "VEND"
+    -- Old-client validation requires "s" on non-SHOW ops; SHOW's builder
+    -- doesn't set it.
+    local Constants = L:GetModule("Constants", true)
+    w.s = discovery.s or (Constants and Constants.STATUS and Constants.STATUS.CONFIRMED) or 2
+    w.mid = discovery.mid
+    if (not w.mid or w.mid == "") and L.ComputeCanonicalDiscoveryMid then
+        w.mid = L:ComputeCanonicalDiscoveryMid(discovery)
+    end
+    if w.vendorItemIDs and #w.vendorItemIDs > VENDOR_SHARE_MAX_ITEMS then
+        local capped = {}
+        for i = 1, VENDOR_SHARE_MAX_ITEMS do capped[i] = w.vendorItemIDs[i] end
+        w.vendorItemIDs = capped
+    end
+
+    _enqueueChannelWire(w)
+    L._cdebug("Comm-Vendor", "Auto-shared vendor discovery: " .. tostring(discovery.vendorName))
 end
 
 function Comm:BroadcastShow(discovery, targetPlayer)
@@ -1818,7 +1948,7 @@ local function _lc_validateNormalized(tbl)
         end
 
         local x, y = tonumber(tbl.x), tonumber(tbl.y)
-        if not x or not y or x < 0 or x > 1 or y < 0 or y > 1 then
+        if not x or not y or x < 0 or x > 1 or y < 0 or y > 1 or (x == 0 and y == 0) then
             if pTime then L:ProfileStop("Comm:_lc_validateNormalized", pTime) end
             return nil, "invalid_coords"
         end
@@ -2051,14 +2181,31 @@ function Comm:_ProcessRawBuffer()
 end
 
 local function isVersionCompatible(av)
+    if not av or av == "" then return false end
+
+    -- Track the seen version dynamically
+    if L.db and L.db.profile and L.db.profile.sharing and L.db.profile.sharing.seenVersions then
+        L.db.profile.sharing.seenVersions[av] = true
+    end
+
+    -- Check if version is explicitly blocked by user
+    if L.db and L.db.profile and L.db.profile.sharing and L.db.profile.sharing.blockedVersions then
+        if L.db.profile.sharing.blockedVersions[av] then
+            return false
+        end
+    end
+
     if not Comm._minCompatibleVersion then
         local Constants = L:GetModule("Constants", true)
         Comm._minCompatibleVersion = Constants and Constants.GetMinCompatibleVersion and Constants:GetMinCompatibleVersion() or "0.0.0"
     end
     
-    if not av or av == "" then return false end
+    local minVer = Comm._minCompatibleVersion
+    if L.db and L.db.profile and L.db.profile.sharing and L.db.profile.sharing.minVersionGateOverride then
+        minVer = L.db.profile.sharing.minVersionGateOverride
+    end
     
-    return compareVersions(av, Comm._minCompatibleVersion) >= 0
+    return compareVersions(av, minVer) >= 0
 end
 
 local MAX_CHUNKS_PER_MSG = 25      
@@ -2077,7 +2224,12 @@ function Comm:_ProcessChatMsg(msg, sender, channelName)
         return 
     end
     
-    L._cdebug("Comm-Process", "Processing plausible chat message from: " .. tostring(sender))
+    -- PERF: build debug strings only when chat-debug is on (arguments are
+    -- evaluated eagerly in Lua, so unguarded calls allocate per message).
+    local cdebugOn = L.db and L.db.profile and L.db.profile.cdebugMode
+    if cdebugOn then
+        L._cdebug("Comm-Process", "Processing plausible chat message from: " .. tostring(sender))
+    end
 
     local mType, optOp, optMid, optEncoded = msg:match("^LC1:(M[1-3]):(%u+):([^:]+):(.+)$")
     if not mType then
@@ -2085,7 +2237,9 @@ function Comm:_ProcessChatMsg(msg, sender, channelName)
     end
 
     if optOp and optMid then
-        L._cdebug("Comm-Process", string.format("Regex matched header - Type: %s, OP: %s, MID: %s, Sender: %s", tostring(mType), optOp, optMid, tostring(sender)))
+        if cdebugOn then
+            L._cdebug("Comm-Process", string.format("Regex matched header - Type: %s, OP: %s, MID: %s, Sender: %s", tostring(mType), optOp, optMid, tostring(sender)))
+        end
 
         if mType then
             local spoolKey = sender .. ":" .. optMid
@@ -2454,14 +2608,18 @@ function Comm:isAU(sender)
     return isA
 end
 
-function Comm:RouteIncoming(tbl, via, sender)   
-    local pTime = L.ProfileStart and L:ProfileStart() 
+function Comm:RouteIncoming(tbl, via, sender)
+    local pTime = L.ProfileStart and L:ProfileStart()
 
-    
-    
-    local dbgItem = tbl.i or (tbl.payload and tbl.payload.i) or "nil"
-    local dbgZone = tbl.z or (tbl.payload and tbl.payload.z) or (tbl.payload and tbl.payload.oz) or "nil"
-    L._cdebug("Comm-Route", string.format("Routing parsed payload from %s via %s. OP: %s, Item: %s, Zone: %s", sender, via, tostring(tbl.op), tostring(dbgItem), tostring(dbgZone)))
+    -- PERF: only build the debug strings when chat-debug is actually on.
+    -- Lua evaluates arguments eagerly, so the old unconditional call
+    -- allocated format strings for every routed message even with the
+    -- debug flag off (hundreds of throwaway allocations/sec in bursts).
+    if L.db and L.db.profile and L.db.profile.cdebugMode then
+        local dbgItem = tbl.i or (tbl.payload and tbl.payload.i) or "nil"
+        local dbgZone = tbl.z or (tbl.payload and tbl.payload.z) or (tbl.payload and tbl.payload.oz) or "nil"
+        L._cdebug("Comm-Route", string.format("Routing parsed payload from %s via %s. OP: %s, Item: %s, Zone: %s", sender, via, tostring(tbl.op), tostring(dbgItem), tostring(dbgZone)))
+    end
 
     if isSelfSender(sender) and not L._INJECT_TEST_MODE then
         if pTime then L:ProfileStop("Comm:RouteIncoming", pTime) end
@@ -2497,7 +2655,22 @@ function Comm:RouteIncoming(tbl, via, sender)
             end
         end
     end
-        
+
+    -- PERF (flood path): duplicate DISC/CONF payloads -- the overwhelming
+    -- majority during channel bursts, since many clients relay the same
+    -- discovery -- are dropped HERE, before the GFIX/ADCM branches, item
+    -- name lookups, injection-rate bookkeeping and the ~20-field payload
+    -- normalization allocate anything. Read-only peek: first-time messages
+    -- are still recorded by the authoritative dedupe check further down,
+    -- and the spam sentinel above still counts repeats first.
+    do
+        local opEarly = tbl.op or "DISC"
+        if (opEarly == "DISC" or opEarly == "CONF") and _isRecentDupe(tbl.mid, opEarly) then
+            if pTime then L:ProfileStop("Comm:RouteIncoming", pTime) end
+            return
+        end
+    end
+
     if (tbl.op == "GFIX" or tbl.op == "ADCM") and not isAU then
         L._cdebug("Comm-Route", "Blocked " .. tbl.op .. " data from: " .. sender)
         if pTime then L:ProfileStop("Comm:RouteIncoming", pTime) end
@@ -2619,11 +2792,36 @@ function Comm:RouteIncoming(tbl, via, sender)
         if pTime then L:ProfileStop("Comm:RouteIncoming", pTime) end
         return
     elseif tbl.op == "GFIX" then
-        if Core.HandleGuidedFix then            
-            local delay = math.random(2, 10) 
+        if Core.HandleGuidedFix then
+            local delay = math.random(2, 10)
             L:ScheduleAfter(delay, function()
                 Core:HandleGuidedFix(tbl.payload)
             end)
+        end
+        if pTime then L:ProfileStop("Comm:RouteIncoming", pTime) end
+        return
+    elseif tbl.op == "VEND" then
+        -- Throttled vendor auto-share from another player: apply silently
+        -- (no consent popup -- unlike SHOW, this is passive DB sync).
+        if _shouldDropDedupe(tbl.mid, "VEND") then
+            if pTime then L:ProfileStop("Comm:RouteIncoming", pTime) end
+            return
+        end
+        local vendData = {
+            c = tbl.c, z = tbl.z, iz = tbl.iz, i = tbl.i,
+            il = tbl.il, q = tbl.q, t0 = tbl.t,
+            fp = tbl.fp,
+            xy = { x = tbl.x, y = tbl.y },
+            sender = sender,
+            op = "VEND",
+            dt = tbl.dt,
+            src = tbl.src,
+            vendorType = tbl.vendorType,
+            vendorName = tbl.vendorName,
+            vendorItemIDs = tbl.vendorItemIDs,
+        }
+        if Core.AddDiscovery then
+            Core:AddDiscovery(vendData, { isNetwork = true, op = "VEND" })
         end
         if pTime then L:ProfileStop("Comm:RouteIncoming", pTime) end
         return
@@ -2744,6 +2942,22 @@ function Comm:OnInitialize()
         self._chatFrame:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
         self._chatFrame:SetScript("OnEvent", function(_, event, ...)
             if event == "CHAT_MSG_CHANNEL" then
+                -- Lightweight traffic meter (shown in the minimap button
+                -- tooltip): counts LC-channel messages per rolling minute.
+                -- Only the addon's own channel is counted -- General/Trade
+                -- chatter is irrelevant here.
+                local chanName = select(9, ...)
+                if chanName and Comm.channelName and string.lower(chanName) == string.lower(Comm.channelName) then
+                    Comm._trafficCount = (Comm._trafficCount or 0) + 1
+                    local tnowT = time()
+                    if not Comm._trafficWindowStart then
+                        Comm._trafficWindowStart = tnowT
+                    elseif (tnowT - Comm._trafficWindowStart) >= 60 then
+                        Comm._trafficLastRate = Comm._trafficCount
+                        Comm._trafficCount = 0
+                        Comm._trafficWindowStart = tnowT
+                    end
+                end
                 _onChatMsgChannel(_, event, ...)
             elseif event == "CHAT_MSG_CHANNEL_NOTICE" then
                 Comm:IsChannelHealthy()

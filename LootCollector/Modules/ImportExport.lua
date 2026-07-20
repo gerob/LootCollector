@@ -429,15 +429,20 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
         elseif Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.continent, d.zoneID, d.foundBy_player) then
             applied.skippedCity = applied.skippedCity + 1
         else
+            local itemID = L:GetBaseItemID(d.itemID)
+            local itemLink = d.itemLink
+            if itemLink and type(itemLink) == "string" then
+                itemLink = itemLink:gsub("item:%d+", "item:" .. itemID)
+            end
             local iz = d.instanceID or 0
             local x = d.coords and d.coords.x or 0
             local y = d.coords and d.coords.y or 0
-            local newGuid = L:GenerateGUID(d.continent, d.zoneID, iz, d.itemID, x, y)
+            local newGuid = L:GenerateGUID(d.continent, d.zoneID, iz, itemID, x, y)
             
             local existing, existingGuid = db[newGuid], newGuid
             if not existing then
                 for g, ex in pairs(db) do
-                    if ex.i == d.itemID and ex.c == d.continent and ex.z == d.zoneID then
+                    if ex.i == itemID and ex.c == d.continent and ex.z == d.zoneID then
                         local dist = L:ComputeDistance(d.continent, d.zoneID, x, y, ex.c, ex.z, ex.xy.x, ex.xy.y)
                         local radius = GetClusterRadius(ex.dt)
                         if dist and dist <= radius then
@@ -490,9 +495,9 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
                     c = d.continent,
                     z = d.zoneID,
                     iz = iz,
-                    i = d.itemID,
+                    i = itemID,
                     xy = { x = L:Round4(x), y = L:Round4(y) },
-                    il = d.itemLink,
+                    il = itemLink,
                     q = d.itemQuality or 0,
                     t0 = d.timestamp,
                     ls = d.lastSeen,

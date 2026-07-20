@@ -127,7 +127,7 @@ function Core:RunUnifiedDatabasePass(blacklistName)
                 L.DataHasChanged = true
             end
 
-            if Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(v.c, v.z, v.fp) then
+            if (not v.vendorType) and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(v.c, v.z, v.fp) then
                 vendors[g] = nil
                 L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", g, nil)
             elseif isCoA and v.vendorType == "MS" then
@@ -1879,6 +1879,130 @@ function Core:FixInvalidContinentIDs()
     L.db.global.invalidContinentFix_v1 = true
 end
 
+function Core:FixMismappedZones()
+    local discoveries = L:GetDiscoveriesDB()
+    if not (discoveries and next(discoveries)) then
+        return
+    end
+
+    local function getPreferredZone(z1, z2)
+        z1 = tonumber(z1)
+        z2 = tonumber(z2)
+        if not z1 or not z2 then return nil, nil end
+        if (z1 == 38 and z2 == 41) or (z1 == 41 and z2 == 38) then
+            return 38, 41
+        end
+        local isCorrectTeld1 = (z1 == 42 or z1 == 1233 or z1 == 1230)
+        local isIncorrectTeld1 = (z2 == 242 or z2 == 122)
+        if isCorrectTeld1 and isIncorrectTeld1 then
+            return z1, z2
+        end
+        local isCorrectTeld2 = (z2 == 42 or z2 == 1233 or z2 == 1230)
+        local isIncorrectTeld2 = (z1 == 242 or z1 == 122)
+        if isCorrectTeld2 and isIncorrectTeld2 then
+            return z2, z1
+        end
+        return nil, nil
+    end
+
+    local function getBaseItemID(id)
+        return L:GetBaseItemID(id)
+    end
+
+    -- Step 1: Scan and remap upgraded item IDs to base item IDs
+    local guidsToRemap = {}
+    for guid, d in pairs(discoveries) do
+        if d and d.i then
+            local baseID = getBaseItemID(tonumber(d.i))
+            if baseID ~= tonumber(d.i) then
+                table.insert(guidsToRemap, { guid = guid, baseID = baseID })
+            end
+        end
+    end
+
+    local remappedCount = 0
+    for _, remap in ipairs(guidsToRemap) do
+        local d = discoveries[remap.guid]
+        if d then
+            discoveries[remap.guid] = nil
+            d.i = remap.baseID
+            
+            if d.il and type(d.il) == "string" then
+                d.il = d.il:gsub("item:%d+", "item:" .. remap.baseID)
+            end
+
+            local newGuid = L:GenerateGUID(d.c, d.z, d.iz or 0, d.i, d.xy and d.xy.x or 0, d.xy and d.xy.y or 0)
+            d.g = newGuid
+            
+            if discoveries[newGuid] then
+                discoveries[newGuid] = mergeRecords(discoveries[newGuid], d)
+            else
+                discoveries[newGuid] = d
+            end
+            remappedCount = remappedCount + 1
+        end
+    end
+
+    -- Step 2: Group discoveries by base itemID
+    local itemGroups = {}
+    for guid, d in pairs(discoveries) do
+        if d and d.i and d.z and d.xy then
+            local itemID = tonumber(d.i)
+            itemGroups[itemID] = itemGroups[itemID] or {}
+            table.insert(itemGroups[itemID], guid)
+        end
+    end
+
+    local fixedCount = 0
+    local guidsToRemove = {}
+
+    for itemID, guids in pairs(itemGroups) do
+        if #guids > 1 then
+            for i = 1, #guids do
+                for j = i + 1, #guids do
+                    local g1 = guids[i]
+                    local g2 = guids[j]
+                    local d1 = discoveries[g1]
+                    local d2 = discoveries[g2]
+                    
+                    if d1 and d2 and not guidsToRemove[g1] and not guidsToRemove[g2] then
+                        local x1, y1 = d1.xy.x or 0, d1.xy.y or 0
+                        local x2, y2 = d2.xy.x or 0, d2.xy.y or 0
+                        
+                        if math.abs(x1 - x2) < 0.03 and math.abs(y1 - y2) < 0.03 then
+                            local correctZ, incorrectZ = getPreferredZone(d1.z, d2.z)
+                            if correctZ and incorrectZ then
+                                local correctGuid = (d1.z == correctZ) and g1 or g2
+                                local incorrectGuid = (d1.z == incorrectZ) and g1 or g2
+                                
+                                discoveries[correctGuid] = mergeRecords(discoveries[correctGuid], discoveries[incorrectGuid])
+                                guidsToRemove[incorrectGuid] = true
+                                fixedCount = fixedCount + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    for guid in pairs(guidsToRemove) do
+        local d = discoveries[guid]
+        if d and d.z then
+            self:RemoveFromZoneIndex(guid, d.z)
+        end
+        discoveries[guid] = nil
+    end
+
+    if remappedCount > 0 or fixedCount > 0 then
+        self:InvalidateLookupIndices()
+        if not (L.db and L.db.profile and L.db.profile.hideNonEssential) then
+            print(string.format("|cff00ff00LootCollector:|r Cleaned %d duplicate/mis-mapped zone entries and remapped %d upgraded IDs.", fixedCount, remappedCount))
+        end
+        L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
+    end
+end
+
 function Core:PerformOnLoginMaintenance()
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -1902,6 +2026,7 @@ function Core:PerformOnLoginMaintenance()
         
     self:FixCorruptedTimestamps()    
     self:FixInvalidContinentIDs()
+    self:FixMismappedZones()
     self:FixLegacyVendorQuality()
 
     local phase = L.db.global.autoCleanupPhase or 0
@@ -1928,10 +2053,92 @@ function Core:PerformOnLoginMaintenance()
                 print("|cff00ff00LootCollector:|r One-time cleanup: Invalid Senders tracking and Block List have been purged for version " .. currentVersion .. ".")
             end
         end
+        if L.db.global then
+            L.db.global.newWorldforgedItems = nil
+            L.db.global.newWorldforgedItemsInitialized = nil
+        end
         L.db.global.lastPurgedInvalidSendersVersion = currentVersion
     end
 
     self:RemapLootedHistoryV6()
+    
+    -- Clean up cache queue on login to remove any WorldforgedList (undiscovered) items
+    if L.db and L.db.global and L.db.global.cacheQueue then
+        local queue = L.db.global.cacheQueue
+        local wfList = L.WorldforgedList
+        if wfList and #queue > 0 then
+            local wfSet = {}
+            for _, id in ipairs(wfList) do
+                if id then wfSet[id] = true end
+            end
+            local newQueue = {}
+            local seen = {}
+            for _, id in ipairs(queue) do
+                if id and id > 0 and not wfSet[id] and not seen[id] then
+                    table.insert(newQueue, id)
+                    seen[id] = true
+                end
+            end
+            L.db.global.cacheQueue = newQueue
+            if self._queueSet then
+                wipe(self._queueSet)
+                for _, id in ipairs(newQueue) do
+                    self._queueSet[id] = true
+                end
+            end
+        end
+    end
+
+    -- Initialize newWorldforgedItems lookup table if not already initialized
+    if L.db and L.db.global then
+        L.db.global.newWorldforgedItems = L.db.global.newWorldforgedItems or {}
+        if not L.db.global.newWorldforgedItemsInitialized then
+            local discoveries = L:GetDiscoveriesDB() or {}
+            local existing = {}
+            for _, d in pairs(discoveries) do
+                if d and d.i then existing[d.i] = true end
+            end
+            local wfList = L.WorldforgedList
+            if wfList then
+                for _, id in ipairs(wfList) do
+                    if id and not existing[id] then
+                        L.db.global.newWorldforgedItems[id] = true
+                    end
+                end
+            end
+            L.db.global.newWorldforgedItemsInitialized = true
+        end
+
+        -- Stale-flag sweep (every login): the [NEW] tag means "nobody has
+        -- found this item yet". Prune the flag for any item that has a
+        -- discovery record in ANY realm bucket -- the table is global while
+        -- discoveries are realm-bucketed, and flags previously never got
+        -- cleared, so items stayed tagged [NEW] forever.
+        local flags = L.db.global.newWorldforgedItems
+        if flags and next(flags) and L.db.global.realms then
+            local discoveredAnywhere = {}
+            for _, realmData in pairs(L.db.global.realms) do
+                local disc = realmData and realmData.discoveries
+                if type(disc) == "table" then
+                    for _, d in pairs(disc) do
+                        if d and d.i then
+                            discoveredAnywhere[L:GetBaseItemID(d.i)] = true
+                        end
+                    end
+                end
+            end
+            local cleared = 0
+            for id in pairs(flags) do
+                if discoveredAnywhere[L:GetBaseItemID(id)] then
+                    flags[id] = nil
+                    cleared = cleared + 1
+                end
+            end
+            if cleared > 0 and L._debug then
+                L._debug("Core", "Pruned " .. cleared .. " stale NEW flags")
+            end
+        end
+    end
     
     if pTime then L:ProfileStop("Core:PerformOnLoginMaintenance", pTime) end 
 end
@@ -2085,14 +2292,49 @@ function Core:QueueItemForCaching(itemID)
     if not Core._queueSet[itemID] then
         table.insert(L.db.global.cacheQueue, itemID)
         Core._queueSet[itemID] = true
-        
+
         local Viewer = L:GetModule("Viewer", true)
         if Viewer and Viewer.window and Viewer.window:IsShown() then
             Viewer:UpdatePagination()
         end
     end
-    
-    if pTime then L:ProfileStop("Core:QueueItemForCaching", pTime) end 
+
+    if pTime then L:ProfileStop("Core:QueueItemForCaching", pTime) end
+end
+
+-- Move (or insert) an item to the FRONT of the caching queue. Used for rows
+-- currently rendering as "Unknown Item" so on-screen data resolves before
+-- background bulk lookups (e.g. thousands of queued phase upgrades).
+function Core:QueueItemForCachingPriority(itemID)
+    itemID = tonumber(itemID)
+    if not itemID or itemID <= 0 then return end
+    if Core._cacheHopeless and Core._cacheHopeless[itemID] then return end
+    if not (L.db and L.db.profile and L.db.profile.autoCache) then return end
+
+    L.db.global.cacheQueue = L.db.global.cacheQueue or {}
+    local queue = L.db.global.cacheQueue
+    Core._queueSet = Core._queueSet or {}
+
+    -- Already at/near the front: it will be fetched momentarily.
+    for i = 1, math.min(6, #queue) do
+        if queue[i] == itemID then return end
+    end
+
+    -- Queued deeper: remove the deep copy so it isn't fetched twice.
+    if Core._queueSet[itemID] then
+        for i = #queue, 1, -1 do
+            if queue[i] == itemID then
+                table.remove(queue, i)
+                break
+            end
+        end
+    end
+
+    table.insert(queue, 1, itemID)
+    Core._queueSet[itemID] = true
+
+    -- The pump self-cancels whenever the queue empties; make sure it runs.
+    self:EnsureCachePump()
 end
 
 function Core:_ScanShouldPause()
@@ -2273,14 +2515,32 @@ local pTime = L.ProfileStart and L:ProfileStart()
 
     local itemID = table.remove(queue, 1)
     if itemID then
-        if self:ShouldCacheItem(itemID) then
+        Core._cacheHopeless = Core._cacheHopeless or {}
+        Core._cacheAttempts = Core._cacheAttempts or {}
+        if Core._cacheHopeless[itemID] then
+            -- Known-unresolvable this session (unreleased item/upgrade):
+            -- skip instantly, fall through to scheduling the next tick.
+            if Core._queueSet then Core._queueSet[itemID] = nil end
+        elseif self:ShouldCacheItem(itemID) then
             SafeCacheItemRequest(itemID)
-            
+
             if self:ShouldCacheItem(itemID) then
-                cacheTicker = ScheduleAfter(2, function()
+                cacheTicker = ScheduleAfter(1.2, function()
                     Core:UpdateItemRecordFromCache(itemID)
                     if Core:ShouldCacheItem(itemID) and L and L.db and L.db.global then
-                        table.insert(L.db.global.cacheQueue, itemID)
+                        -- FIXED: IDs with no server data (unreleased items
+                        -- and their phase upgrades) used to be re-queued
+                        -- FOREVER, freezing visible progress at 0% while
+                        -- the pump burned a verify delay per hopeless ID.
+                        -- Two strikes and they're parked for the session.
+                        local n = (Core._cacheAttempts[itemID] or 0) + 1
+                        Core._cacheAttempts[itemID] = n
+                        if n >= 2 then
+                            Core._cacheHopeless[itemID] = true
+                            if Core._queueSet then Core._queueSet[itemID] = nil end
+                        else
+                            table.insert(L.db.global.cacheQueue, itemID)
+                        end
                     end
                     Core:ProcessCacheQueue()
                 end)
@@ -2294,7 +2554,10 @@ local pTime = L.ProfileStart and L:ProfileStart()
         local delay
         
         if (C_AssetQueryService and C_AssetQueryService.TryCacheItem) or _G.TryCacheItem then
-            delay = math.random(50, 70) / 100 
+            -- Ascension's native async cache API tolerates a faster pace;
+            -- doubled from 0.5-0.7s per lookup (the pace is an addon-side
+            -- safety throttle, not a hard server limit).
+            delay = math.random(25, 35) / 100
         else
             delay = math.random(CACHE_MIN_DELAY, CACHE_MAX_DELAY) 
         end
@@ -2551,15 +2814,25 @@ function Core:HandleLocalLoot(discovery)
     end
 
     local Constants = L:GetModule("Constants", true)
-    
-    
+
+    -- Vendor discoveries arrive WITHOUT an item link/ID: their synthetic
+    -- pseudo-item is created inside the vendor branch further down. The
+    -- two early gates below therefore silently killed EVERY live vendor
+    -- detection (the actual reason special vendors "stopped working" --
+    -- all previously listed vendors came from imports, never detection).
+    local isVendorPayload = (discovery.vendorType ~= nil)
+        or (Constants and Constants.DISCOVERY_TYPE and discovery.dt == Constants.DISCOVERY_TYPE.BLACKMARKET)
+
     local infoTarget = discovery.il or discovery.i
-    if not infoTarget then 
+    if not infoTarget and not isVendorPayload then
         if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
-        return 
+        return
     end
 
-    local name, link, quality, _, _, itemType, itemSubType = GetItemInfo(infoTarget)
+    local name, link, quality, itemType, itemSubType, _
+    if infoTarget then
+        name, link, quality, _, _, itemType, itemSubType = GetItemInfo(infoTarget)
+    end
     local itemID = discovery.i
     if not itemID then
         if link then
@@ -2568,13 +2841,15 @@ function Core:HandleLocalLoot(discovery)
             itemID = L:ExtractItemID(discovery.il)
         end
     end
-    
+
     itemID = tonumber(itemID) or 0
-    if itemID == 0 then 
+    if itemID == 0 and not isVendorPayload then
         if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
-        return 
+        return
     end
-    discovery.i = itemID
+    if itemID ~= 0 then
+        discovery.i = itemID
+    end
     
     local dt = discovery.dt
     if not dt then 
@@ -2592,24 +2867,40 @@ function Core:HandleLocalLoot(discovery)
     end
     discovery.dt = dt
 
-    
-    if Constants and Constants.IsForbiddenZone then
+    -- Special vendors (Blackmarket Artisan / Exquisite Collectables / Ring
+    -- Vendor / MS vendors) legitimately stand INSIDE capital cities, which
+    -- are forbidden zones for regular loot discoveries. Bypass the zone
+    -- gates for vendor-type discoveries or city vendors can never be
+    -- recorded (this is why the Ring Vendor in the Mage Quarter was
+    -- silently ignored).
+    local isSpecialVendorDiscovery = (dt == (Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET))
+        or (discovery.vendorType ~= nil)
+
+    if not isSpecialVendorDiscovery and Constants and Constants.IsForbiddenZone then
         if Constants:IsForbiddenZone(discovery.c, discovery.z, discovery.fp) then
             L._debug("Core-Block", "Blocked local discovery from a forbidden zone: " .. tostring(discovery.il))
             if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
             return
         end
     end
+
+    if not isSpecialVendorDiscovery and L.StarterDBItemZones and L.StarterDBItemZones[itemID] then
+        if not L.StarterDBItemZones[itemID][discovery.z] then
+            L._debug("Core-Block", "Blocked local discovery because itemID=" .. tostring(itemID) .. " has a different verified zone in Starter DB.")
+            if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
+            return
+        end
+    end
     
     
-    if Core:IsInsideAOETombstone(discovery.c, discovery.z, discovery.iz, discovery.dt, discovery.xy and discovery.xy.x or 0, discovery.xy and discovery.xy.y or 0) then
+    if not isSpecialVendorDiscovery and Core:IsInsideAOETombstone(discovery.c, discovery.z, discovery.iz, discovery.dt, discovery.xy and discovery.xy.x or 0, discovery.xy and discovery.xy.y or 0) then
 	    L._debug("Core-Block", "Blocked local discovery from tombstone area: " .. tostring(discovery.il))
         if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
         return
     end
     
     
-    if Core:IsInsideVendorDeadzone(discovery.c, discovery.z, discovery.iz, discovery.dt, discovery.xy and discovery.xy.x or 0, discovery.xy and discovery.xy.y or 0) then
+    if not isSpecialVendorDiscovery and Core:IsInsideVendorDeadzone(discovery.c, discovery.z, discovery.iz, discovery.dt, discovery.xy and discovery.xy.x or 0, discovery.xy and discovery.xy.y or 0) then
         L._debug("Core-Block", "Blocked local discovery near Mystic Scroll vendor: " .. tostring(discovery.il))
         if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
         return
@@ -2714,11 +3005,34 @@ function Core:HandleLocalLoot(discovery)
                 end
             end
         end
-        
+
         L.DataHasChanged = true
 
+        -- RE-ENABLED: local vendor detection used to end here silently --
+        -- no UI signal, no toast, and (critically) no broadcast, which is
+        -- why freshly-found vendors "didn't seem to work". Give the same
+        -- feedback a network-received vendor gets, and queue a throttled
+        -- auto-share (daily cap lives in Comm:QueueVendorAutoShare).
+        if not existing and recordToBroadcast then
+            L:SendMessage("LootCollector_DiscoveriesUpdated", "add", guid, recordToBroadcast)
+            local Toast = L:GetModule("Toast", true)
+            if Toast and Toast.Show then
+                pcall(Toast.Show, Toast, recordToBroadcast, false, { op = "VEND", isNew = true })
+            end
+            local Map = L:GetModule("Map", true)
+            if Map then
+                Map.cacheIsDirty = true
+            end
+        end
+        if recordToBroadcast then
+            local Comm = L:GetModule("Comm", true)
+            if Comm and Comm.QueueVendorAutoShare then
+                Comm:QueueVendorAutoShare(recordToBroadcast)
+            end
+        end
+
         if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
-        return 
+        return
     end
 
     local src_numeric = discovery.src
@@ -2750,6 +3064,12 @@ function Core:HandleLocalLoot(discovery)
     local y = L:Round4(discovery.xy and tonumber(discovery.xy.y) or 0)
     local t0 = tonumber(discovery.t0) or time()
     
+    if x == 0 and y == 0 then
+        L._debug("Core-Block", "Blocked local discovery due to null coordinates (0,0): " .. tostring(colored))
+        if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
+        return
+    end
+
     local db = L:GetDiscoveriesDB()
     if not db then 
         if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
@@ -3624,7 +3944,75 @@ function Core:AddDiscovery(d, options)
         if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
         return nil 
     end
+    local function getBaseItemID(id)
+        return L:GetBaseItemID(id)
+    end
+
+    itemID = getBaseItemID(itemID)
     d.i = itemID
+    if d.il and type(d.il) == "string" then
+        d.il = d.il:gsub("item:%d+", "item:" .. itemID)
+    end
+
+    -- NEW-flag lifecycle: an item stops being "new" the moment ANY discovery
+    -- of it lands in the database. The flag used to be write-once, so items
+    -- kept their [NEW] tag forever even after locations were found/synced.
+    if itemID > 0 and L.db and L.db.global and L.db.global.newWorldforgedItems
+        and L.db.global.newWorldforgedItems[itemID] then
+        L.db.global.newWorldforgedItems[itemID] = nil
+    end
+
+    local function getPreferredZone(z1, z2)
+        z1 = tonumber(z1)
+        z2 = tonumber(z2)
+        if not z1 or not z2 then return nil, nil end
+        if (z1 == 38 and z2 == 41) or (z1 == 41 and z2 == 38) then
+            return 38, 41
+        end
+        local isCorrectTeld1 = (z1 == 42 or z1 == 1233 or z1 == 1230)
+        local isIncorrectTeld1 = (z2 == 242 or z2 == 122)
+        if isCorrectTeld1 and isIncorrectTeld1 then
+            return z1, z2
+        end
+        local isCorrectTeld2 = (z2 == 42 or z2 == 1233 or z2 == 1230)
+        local isIncorrectTeld2 = (z1 == 242 or z1 == 122)
+        if isCorrectTeld2 and isIncorrectTeld2 then
+            return z2, z1
+        end
+        return nil, nil
+    end
+
+    local x = d.xy and d.xy.x or d.x or 0
+    local y = d.xy and d.xy.y or d.y or 0
+    -- PERF: this zone-correction scan used to iterate the ENTIRE discoveries
+    -- table (up to 10,000 rows) for EVERY accepted discovery, even though the
+    -- correction can only ever trigger when the incoming zone is one of the
+    -- known-misreported IDs (41 Ashenvale-pair, 242/122 Teldrassil-pair --
+    -- see getPreferredZone: the assignment requires incorrectZ == z). Gate
+    -- the O(n) scan on that, so the common case is a couple of comparisons.
+    local zNum = tonumber(z)
+    if zNum == 41 or zNum == 242 or zNum == 122 then
+        local discoveries = L:GetDiscoveriesDB()
+        if discoveries then
+            for guid, existing in pairs(discoveries) do
+                if existing and existing.i == itemID and existing.z and existing.xy then
+                    local ex = existing.xy.x or existing.x or 0
+                    local ey = existing.xy.y or existing.y or 0
+                    if math.abs(x - ex) < 0.03 and math.abs(y - ey) < 0.03 then
+                        local correctZ, incorrectZ = getPreferredZone(existing.z, z)
+                        if correctZ and incorrectZ == z then
+                            c = existing.c
+                            z = correctZ
+                            d.c = existing.c
+                            d.z = correctZ
+                            d.iz = existing.iz
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     local dt = d.dt
     if not dt and itemID > 0 and Constants and Constants.DISCOVERY_TYPE then
@@ -3661,6 +4049,25 @@ function Core:AddDiscovery(d, options)
         L._debug("Core-Block", "Blocked incoming discovery from a forbidden zone: " .. tostring(d.il))
         if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
         return nil
+    end
+    
+    local isBlackmarket = Constants and Constants.DISCOVERY_TYPE and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET
+    if not isBlackmarket then
+        if Constants and Constants.IsLocationValidForItem then
+            if not Constants:IsLocationValidForItem(z, 0, isBlackmarket) then
+                L._debug("Core-Block", "Blocked incoming discovery from invalid zone (city/sanctuary): itemID=" .. tostring(itemID) .. ", zone=" .. tostring(z))
+                if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
+                return nil
+            end
+        end
+    end
+    
+    if L.StarterDBItemZones and L.StarterDBItemZones[itemID] then
+        if not L.StarterDBItemZones[itemID][z] then
+            L._debug("Core-Block", "Blocked incoming discovery because itemID=" .. tostring(itemID) .. " has a different verified zone in Starter DB (incoming zone=" .. tostring(z) .. ").")
+            if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
+            return nil
+        end
     end
     
     if self:IsInsideAOETombstone(c, z, tonumber(d.iz) or 0, d.dt, d.xy and d.xy.x or 0, d.xy and d.xy.y or 0) then

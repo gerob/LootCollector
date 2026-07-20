@@ -680,6 +680,24 @@ local function passesFiltersLocal(d, searchTerm)
     if not L:DiscoveryPassesFilters(d) then
         return false
     end
+    -- Optional "Filter by Deep Filter" integration: gate item discoveries by the
+    -- Viewer's Deep Filter expressions (tooltip keyword logic). Vendors have no
+    -- item tooltip so they are left unaffected.
+    local mf = L.db and L.db.char and L.db.char.mapFilters
+    if mf and mf.useDeepFilter then
+        local Viewer = L:GetModule("Viewer", true)
+        if Viewer and Viewer.HasDeepFilters and Viewer:HasDeepFilters() then
+            local Constants = L:GetModule("Constants", true)
+            local isVendor = Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET
+            if not isVendor then
+                local Scanner = L:GetModule("Scanner", true)
+                local itemData = Scanner and Scanner:GetItemData(d.i, d.il)
+                if not Viewer:MatchesDeepFilter(itemData and itemData.fullText or "") then
+                    return false
+                end
+            end
+        end
+    end
     if searchTerm and searchTerm ~= "" then
         if not SearchDiscoveryForTerm(d, searchTerm) then
             return false
@@ -1139,7 +1157,7 @@ function Map:RebuildFilteredCache()
                 
                 if isContinentOrWorld then
                     
-                elseif Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.c, d.z, d.fp) then
+                elseif (not d.vendorType) and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.c, d.z, d.fp) then
                     
                 else
                     local iz = tonumber(d.iz) or 0
@@ -1173,15 +1191,32 @@ end
 
 function Map:GetDiscoveryIcon(d)
   local Constants = L:GetModule("Constants", true)
-  if d and d.dt == (Constants and Constants.DISCOVERY_TYPE.BLACKMARKET) then
-      if d.vendorType == "MS" or (d.g and d.g:find("MS-", 1, true)) then
-          return "Interface\\Icons\\INV_Scroll_03" 
+  if d and (d.vendorType or (Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET)) then
+      local vType = d.vendorType
+      if not vType and d.g then
+          if d.g:find("MS-", 1, true) then vType = "MS"
+          elseif d.g:find("EX-", 1, true) then vType = "EX"
+          elseif d.g:find("RING-", 1, true) then vType = "RING"
+          elseif d.g:find("BM-", 1, true) then vType = "BM"
+          end
+      end
+      if vType == "MS" then
+          return "Interface\\Icons\\INV_Scroll_03"
+      elseif vType == "EX" then
+          return "Interface\\Icons\\INV_Ascend_Gems_2"
+      elseif vType == "RING" then
+          return "Interface\\Icons\\inv_misc_diamondring2"
       else
-          return "Interface\\Icons\\INV_Misc_Coin_01" 
+          return "Interface\\Icons\\INV_Misc_Coin_01"
       end
   end
   local texture = nil
-  if d and d.i then texture = select(10, GetItemInfo(d.i)) end
+  local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+  local itemID = d and d.i
+  if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+      itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+  end
+  if itemID then texture = select(10, GetItemInfo(itemID)) end
   if (not texture) and d and d.il then texture = select(10, GetItemInfo(d.il)) end
   return texture or PIN_FALLBACK_TEXTURE
 end
@@ -1249,15 +1284,35 @@ function Map:ShowBlackmarketTooltip(d, anchorFrame)
     tooltip:SetOwner(anchorFrame, "ANCHOR_RIGHT")
     tooltip:ClearLines()
     
-    local vendorTypeDisplay
-    if d.vendorType == "MS" or (d.g and d.g:find("MS-", 1, true)) then
+    local vType = d.vendorType
+    if not vType and d.g then
+        if d.g:find("MS-", 1, true) then vType = "MS"
+        elseif d.g:find("EX-", 1, true) then vType = "EX"
+        elseif d.g:find("RING-", 1, true) then vType = "RING"
+        elseif d.g:find("BM-", 1, true) then vType = "BM"
+        end
+    end
+
+    local vendorTypeDisplay, titleR, titleG, titleB
+    if vType == "MS" then
         vendorTypeDisplay = "|cffa335ee<Mystic Scroll Vendor>|r"
-        tooltip:AddLine(d.vendorName or "Unknown Vendor", 1, 0.82, 0)
+        titleR, titleG, titleB = 1, 0.82, 0
+    elseif vType == "EX" then
+        vendorTypeDisplay = "|cff00ffff<Exquisite Collectables>|r"
+        titleR, titleG, titleB = 0, 1, 1
+    elseif vType == "RING" then
+        vendorTypeDisplay = "|cffffd700<Ring Vendor>|r"
+        titleR, titleG, titleB = 1, 0.84, 0
     else
         vendorTypeDisplay = "|cff9400D3<Blackmarket Artisan Supplies>|r"
-        tooltip:AddLine(d.vendorName or "Unknown Vendor", 0.85, 0.44, 0.85)
+        titleR, titleG, titleB = 0.85, 0.44, 0.85
     end
-    
+
+    if d.vendorSubname and d.vendorSubname ~= "" then
+        vendorTypeDisplay = "|cffffff00<" .. d.vendorSubname .. ">|r"
+    end
+
+    tooltip:AddLine(d.vendorName or "Unknown Vendor", titleR, titleG, titleB)
     tooltip:AddLine(vendorTypeDisplay, 1, 1, 1)
 
     local status = L:GetDiscoveryStatus(d)
@@ -1320,20 +1375,26 @@ function Map:ShowDiscoveryTooltip(discoveryOrPin, anchorFrame)
 
     tooltip:SetOwner(anchorFrame or discoveryOrPin, "ANCHOR_RIGHT")
     
-    local itemName, itemLink = GetItemInfo(d.i or d.il)
+    local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+    local itemID = d.i
+    if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+        itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+    end
+    
+    local itemName, itemLink = GetItemInfo(itemID or d.il)
     local isCached = itemName and itemLink and true or false
 
     if isCached then
         tooltip:SetHyperlink(itemLink)
     else
         tooltip:ClearLines()
-        local header = d.il or ("Item ID: " .. tostring(d.i))
+        local header = d.il or ("Item ID: " .. tostring(itemID or d.i))
         tooltip:AddLine(header, 1, 1, 1, true)
         tooltip:AddLine("Retrieving item information...", 0.6, 0.6, 0.6)
         
         local Core = L:GetModule("Core", true)
-        if Core and Core.QueueItemForCaching then
-            Core:QueueItemForCaching(d.i)
+        if Core and Core.QueueItemForCaching and itemID then
+            Core:QueueItemForCaching(itemID)
         end
     end
 
@@ -1624,7 +1685,27 @@ local function BuildFilterEasyMenu()
           Map:Update() 
       end
   })
-  
+
+  do
+    local Viewer = L:GetModule("Viewer", true)
+    local dfCount = (Viewer and Viewer.deepSearchFilters) and #Viewer.deepSearchFilters or 0
+    local dfLabel = "Filter by Deep Filter"
+    if dfCount > 0 then dfLabel = dfLabel .. " (" .. dfCount .. ")" end
+    table.insert(menu, {
+        text = dfLabel,
+        desc = "Also hide map/minimap icons whose item tooltip doesn't match the Viewer's Deep Filter.",
+        checked = f.useDeepFilter,
+        keepShownOnClick = true,
+        isNotRadio = true,
+        func = function()
+            L.db.char.mapFilters.useDeepFilter = not L.db.char.mapFilters.useDeepFilter
+            Map.cacheIsDirty = true
+            Map:Update()
+            Map:UpdateMinimap()
+        end
+    })
+  end
+
   local arrowSub = { { text = "Arrow", isTitle = true, notCheckable = true } }
   table.insert(arrowSub, {
       text = "Auto-track Nearest Unlooted",
@@ -1878,7 +1959,6 @@ function Map:EnsureFilterUI()
         if self.lastVisible ~= isVisible then
             self.lastVisible = isVisible
             if isVisible then
-                WorldMapFrame:SetToplevel(true)
                 FilterButton:Show()
                 PlaceFilterButton(FilterButton)
                 if LootCollectorViewerWindow then
@@ -2144,7 +2224,12 @@ function Map:BuildPin()
     else
         L._mdebug("Map", "OnEnter - Pin (no modifier, showing simple tooltip)")
         
-        local itemLink = d.il or d.i
+        local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+        local itemID = d.i
+        if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+            itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+        end
+        local itemLink = itemID and ("item:" .. itemID) or d.il or d.i
         if itemLink then
             
             local tooltip = GameTooltip
@@ -2297,11 +2382,19 @@ local function EnsureMmPin(i)
   f.tex:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
   
   f:SetScript("OnEnter", function(self)
-    if self.discovery and self.discovery.il then
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:SetHyperlink(self.discovery.il)
-      GameTooltip:Show()
-      GameTooltip:SetFrameStrata("TOOLTIP") 
+    if self.discovery then
+      local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+      local itemID = self.discovery.i
+      if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+          itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+      end
+      local itemLink = itemID and ("item:" .. itemID) or self.discovery.il
+      if itemLink then
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetHyperlink(itemLink)
+        GameTooltip:Show()
+        GameTooltip:SetFrameStrata("TOOLTIP") 
+      end
     end
   end)
   f:SetScript("OnLeave", function(self)
@@ -2387,7 +2480,7 @@ function Map:UpdateMinimap()
                     end
                 else
                     local Constants = L:GetModule("Constants", true)
-                    local isForbidden = Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.c, d.z, d.fp)
+                    local isForbidden = (not d.vendorType) and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.c, d.z, d.fp)
                     if not isForbidden and passesFilters(d) and tonumber(d.c) == currentContinent and tonumber(d.z) == currentMapID then
                         shouldShow = true
                     end
@@ -2408,7 +2501,16 @@ function Map:UpdateMinimap()
             local icon = self:GetDiscoveryIcon(discovery)
             pin.tex:SetTexture(icon or PIN_FALLBACK_TEXTURE)
           
-            local r, g, b = GetQualityColor(discovery.q or select(3,GetItemInfo(discovery.il or discovery.i)))
+            local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+            local itemID = discovery.i
+            if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+                itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+            end
+            local quality = itemID and select(3, GetItemInfo(itemID))
+            if not quality then
+                quality = discovery.q or select(3, GetItemInfo(discovery.il or discovery.i))
+            end
+            local r, g, b = GetQualityColor(quality)
             local isLooted = L:IsLootedByChar(discovery.g)
             local isFallback = (icon == PIN_FALLBACK_TEXTURE)
 
@@ -2518,8 +2620,10 @@ function Map:EnsureMinimapTicker()
         -- 1. Fast position update for visible pins
         if runFast then
             Map._mmFastElapsed = 0
-            if playerMoved or Map._minimapPinsDirty then
-                local minimapRadius = Minimap:GetViewRadius()
+            local minimapRadius = Minimap:GetViewRadius()
+            local radiusChanged = minimapRadius ~= Map._lastMinimapRadius
+            if playerMoved or Map._minimapPinsDirty or radiusChanged then
+                Map._lastMinimapRadius = minimapRadius
                 local mapWidth = Minimap:GetWidth()
                 local mapHeight = Minimap:GetHeight()
                 local xScale = (minimapRadius * 2) / mapWidth
@@ -2892,8 +2996,13 @@ function Map:ShowSearchResults(results)
       end)
       
       btn:SetScript("OnEnter", function(self)
-          if d.il and d.il:find("|Hitem:") then
-              
+          local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+          local itemID = d.i
+          if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+              itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+          end
+          local itemLink = itemID and ("item:" .. itemID) or d.il
+          if itemLink then
               local tooltip = GameTooltip
               if f:GetParent() == WorldMapFrame then
                   tooltip:SetParent(WorldMapFrame)
@@ -2903,7 +3012,7 @@ function Map:ShowSearchResults(results)
               end
               
               tooltip:SetOwner(self, "ANCHOR_RIGHT")
-              tooltip:SetHyperlink(d.il)
+              tooltip:SetHyperlink(itemLink)
               tooltip:Show()
           end
       end)
@@ -3148,15 +3257,24 @@ function Map:RefreshPinIconsForItem(itemID)
                 pin.texture:SetVertexColor(0.5, 0.5, 0.5)
                 if pin.unlootedOutline then pin.unlootedOutline:Hide() end
             else
+                local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+                local itemID = d.i
+                if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+                    itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+                end
+                local quality = itemID and select(3, GetItemInfo(itemID))
+                if not quality then
+                    quality = d.q or select(3, GetItemInfo(d.il or d.i))
+                end
+                local r, g, b = GetQualityColor(quality)
+                
                 if isFallback then
                     if pin.unlootedOutline then pin.unlootedOutline:Hide() end
-                    local r, g, b = GetQualityColor(d.q or select(3,GetItemInfo(d.il or d.i)))
                     pin.texture:SetVertexColor(r, g, b)
                 else
                     pin.texture:SetVertexColor(1, 1, 1)
                     if pin.unlootedOutline then
                         pin.unlootedOutline:Show()
-                        local r, g, b = GetQualityColor(d.q or select(3, GetItemInfo(d.il or d.i)))
                         pin.unlootedOutline:SetVertexColor(r, g, b)
                     end
                 end
@@ -3259,7 +3377,7 @@ function Map:DrawWorldMapPins()
                 
                 if isContinentOrWorld then
                     
-                elseif Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.c, d.z, d.fp) then
+                elseif (not d.vendorType) and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.c, d.z, d.fp) then
                     
                 elseif tonumber(d.c) == tonumber(currentContinent) then
                     local isVisibleOnThisMap = true
@@ -3295,15 +3413,24 @@ function Map:DrawWorldMapPins()
                                     pin.texture:SetVertexColor(0.5, 0.5, 0.5)
                                     if pin.unlootedOutline then pin.unlootedOutline:Hide() end
                                 else
+                                    local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+                                    local itemID = d.i
+                                    if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+                                        itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+                                    end
+                                    local quality = itemID and select(3, GetItemInfo(itemID))
+                                    if not quality then
+                                        quality = d.q or select(3, GetItemInfo(d.il or d.i))
+                                    end
+                                    local r, g, b = GetQualityColor(quality)
+                                    
                                     if isFallback then
                                         if pin.unlootedOutline then pin.unlootedOutline:Hide() end
-                                        local r, g, b = GetQualityColor(d.q or select(3,GetItemInfo(d.il or d.i)))
                                         pin.texture:SetVertexColor(r, g, b)
                                     else
                                         pin.texture:SetVertexColor(1, 1, 1)
                                         if pin.unlootedOutline then
                                             pin.unlootedOutline:Show()
-                                            local r, g, b = GetQualityColor(d.q or select(3, GetItemInfo(d.il or d.i)))
                                             pin.unlootedOutline:SetVertexColor(r, g, b)
                                         end
                                     end

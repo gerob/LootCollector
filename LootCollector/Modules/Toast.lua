@@ -557,10 +557,23 @@ function Toast:acquireToast()
 	
     f.text:SetScript("OnEnter", function(self)
         if self.discoveryData and self.discoveryData.il and self.discoveryData.il:find("|Hitem:") then
+            -- Vendor pseudo-links carry negative item IDs which SetHyperlink
+            -- rejects ("Unknown link type"); show a plain vendor tooltip.
+            local hlID = tonumber(self.discoveryData.il:match("|Hitem:(%-?%d+)"))
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetHyperlink(self.discoveryData.il)
+            if hlID and hlID <= 0 then
+                GameTooltip:SetText(self.discoveryData.vendorName or "Special Vendor", 1, 0.82, 0)
+                local items = self.discoveryData.vendorItems
+                if items and #items > 0 then
+                    GameTooltip:AddLine(string.format("%d items for sale", #items), 0.8, 0.8, 0.8)
+                end
+            else
+                if not pcall(GameTooltip.SetHyperlink, GameTooltip, self.discoveryData.il) then
+                    GameTooltip:SetText(self.discoveryData.il:match("%[(.-)%]") or "Item", 1, 1, 1)
+                end
+            end
             GameTooltip:Show()
-            GameTooltip:SetFrameStrata("TOOLTIP") 
+            GameTooltip:SetFrameStrata("TOOLTIP")
         end
     end)
     f.text:SetScript("OnLeave", function() GameTooltip:Hide() end)

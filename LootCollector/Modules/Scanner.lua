@@ -145,14 +145,28 @@ function Scanner:GetItemData(itemID, itemLink)
         end
     end
 
-    if not linkToScan then 
+    if not linkToScan then
         if pTime then L:ProfileStop("Scanner:GetItemData", pTime) end
-        return nil 
+        return nil
+    end
+
+    -- Vendor pseudo-records use negative synthetic item IDs (e.g. -300123
+    -- "[Blackmarket Supplies]"); SetHyperlink rejects those with an
+    -- "Unknown link type" error. Never scan them, and never let a bad link
+    -- hard-error the scanner.
+    local scanID = tonumber(itemID) or tonumber(linkToScan:match("item:(%-?%d+)"))
+    if scanID and scanID <= 0 then
+        if pTime then L:ProfileStop("Scanner:GetItemData", pTime) end
+        return itemData
     end
 
     self.tooltip:SetOwner(UIParent, "ANCHOR_NONE")
     self.tooltip:ClearLines()
-    self.tooltip:SetHyperlink(linkToScan)
+    local hlOK = pcall(self.tooltip.SetHyperlink, self.tooltip, linkToScan)
+    if not hlOK then
+        if pTime then L:ProfileStop("Scanner:GetItemData", pTime) end
+        return itemData
+    end
 
     local numLines = self.tooltip:NumLines()
     if numLines > 0 then
