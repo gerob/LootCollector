@@ -3594,11 +3594,22 @@ function Viewer:CreateWindow()
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT", 0, -2)
         GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
+Version Beta-1.0.1r:
+- Merged Search + Deep Filter: Search box + Add commits chips matching name, zone, or tooltip (Deep Search checkbox removed).
+- Added Filter Map: apply Discoveries filters (including search chips) to map/minimap pins and Arrow.
+- Renamed Discoveries "Collected" filter to "Enchant"; hidden on CoA realms.
+- Autocomplete suggests from the currently filtered Discoveries list.
+- Hibernation (/lcpause) now fully stops sync, reinforce, and minimap work until resumed.
+- Fixed minimap filter-cache thrash and blank/flicker spins at login.
+- Faster map/Arrow filters; map Deep Filter no longer calls SetHyperlink per pin.
+- Added /lcdiag <itemID|link> to dump local discoveries for an item.
+- Disabled Show Zone Summary on the map menu for now.
+
 Version Beta-1.0r:
 - Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
 - Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.
 - Made Vendors discoverable and enabled 2 more types of vendors besides Blackmarket (1 broadcast per day)
-- Merged Search + Deep Filter: Search box + Add commits chips matching name, zone, or tooltip (Deep Search checkbox removed).
+- Deep Search Tooltip Filtering: Search items by stats, spells, or effects, and filter map pins with matching keywords.
 - Added the ability to filter out specific addon version and made 0.8.5 the minimum version by default. People are still using very old versions of the addon.
 - Multiple ways of self-cleaning duplicates and bad items received from older addons.
 - A lot of other bug fixes and performance tweaks, like the big hang when you Alt+Tab back into the game.

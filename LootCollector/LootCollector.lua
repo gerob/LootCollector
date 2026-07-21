@@ -1469,7 +1469,7 @@ function LootCollector:OnInitialize()
 
     self.channelReady = false
     self.name         = "LootCollector"
-    self.Version      = "beta-1.0r"
+    self.Version      = "beta-1.0.1r"
     -- Build stamp: NOT part of the comm-version string (which other
     -- clients' version filters compare); purely for humans to verify which
     -- fix pass is actually installed (minimap tooltip + /lcvendor).

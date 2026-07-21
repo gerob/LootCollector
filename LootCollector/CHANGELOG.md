@@ -1,4 +1,4 @@
-## Version Beta-1.0r
+## Version Beta-1.0.1r
 
 ### Performance & hibernation pass
 - **Fixed minimap filter-cache thrash:** Zones (or filter sets) with zero matching discoveries no longer force a rebuild every minimap tick. An empty result is treated as valid.
