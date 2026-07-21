@@ -2582,7 +2582,7 @@ function Comm:EvaluateKS()
 end
 
 function Comm:NagOutdatedUser()
-    print("|cffff0000[LootCollector]|r Your addon version is critically outdated and has been disconnected from the network to prevent data corruption. Please download the latest update from GitHub or Discord to continue participating.")
+    print("|cffff0000[LootCollector]|r Your addon version is critically outdated and has been disconnected from the network to prevent data corruption. Please download the latest update from https://github.com/gerob/LootCollector/releases to continue participating.")
     
     L:ScheduleAfter(600, function() self:NagOutdatedUser() end)
 end

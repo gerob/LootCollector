@@ -4980,3 +4980,249 @@ function Core:FixLegacyZoneIDs()
         print("|cff00ff00LootCollector:|r No invalid zone combinations found.")
     end
 end
+
+-- Item location diagnostics (ported from Jollygg /lcdiag, with 1.0r tweaks).
+-- Usage: /lcdiag <itemID|itemLink>
+local CONTINENT_MAP_IDS = {
+    [0] = true,   -- Azeroth
+    [14] = true,  -- Kalimdor
+    [15] = true,  -- Eastern Kingdoms
+}
+
+local function DiagClassifyDiscovery(d, ZoneList)
+    local flags = {}
+    local c = tonumber(d.c) or 0
+    local z = tonumber(d.z) or 0
+    local iz = tonumber(d.iz) or 0
+    local x = d.xy and tonumber(d.xy.x) or nil
+    local y = d.xy and tonumber(d.xy.y) or nil
+
+    if not x or not y then
+        table.insert(flags, "MISSING_XY")
+    elseif x == 0 and y == 0 then
+        table.insert(flags, "ZERO_COORDS")
+    else
+        if x < 0 or x > 1 or y < 0 or y > 1 then
+            table.insert(flags, "XY_OUT_OF_RANGE")
+        elseif x < 0.02 or x > 0.98 or y < 0.02 or y > 0.98 then
+            table.insert(flags, "XY_NEAR_EDGE")
+        end
+    end
+
+    if CONTINENT_MAP_IDS[z] or (c == 0 and z == 0) then
+        table.insert(flags, "CONTINENT_OR_WORLD_MAP")
+    end
+
+    local mapData = ZoneList and ZoneList.MapDataByID and ZoneList.MapDataByID[z]
+    if not mapData then
+        table.insert(flags, "UNKNOWN_ZONE")
+    elseif mapData.continentID and mapData.continentID ~= c and z <= 2000 then
+        table.insert(flags, "CZ_MISMATCH")
+    end
+
+    local rel = ZoneList and ZoneList.ZoneRelationships and ZoneList.ZoneRelationships[z]
+    if rel then
+        table.insert(flags, "CHILD_SUBZONE")
+        if rel.parent and rel.parent.z then
+            table.insert(flags, "PARENT=" .. tostring(rel.parent.z))
+        end
+    else
+        if ZoneList and ZoneList.ZoneRelationships then
+            for childZ, childRel in pairs(ZoneList.ZoneRelationships) do
+                if childRel.parent and childRel.parent.z == z then
+                    table.insert(flags, "PARENT_OF_SUBZONE")
+                    table.insert(flags, "CHILD=" .. tostring(childZ))
+                    break
+                end
+            end
+        end
+    end
+
+    if iz and iz > 0 then
+        table.insert(flags, "HAS_INSTANCE_ID")
+    end
+
+    local mc = tonumber(d.mc) or 0
+    if mc >= 5 then
+        table.insert(flags, "HIGH_MC")
+    end
+
+    if #flags == 0 then
+        table.insert(flags, "OK_LOOKS_PLAUSIBLE")
+    end
+    return flags
+end
+
+local function DiagFormatFlags(flags)
+    return table.concat(flags, ", ")
+end
+
+function Core:DiagnoseItemCoords(itemID)
+    itemID = tonumber(itemID)
+    if not itemID or itemID <= 0 then
+        print("|cffff7f00LootCollector:|r Usage: /lcdiag <itemID|itemLink>")
+        return 0
+    end
+
+    local discoveries = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not discoveries then
+        print("|cffff7f00LootCollector:|r Discovery database not ready.")
+        return 0
+    end
+
+    local queryBase = (L.GetBaseItemID and L:GetBaseItemID(itemID)) or itemID
+    local ZoneList = L:GetModule("ZoneList", true)
+    local matches = {}
+    for guid, d in pairs(discoveries) do
+        if type(d) == "table" then
+            local di = tonumber(d.i)
+            if di then
+                local diBase = (L.GetBaseItemID and L:GetBaseItemID(di)) or di
+                if di == itemID or diBase == queryBase then
+                    table.insert(matches, { guid = guid, d = d })
+                end
+            end
+        end
+    end
+
+    table.sort(matches, function(a, b)
+        local za = tonumber(a.d.z) or 0
+        local zb = tonumber(b.d.z) or 0
+        if za ~= zb then return za < zb end
+        local mca = tonumber(a.d.mc) or 0
+        local mcb = tonumber(b.d.mc) or 0
+        if mca ~= mcb then return mca > mcb end
+        return tostring(a.guid) < tostring(b.guid)
+    end)
+
+    local itemName = GetItemInfo(itemID)
+    print(string.format(
+        "|cff00ff00LootCollector diag:|r item %d%s - %d record(s)",
+        itemID,
+        itemName and (" (" .. itemName .. ")") or "",
+        #matches
+    ))
+    if queryBase ~= itemID then
+        print(string.format("  |cffaaaaaa(query maps to base item %d via Worldforged upgrades)|r", queryBase))
+    end
+
+    if L.StarterDBItemZones then
+        local allowed = L.StarterDBItemZones[queryBase] or L.StarterDBItemZones[itemID]
+        if allowed then
+            local zones = {}
+            for zid in pairs(allowed) do
+                table.insert(zones, tostring(zid))
+            end
+            table.sort(zones)
+            print(string.format(
+                "  |cffaaaaaaStarterDB allowed zones for base %d: %s|r",
+                queryBase,
+                table.concat(zones, ", ")
+            ))
+        else
+            print(string.format(
+                "  |cffaaaaaaStarterDB: no zone list for base %d (not in starter authority)|r",
+                queryBase
+            ))
+        end
+    end
+
+    if #matches == 0 then
+        print("  |cffaaaaaa(no discoveries for this item in local DB)|r")
+        return 0
+    end
+
+    -- Per-zone summary so location collisions are obvious at a glance.
+    local zoneCounts = {}
+    local zoneOrder = {}
+    for _, row in ipairs(matches) do
+        local d = row.d
+        local c = tonumber(d.c) or 0
+        local z = tonumber(d.z) or 0
+        local iz = tonumber(d.iz) or 0
+        local key = c .. ":" .. z .. ":" .. iz
+        if not zoneCounts[key] then
+            zoneCounts[key] = {
+                c = c, z = z, iz = iz, n = 0,
+                name = (L.ResolveZoneDisplay and L.ResolveZoneDisplay(c, z, iz)) or "Unknown",
+            }
+            table.insert(zoneOrder, key)
+        end
+        zoneCounts[key].n = zoneCounts[key].n + 1
+    end
+    print("  |cffffff00Per-zone counts:|r")
+    for _, key in ipairs(zoneOrder) do
+        local info = zoneCounts[key]
+        print(string.format(
+            "    %s (c=%d z=%d iz=%d): %d",
+            info.name, info.c, info.z, info.iz, info.n
+        ))
+    end
+
+    for i, row in ipairs(matches) do
+        local d = row.d
+        local c = tonumber(d.c) or 0
+        local z = tonumber(d.z) or 0
+        local iz = tonumber(d.iz) or 0
+        local x = d.xy and tonumber(d.xy.x) or 0
+        local y = d.xy and tonumber(d.xy.y) or 0
+        local zoneName = (L.ResolveZoneDisplay and L.ResolveZoneDisplay(c, z, iz)) or "Unknown"
+        local flags = DiagClassifyDiscovery(d, ZoneList)
+        local mc = tonumber(d.mc) or 0
+        local ls = tonumber(d.ls) or 0
+        local t0 = tonumber(d.t0) or 0
+        local fp = tostring(d.fp or d.o or "?")
+        local dt = tostring(d.dt or "?")
+        local s = tostring(d.s or "?")
+        local storedID = tonumber(d.i) or 0
+
+        print(string.format(
+            "  [%d] %s",
+            i,
+            tostring(row.guid)
+        ))
+        if storedID ~= itemID then
+            print(string.format(
+                "      stored itemID=%d (query was %d)",
+                storedID, itemID
+            ))
+        end
+        print(string.format(
+            "      c=%d z=%d (%s) iz=%d  xy=%.4f, %.4f  (%.1f%%, %.1f%%)",
+            c, z, zoneName, iz, x, y, x * 100, y * 100
+        ))
+        print(string.format(
+            "      dt=%s s=%s mc=%d fp=%s t0=%d ls=%d",
+            dt, s, mc, fp, t0, ls
+        ))
+        print(string.format(
+            "      flags: |cffffff00%s|r",
+            DiagFormatFlags(flags)
+        ))
+    end
+
+    return #matches
+end
+
+SLASH_LOOTCOLLECTORDIAG1 = "/lcdiag"
+SlashCmdList["LOOTCOLLECTORDIAG"] = function(msg)
+    local CoreMod = L:GetModule("Core", true)
+    if not (CoreMod and CoreMod.DiagnoseItemCoords) then
+        print("|cffff7f00LootCollector:|r Core diagnostics not available.")
+        return
+    end
+    msg = tostring(msg or ""):match("^%s*(.-)%s*$") or ""
+    if msg == "" or msg == "help" then
+        print("|cff00ff00LootCollector:|r /lcdiag <itemID|itemLink> - dump c/z/iz/xy/mc for one item")
+        return
+    end
+    local itemID = tonumber(msg)
+    if not itemID then
+        itemID = tonumber(msg:match("item:(%d+)"))
+    end
+    if not itemID then
+        print("|cffff7f00LootCollector:|r Usage: /lcdiag <itemID|itemLink>")
+        return
+    end
+    CoreMod:DiagnoseItemCoords(itemID)
+end

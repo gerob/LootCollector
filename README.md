@@ -55,6 +55,7 @@
 * `/lcshare <party|raid|guild|whisper> [player]` – Broadcasts your discovery database to other players.
 * `/lcexport` / `/lcimport` – Opens the manual text import/export windows to share databases outside of the game (e.g., via Discord).
 * `/lcpause` - Hibernates addon functionality.
+* `/lcdiag <itemID|link>` – Dump stored continent/zone/coords/merge-count for one item (useful when diagnosing misplaced pins).
 
 ---
 

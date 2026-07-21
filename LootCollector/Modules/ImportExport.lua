@@ -1969,7 +1969,7 @@ function ImportExport:ShowReportGenerator()
         instrText:SetPoint("BOTTOMRIGHT", -10, 10)
         instrText:SetJustifyH("LEFT")
         instrText:SetJustifyV("TOP")
-        instrText:SetText("|cff00ff00HOW TO SUBMIT THIS REPORT:|r\n1. Click 'Generate Payload' below.\n2. Copy the resulting text string.\n3. Paste the string into a new issue on |cff00ccffgithub.com/mmobrain/LootCollector/issues|r\n   OR save it as a txt file and send it to |cff00ccff@Skulltrail|r on the Ascension Discord.")
+        instrText:SetText("|cff00ff00HOW TO SUBMIT THIS REPORT:|r\n1. Click 'Generate Payload' below.\n2. Copy the resulting text string.\n3. Paste the string into a new issue on |cff00ccffgithub.com/gerob/LootCollector/issues|r\n   OR save it as a txt file and send it to |cff00ccff@Jollyg7|r on the Ascension Discord.")
 
         
         f.btnClose = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
