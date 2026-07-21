@@ -2890,13 +2890,13 @@ function Viewer:UpdateFilterButtonStates()
     if self.collectedMEFilterBtn then
         if self.collectedMEFilterState == true then
             setButtonTextColor(self.collectedMEFilterBtn, 1, 0.8, 0.2)
-            self.collectedMEFilterBtn:SetText("Collected: Yes")
+            self.collectedMEFilterBtn:SetText("Enchant: Yes")
         elseif self.collectedMEFilterState == false then
             setButtonTextColor(self.collectedMEFilterBtn, 1, 0.8, 0.2)
-            self.collectedMEFilterBtn:SetText("Collected: No")
+            self.collectedMEFilterBtn:SetText("Enchant: No")
         else
             setButtonTextColor(self.collectedMEFilterBtn, 1, 1, 1)
-            self.collectedMEFilterBtn:SetText("Collected: All")
+            self.collectedMEFilterBtn:SetText("Enchant: All")
         end
     end
 
@@ -2930,6 +2930,14 @@ function Viewer:UpdateFilterButtonStates()
     local showSlots = isEq
     local showVendorType = isBmv
     local showNormalFilters = not isBmv
+
+    local CoreMod = L:GetModule("Core", true)
+    local isCoA = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
+    if isCoA and Viewer.collectedMEFilterState ~= nil then
+        Viewer.collectedMEFilterState = nil
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+    end
     
     local Dev = L:GetModule("DevCommands", true)
     local showDuplicates = showNormalFilters and (Dev ~= nil)
@@ -2941,7 +2949,7 @@ function Viewer:UpdateFilterButtonStates()
     if self.slotsFilterBtn then self.slotsFilterBtn:SetShown(showSlots) end
     if self.usableByFilterBtn then self.usableByFilterBtn:SetShown(showNormalFilters) end
     if self.lootedFilterBtn then self.lootedFilterBtn:SetShown(showNormalFilters) end
-    if self.collectedMEFilterBtn then self.collectedMEFilterBtn:SetShown(showNormalFilters) end
+    if self.collectedMEFilterBtn then self.collectedMEFilterBtn:SetShown(showNormalFilters and not isCoA) end
     if self.lsFilterBtn then self.lsFilterBtn:SetShown(showNormalFilters) end
     if self.duplicatesFilterBtn then self.duplicatesFilterBtn:SetShown(showDuplicates) end
 
@@ -4493,14 +4501,18 @@ beta-0.8.6r:
     end)
     lootedFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local collectedMEFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Collected", 82, lootedFilterBtn, "RIGHT")
+    local collectedMEFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Enchant", 82, lootedFilterBtn, "RIGHT")
     collectedMEFilterBtn:SetScript("OnEnter", function(self) 
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Filter by Collected Mystic Enchants.\nTurn this off in CoA mode, as MEs do not exist there.")
+        GameTooltip:SetText("Filter by which Mystic Enchants have been collected.")
         GameTooltip:Show() 
     end)
     collectedMEFilterBtn:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
     collectedMEFilterBtn:SetScript("OnClick", function(self, button)
+        local CoreMod = L:GetModule("Core", true)
+        if CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm() then
+            return
+        end
         if Viewer.collectedMEFilterState == nil then Viewer.collectedMEFilterState = true
         elseif Viewer.collectedMEFilterState == true then Viewer.collectedMEFilterState = false
         else Viewer.collectedMEFilterState = nil end

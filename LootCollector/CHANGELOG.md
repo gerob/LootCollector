@@ -7,6 +7,8 @@
 - **Faster map/Arrow filters:** Equip-slot lookups cache `equipLoc` on the discovery when resolved; "Usable by" class filters use a precomputed IST set instead of nested loops per pin.
 - **Safer Deep Filter on the map:** Map/minimap rebuilds use Scanner RAM cache only and no longer call `SetHyperlink` per pin (avoids hitching when "Filter by Deep Filter" is on).
 - **Added `/lcdiag <itemID|link>`:** Dumps every local discovery for an item (per-zone counts, c/z/xy/mc, plausibility flags). This is to help see if the item sought has multiple entries and identify which has the highest mc count.
+- **Renamed Discoveries "Collected" filter to "Enchant"** so it is clearer this filters by Mystic Enchant collection, not pin loot status.
+- **Hidden Enchant filter on CoA realms** (Mystic Enchants do not exist there); any leftover Enchant filter state is cleared.
 
 - Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
 - Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.
