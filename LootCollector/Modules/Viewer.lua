@@ -284,9 +284,9 @@ function Viewer:HasDeepFilters()
     return self.deepSearchCompiled ~= nil and #self.deepSearchCompiled > 0
 end
 
--- Public matcher (used by the Viewer list and by the Map module's optional
--- "Filter by Deep Filter" toggle). Returns true if the given tooltip text
--- satisfies every Deep Filter expression, or if no filters are set.
+-- Public matcher (used by the Viewer list and by Filter Map / map pins).
+-- Returns true if the given tooltip text satisfies every Deep Filter expression,
+-- or if no filters are set.
 function Viewer:MatchesDeepFilter(tooltipText)
     local compiled = self.deepSearchCompiled
     if not compiled or #compiled == 0 then return true end
@@ -297,16 +297,16 @@ function Viewer:MatchesDeepFilter(tooltipText)
     return true
 end
 
--- Refresh the map/minimap when the Deep Filter changes, but only if the map's
--- "Filter by Deep Filter" toggle is currently on (otherwise it's a no-op).
-function Viewer:NotifyMapDeepFilterChanged()
-    if not (L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.useDeepFilter) then return end
-    local Map = L:GetModule("Map", true)
-    if Map then
-        Map.cacheIsDirty = true
-        if Map.Update then Map:Update() end
-        if Map.UpdateMinimap then Map:UpdateMinimap() end
-    end
+function Viewer:IsFilterMapEnabled()
+    return L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.applyViewerFiltersOnMap and true or false
+end
+
+function Viewer:SetFilterMapEnabled(enabled)
+    if not (L.db and L.db.char) then return end
+    L.db.char.mapFilters = L.db.char.mapFilters or {}
+    L.db.char.mapFilters.applyViewerFiltersOnMap = enabled and true or false
+    self:NotifyMapViewerFiltersChanged(true)
+    if self.UpdateFilterMapButton then self:UpdateFilterMapButton() end
 end
 
 local function copy(t)
@@ -497,6 +497,299 @@ local function GetLocalizedZoneName(discovery)
 
     Cache.zoneNames[cacheKey] = localizedZoneName
     return localizedZoneName
+end
+
+function Viewer:EnsureDeepFiltersLoaded()
+    if L.db and L.db.profile then
+        if type(L.db.profile.deepSearchFilters) ~= "table" then
+            L.db.profile.deepSearchFilters = {}
+        end
+        self.deepSearchFilters = L.db.profile.deepSearchFilters
+    else
+        self.deepSearchFilters = self.deepSearchFilters or {}
+    end
+    if not self.deepSearchCompiled then
+        self:RebuildDeepCompiled()
+    end
+end
+
+-- Viewer filters that should gate map pins when Filter Map is ON.
+-- Excludes free-text search and date sort (Viewer-only).
+function Viewer:HasViewerFiltersForMap()
+    self:EnsureDeepFiltersLoaded()
+    if self.deepSearchFilters and #self.deepSearchFilters > 0 then return true end
+    if self.minReqLevel or self.maxReqLevel then return true end
+    if size(self.columnFilters.zone) > 0 then return true end
+    if self.columnFilters.eq and (size(self.columnFilters.eq.slot) > 0 or size(self.columnFilters.eq.type) > 0 or size(self.columnFilters.eq.class) > 0) then
+        return true
+    end
+    if self.columnFilters.ms and size(self.columnFilters.ms.class) > 0 then return true end
+    if size(self.columnFilters.source) > 0 then return true end
+    if size(self.columnFilters.quality) > 0 then return true end
+    if size(self.columnFilters.vendorType) > 0 then return true end
+    if self.lootedFilterState ~= nil or size(self.columnFilters.looted) > 0 then return true end
+    if self.collectedMEFilterState ~= nil then return true end
+    if self.columnFilters.duplicates then return true end
+    if self.favoritesFilterState == true then return true end
+    return false
+end
+
+-- Evaluate Discoveries Viewer filter state against a raw discovery record (map/Arrow path).
+-- Does not allocate Viewer rows. Equipment-only filters skip MS/vendor pins.
+function Viewer:DiscoveryPassesViewerFilters(d)
+    if not d then return false end
+    self:EnsureDeepFiltersLoaded()
+    if not self:HasViewerFiltersForMap() then return true end
+
+    local Constants = L:GetModule("Constants", true)
+    local isVendor = (Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET) or d.vendorType
+    local isMystic = Constants and d.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
+    local isWF = not isVendor and not isMystic
+
+    if self:HasDeepFilters() and not isVendor then
+        local Scanner = L:GetModule("Scanner", true)
+        local fullText = Scanner and Scanner.GetCachedFullText and Scanner:GetCachedFullText(d.i, d.il) or ""
+        if not self:MatchesDeepFilter(fullText) then
+            return false
+        end
+    end
+
+    if size(self.columnFilters.zone) > 0 then
+        local zoneValue = GetLocalizedZoneName(d)
+        if not self.columnFilters.zone[zoneValue] then return false end
+    end
+
+    if not isVendor then
+        if size(self.columnFilters.source) > 0 then
+            local source = d.src or "unknown"
+            local sourceValue = SOURCE_NAMES[source] or source
+            if not self.columnFilters.source[sourceValue] then return false end
+        end
+
+        if size(self.columnFilters.quality) > 0 then
+            local _, _, quality = GetItemInfo(d.il or d.i or 0)
+            quality = quality or d.q
+            if not quality then
+                if not self.columnFilters.quality["Unknown"] then return false end
+            else
+                local qualityValue = QUALITY_NAMES[quality] or ("Quality " .. tostring(quality))
+                if not self.columnFilters.quality[qualityValue] then return false end
+            end
+        end
+
+        if size(self.columnFilters.looted) > 0 then
+            local lootedValue = (d.g and L:IsLootedByChar(d.g)) and "Looted" or "Not Looted"
+            if not self.columnFilters.looted[lootedValue] then return false end
+        end
+
+        if self.lootedFilterState ~= nil then
+            local isLooted = d.g and L:IsLootedByChar(d.g)
+            if self.lootedFilterState == true and not isLooted then return false end
+            if self.lootedFilterState == false and isLooted then return false end
+        end
+
+        if self.favoritesFilterState == true then
+            if not (d.i and L.db and L.db.profile and L.db.profile.favorites and L.db.profile.favorites[d.i]) then
+                return false
+            end
+        end
+
+        if self.collectedMEFilterState ~= nil then
+            if isMystic and d.i and d.i > 0 then
+                local isCollectedME = L:IsMysticEnchantCollected(d.i)
+                if self.collectedMEFilterState == true and not isCollectedME then return false end
+                if self.collectedMEFilterState == false and isCollectedME then return false end
+            elseif self.collectedMEFilterState == true then
+                return false
+            end
+        end
+
+        if self.columnFilters.duplicates then
+            if Cache.duplicateItems and d.i then
+                if not Cache.duplicateItems[d.i] or Cache.duplicateItems[d.i] <= 1 then
+                    return false
+                end
+            end
+        end
+    end
+
+    if isWF then
+        if self.minReqLevel or self.maxReqLevel then
+            local _, _, _, _, minLevel = GetItemInfo(d.il or d.i or 0)
+            minLevel = minLevel or 0
+            if self.minReqLevel and minLevel < self.minReqLevel then return false end
+            if self.maxReqLevel and minLevel > self.maxReqLevel then return false end
+        end
+
+        if size(self.columnFilters.eq.slot) > 0 then
+            local equipLoc = d.el
+            if (not equipLoc or equipLoc == "") and Constants then
+                local _, _, _, _, _, _, _, _, el = GetItemInfo(d.il or d.i or 0)
+                equipLoc = el
+                if (not equipLoc or equipLoc == "") and d.ist and Constants.IST_TO_EQUIPLOC then
+                    equipLoc = Constants.IST_TO_EQUIPLOC[d.ist]
+                end
+            end
+            local slotValue = equipLoc and _G[equipLoc] or ""
+            if not self.columnFilters.eq.slot[slotValue] then return false end
+        end
+
+        if size(self.columnFilters.eq.type) > 0 then
+            local _, _, _, _, _, _, itemSubType = GetItemInfo(d.il or d.i or 0)
+            itemSubType = itemSubType or ""
+            if not self.columnFilters.eq.type[itemSubType] then return false end
+        end
+
+        if size(self.columnFilters.eq.class) > 0 and Constants and Constants.CLASS_PROFICIENCIES then
+            local subTypeID = d.ist
+            local typeID = d.it
+            -- Resolve type IDs from item info when discovery lacks them.
+            if not (subTypeID and typeID and subTypeID > 0 and typeID > 0) then
+                local _, _, _, _, _, itemType, itemSubType = GetItemInfo(d.il or d.i or 0)
+                if itemType and itemSubType and Constants.ITEM_TYPE_TO_ID and Constants.ITEM_SUBTYPE_TO_ID then
+                    typeID = Constants.ITEM_TYPE_TO_ID[itemType] or 0
+                    subTypeID = Constants.ITEM_SUBTYPE_TO_ID[itemSubType] or 0
+                end
+            end
+            if not (subTypeID and typeID and subTypeID > 0 and typeID > 0) then
+                -- Unknown item type: keep pin (same as non-proficiency gear on Viewer list).
+                -- Do not blanket-hide when type data is missing.
+            else
+                local isProficiencyArmor = Constants.PROFICIENCY_ARMOR_ISTS and Constants.PROFICIENCY_ARMOR_ISTS[subTypeID]
+                local isWeapon = (typeID == Constants.ITEM_TYPE_TO_ID["Weapon"])
+                if isProficiencyArmor or isWeapon then
+                    local canUse = false
+                    for classFilterName, _ in pairs(self.columnFilters.eq.class) do
+                        local classToken = nil
+                        if Constants.GetClassTokenFromLocalizedName then
+                            local foundToken = Constants:GetClassTokenFromLocalizedName(classFilterName)
+                            if foundToken ~= classFilterName then classToken = foundToken end
+                        end
+                        if not classToken and _G.LOCALIZED_CLASS_NAMES_MALE then
+                            for token, locName in pairs(_G.LOCALIZED_CLASS_NAMES_MALE) do
+                                if locName == classFilterName then classToken = token; break end
+                            end
+                        end
+                        if not classToken then classToken = string.upper(classFilterName) end
+                        local profs = Constants.CLASS_PROFICIENCIES[classToken]
+                        if profs then
+                            local list = nil
+                            if typeID == Constants.ITEM_TYPE_TO_ID["Armor"] then list = profs.armor
+                            elseif typeID == Constants.ITEM_TYPE_TO_ID["Weapon"] then list = profs.weapons end
+                            if list then
+                                for _, allowedID in ipairs(list) do
+                                    if subTypeID == allowedID then canUse = true; break end
+                                end
+                            else
+                                canUse = true
+                            end
+                        end
+                        if canUse then break end
+                    end
+                    if not canUse then return false end
+                end
+            end
+        end
+    end
+
+    if isMystic and size(self.columnFilters.ms.class) > 0 then
+        local classValue = ""
+        if d.cl and d.cl ~= "cl" then
+            local classToken = CLASS_ABBREVIATIONS_REVERSE[d.cl]
+            if classToken then
+                classValue = _G.LOCALIZED_CLASS_NAMES_MALE and _G.LOCALIZED_CLASS_NAMES_MALE[classToken] or classToken
+            end
+        end
+        if classValue == "" or not self.columnFilters.ms.class[classValue] then
+            return false
+        end
+    end
+
+    if isVendor and size(self.columnFilters.vendorType) > 0 then
+        local typeMap = { ["BM"] = "Blackmarket", ["MS"] = "Mystic Enchants" }
+        local vType = d.vendorType
+        if not vType and d.g then
+            if string.find(d.g, "BM-", 1, true) then vType = "BM"
+            elseif string.find(d.g, "MS-", 1, true) then vType = "MS" end
+        end
+        local typeName = typeMap[vType] or vType or "Unknown"
+        if not self.columnFilters.vendorType[typeName] then return false end
+    end
+
+    return true
+end
+
+function Viewer:ClearDiscoveriesFilters()
+    self.columnFilters.zone = {}
+    self.columnFilters.eq.slot = {}
+    self.columnFilters.eq.type = {}
+    self.columnFilters.eq.class = {}
+    self.columnFilters.ms.class = {}
+    self.columnFilters.source = {}
+    self.columnFilters.quality = {}
+    self.columnFilters.looted = {}
+    self.columnFilters.vendorType = {}
+    self.columnFilters.duplicates = false
+
+    self.lootedFilterState = nil
+    self.collectedMEFilterState = nil
+    self.favoritesFilterState = nil
+    self.hasUncachedData = false
+    self.lastSeenSortState = "off"
+
+    self.searchTerm = ""
+    if self.searchBox then self.searchBox:SetText("") end
+
+    if self.deepSearchFilters then wipe(self.deepSearchFilters) end
+    if self.RebuildDeepCompiled then self:RebuildDeepCompiled() end
+    if self.RefreshDeepFilterPanel then self:RefreshDeepFilterPanel() end
+    if self.deepFilterPanel then self.deepFilterPanel:Hide() end
+
+    self.minReqLevel = nil
+    self.maxReqLevel = nil
+    if self.minReqLevelBox then self.minReqLevelBox:SetText("") end
+    if self.maxReqLevelBox then self.maxReqLevelBox:SetText("") end
+
+    self.currentPage = 1
+    Cache.filteredResults = {}
+    Cache.lastFilterState = nil
+    Cache.uniqueValuesValid = false
+    Cache.uniqueValuesContext = {}
+
+    if self.window and self.window:IsShown() then
+        if self.UpdateSortHeaders then self:UpdateSortHeaders() end
+        if self.RefreshData then self:RefreshData() end
+        if self.UpdateClearAllButton then self:UpdateClearAllButton() end
+        if self.UpdateFilterButtonStates then self:UpdateFilterButtonStates() end
+    end
+
+    self:NotifyMapViewerFiltersChanged(true)
+end
+
+-- Refresh map/minimap when Viewer filters change and Filter Map is ON.
+-- force=true rebuilds even when toggling the flag (ON or OFF).
+function Viewer:NotifyMapViewerFiltersChanged(force)
+    if not force and not self:IsFilterMapEnabled() then return end
+    local Map = L:GetModule("Map", true)
+    if Map then
+        Map.cacheIsDirty = true
+        if Map.Update then Map:Update() end
+        if Map.UpdateMinimap then Map:UpdateMinimap() end
+    end
+end
+
+function Viewer:ScheduleMapViewerFilterNotify()
+    if not self:IsFilterMapEnabled() then return end
+    if self._mapFilterNotifyTimer then return end
+    self._mapFilterNotifyTimer = C_Timer.After(0.15, function()
+        Viewer._mapFilterNotifyTimer = nil
+        Viewer:NotifyMapViewerFiltersChanged()
+    end)
+end
+
+-- Back-compat alias (Deep Filter used to have its own map toggle).
+function Viewer:NotifyMapDeepFilterChanged()
+    self:ScheduleMapViewerFilterNotify()
 end
 
 local localClassScanTip = CreateFrame("GameTooltip", "LootCollectorClassScanTooltip", UIParent, "GameTooltipTemplate")
@@ -1550,50 +1843,7 @@ function Viewer:ShowColumnFilterDropdown(column, anchor, values)
             text = "Clear All Filters",
             notCheckable = true,
             func = function()
-                if filterTable then wipe(filterTable) end
-                Viewer.columnFilters.zone = {}
-                Viewer.columnFilters.eq.slot = {}
-                Viewer.columnFilters.eq.type = {}
-                Viewer.columnFilters.eq.class = {}
-                Viewer.columnFilters.ms.class = {}
-                Viewer.columnFilters.source = {}
-                Viewer.columnFilters.quality = {}
-                Viewer.columnFilters.looted = {}
-                Viewer.columnFilters.vendorType = {}
-                Viewer.columnFilters.duplicates = false
-
-                Viewer.lootedFilterState = nil
-                Viewer.collectedMEFilterState = nil
-                -- FIXED: Favorites was the only filter "Clear All" forgot,
-                -- leaving the list stuck on favorites with the Clear button
-                -- permanently lit.
-                Viewer.favoritesFilterState = nil
-
-                Viewer.searchTerm = ""
-                if Viewer.searchBox then Viewer.searchBox:SetText("") end
-
-                if Viewer.deepSearchFilters then wipe(Viewer.deepSearchFilters) end
-                if Viewer.RebuildDeepCompiled then Viewer:RebuildDeepCompiled() end
-                if Viewer.NotifyMapDeepFilterChanged then Viewer:NotifyMapDeepFilterChanged() end
-                if Viewer.RefreshDeepFilterPanel then Viewer:RefreshDeepFilterPanel() end
-                if Viewer.deepFilterPanel then Viewer.deepFilterPanel:Hide() end
-                
-                Viewer.minReqLevel = nil
-                Viewer.maxReqLevel = nil
-                if Viewer.minReqLevelBox then Viewer.minReqLevelBox:SetText("") end
-                if Viewer.maxReqLevelBox then Viewer.maxReqLevelBox:SetText("") end
-
-                Viewer.currentPage = 1
-                
-                Cache.filteredResults = {}
-                Cache.lastFilterState = nil
-                Cache.uniqueValuesValid = false
-                Cache.uniqueValuesContext = {} 
-                
-                Viewer:UpdateSortHeaders()
-                Viewer:RefreshData()
-                Viewer:UpdateClearAllButton()
-                Viewer:UpdateFilterButtonStates()
+                Viewer:ClearDiscoveriesFilters()
                 HideDropDownMenu(1)
             end
         }
@@ -2160,6 +2410,10 @@ function Viewer:GetFilteredDiscoveries()
     end
 
     local filterState = self:GetFilterStateHash()
+
+    if Cache.lastFilterState ~= filterState then
+        self:ScheduleMapViewerFilterNotify()
+    end
 
     if Cache.lastFilterState == filterState and #Cache.filteredResults > 0 then
         if pTime then L:ProfileStop("Viewer:GetFilteredDiscoveries", pTime) end
@@ -2995,7 +3249,8 @@ function Viewer:UpdateFilterButtonStates()
         end
     end
     
-    if pTime then L:ProfileStop("Viewer:UpdateFilterButtonStates", pTime) end 
+    if pTime then L:ProfileStop("Viewer:UpdateFilterButtonStates", pTime) end
+    if self.UpdateFilterMapButton then self:UpdateFilterMapButton() end
 end
 
 function Viewer:UpdateRefreshButton()
@@ -4047,16 +4302,56 @@ beta-0.8.6r:
     Viewer.deepFilterPanel = deepPanel
     Viewer:RefreshDeepFilterPanel()
 
+    -- Filter Map: apply Discoveries filters (incl. Deep Filter) to map/minimap pins.
+    local filterMapBtn = CreateFrame("Button", nil, window)
+    filterMapBtn:SetSize(88, DFB_H)
+    filterMapBtn:SetPoint("LEFT", deepFilterBtn, "RIGHT", 8, 0)
+    filterMapBtn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    filterMapBtn:SetBackdropColor(0.10, 0.10, 0.16, 0.90)
+    filterMapBtn:SetBackdropBorderColor(0.30, 0.30, 0.45, 0.85)
+    local fmbText = filterMapBtn:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    fmbText:SetPoint("CENTER", 0, 0)
+    filterMapBtn:SetFontString(fmbText)
+    filterMapBtn:SetText("Filter Map")
+    Viewer.filterMapBtn = filterMapBtn
+    Viewer.filterMapBtnText = fmbText
+
+    function Viewer:UpdateFilterMapButton()
+        if not self.filterMapBtn then return end
+        local on = self:IsFilterMapEnabled()
+        if on then
+            self.filterMapBtn:SetBackdropBorderColor(1, 0.82, 0, 0.95)
+            if self.filterMapBtnText then self.filterMapBtnText:SetTextColor(1, 0.82, 0) end
+            self.filterMapBtn:SetText("Filter Map: On")
+        else
+            self.filterMapBtn:SetBackdropBorderColor(0.30, 0.30, 0.45, 0.85)
+            if self.filterMapBtnText then self.filterMapBtnText:SetTextColor(1, 1, 1) end
+            self.filterMapBtn:SetText("Filter Map")
+        end
+    end
+
+    filterMapBtn:SetScript("OnClick", function()
+        Viewer:SetFilterMapEnabled(not Viewer:IsFilterMapEnabled())
+    end)
+    filterMapBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Filter Map", 1, 1, 1)
+        GameTooltip:AddLine("When on, map and minimap pins use your Discoveries filters (including Deep Filter).", 1, 0.82, 0, true)
+        GameTooltip:AddLine("Map-only options (hide unconfirmed/faded, show WF/MS/vendors, etc.) still apply.", 0.8, 0.8, 0.8, true)
+        GameTooltip:Show(); GameTooltip:SetFrameStrata("TOOLTIP")
+    end)
+    filterMapBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    Viewer:UpdateFilterMapButton()
+
     local function showDeepSearchTooltip(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText("Deep Search", 1, 1, 1)
         GameTooltip:AddLine("Searches item tooltips for stats (e.g., 'Strength', 'On use', 'Chance', 'hit').", 1, 0.82, 0, true)
         GameTooltip:Show()
-        GameTooltip:SetFrameStrata("TOOLTIP") 
     end
     
     refreshDataBtn:ClearAllPoints()
-    refreshDataBtn:SetPoint("LEFT", deepFilterBtn, "RIGHT", 20, 0)
+    refreshDataBtn:SetPoint("LEFT", filterMapBtn, "RIGHT", 12, 0)
     refreshDataBtn:SetSize(110, BUTTON_HEIGHT)
     
     local bugBtn = CreateFrame("Button", nil, window)
@@ -4822,50 +5117,7 @@ beta-0.8.6r:
     
     clearAllBtn:SetText("Clear")
     clearAllBtn:SetScript("OnClick", function()
-        Viewer.columnFilters.zone = {}
-        Viewer.columnFilters.eq.slot = {}
-        Viewer.columnFilters.eq.type = {}
-        Viewer.columnFilters.eq.class = {}
-        Viewer.columnFilters.ms.class = {}
-        Viewer.columnFilters.source = {}
-        Viewer.columnFilters.quality = {}
-        Viewer.columnFilters.looted = {}
-        Viewer.columnFilters.vendorType = {}
-        Viewer.columnFilters.duplicates = false
-
-        Viewer.lootedFilterState = nil
-        Viewer.collectedMEFilterState = nil
-        -- FIXED: Favorites was the only filter this Clear button forgot,
-        -- leaving the list stuck on favorites with the button still lit.
-        Viewer.favoritesFilterState = nil
-        Viewer.hasUncachedData = false
-        Viewer.lastSeenSortState = "off"
-        
-        Viewer.searchTerm = ""
-        searchBox:SetText("")
-
-        if Viewer.deepSearchFilters then wipe(Viewer.deepSearchFilters) end
-        if Viewer.RebuildDeepCompiled then Viewer:RebuildDeepCompiled() end
-        if Viewer.NotifyMapDeepFilterChanged then Viewer:NotifyMapDeepFilterChanged() end
-        if Viewer.RefreshDeepFilterPanel then Viewer:RefreshDeepFilterPanel() end
-        if Viewer.deepFilterPanel then Viewer.deepFilterPanel:Hide() end
-        
-        Viewer.minReqLevel = nil
-        Viewer.maxReqLevel = nil
-        if Viewer.minReqLevelBox then Viewer.minReqLevelBox:SetText("") end
-        if Viewer.maxReqLevelBox then Viewer.maxReqLevelBox:SetText("") end
-
-        Viewer.currentPage = 1
-
-        Cache.filteredResults = {}
-        Cache.lastFilterState = nil
-        Cache.uniqueValuesValid = false
-        Cache.uniqueValuesContext = {}
-
-        Viewer:UpdateSortHeaders()
-        Viewer:RefreshData()
-        Viewer:UpdateClearAllButton()
-        Viewer:UpdateFilterButtonStates()
+        Viewer:ClearDiscoveriesFilters()
     end)
 
     self.refreshDataBtn = refreshDataBtn

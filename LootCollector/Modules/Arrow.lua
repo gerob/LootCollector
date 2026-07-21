@@ -300,6 +300,11 @@ function Arrow:FindBestTarget()
             local isVisibleOnThisMap = (targetIz == 0 or targetIz == currentZoneID)
             
             if isVisibleOnThisMap and type(d) == "table" and d.c == currentContinent and d.z == currentZoneID and d.xy and L:DiscoveryPassesFilters(d) then
+                local Viewer = L:GetModule("Viewer", true)
+                if Viewer and Viewer.IsFilterMapEnabled and Viewer:IsFilterMapEnabled()
+                    and Viewer.DiscoveryPassesViewerFilters and not Viewer:DiscoveryPassesViewerFilters(d) then
+                    return
+                end
                 if not (autoTrackUnlooted and L:IsLootedByChar(guid)) then
                     if d.onHold and not isMine(d) then
                         

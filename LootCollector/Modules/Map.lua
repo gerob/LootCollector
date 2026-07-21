@@ -680,25 +680,13 @@ local function passesFiltersLocal(d, searchTerm)
     if not L:DiscoveryPassesFilters(d) then
         return false
     end
-    -- Optional "Filter by Deep Filter" integration: gate item discoveries by the
-    -- Viewer's Deep Filter expressions (tooltip keyword logic). Vendors have no
-    -- item tooltip so they are left unaffected.
-    -- Map path uses Scanner RAM cache only — never SetHyperlink here (avoids
-    -- hitching map/minimap rebuilds). Uncached items are treated as non-matches
-    -- until Viewer/Scanner has warmed fullText (same outcome as an empty scan).
+    -- Filter Map: gate pins by Discoveries Viewer filters (incl. Deep Filter).
+    -- Overlapping map knobs are already skipped inside DiscoveryPassesFilters.
     local mf = L.db and L.db.char and L.db.char.mapFilters
-    if mf and mf.useDeepFilter then
+    if mf and mf.applyViewerFiltersOnMap then
         local Viewer = L:GetModule("Viewer", true)
-        if Viewer and Viewer.HasDeepFilters and Viewer:HasDeepFilters() then
-            local Constants = L:GetModule("Constants", true)
-            local isVendor = (Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET) or d.vendorType
-            if not isVendor then
-                local Scanner = L:GetModule("Scanner", true)
-                local fullText = Scanner and Scanner.GetCachedFullText and Scanner:GetCachedFullText(d.i, d.il) or ""
-                if not Viewer:MatchesDeepFilter(fullText) then
-                    return false
-                end
-            end
+        if Viewer and Viewer.DiscoveryPassesViewerFilters and not Viewer:DiscoveryPassesViewerFilters(d) then
+            return false
         end
     end
     if searchTerm and searchTerm ~= "" then
@@ -1674,8 +1662,9 @@ local function BuildFilterEasyMenu()
     keepShownOnClick = true,
     isNotRadio = true,
     func = function()
-        L.db.profile.mapFilters.hideSearchBar = not L.db.profile.mapFilters.hideSearchBar
-        Map:ToggleSearchUI(not L.db.profile.mapFilters.hideSearchBar)
+        local mf = L.db.profile.mapFilters
+        local show = mf.hideSearchBar -- if currently hidden, show; else hide
+        Map:ToggleSearchUI(show)
     end
   })
   
@@ -1693,20 +1682,32 @@ local function BuildFilterEasyMenu()
 
   do
     local Viewer = L:GetModule("Viewer", true)
-    local dfCount = (Viewer and Viewer.deepSearchFilters) and #Viewer.deepSearchFilters or 0
-    local dfLabel = "Filter by Deep Filter"
-    if dfCount > 0 then dfLabel = dfLabel .. " (" .. dfCount .. ")" end
+    local filterMapOn = f.applyViewerFiltersOnMap
     table.insert(menu, {
-        text = dfLabel,
-        desc = "Also hide map/minimap icons whose item tooltip doesn't match the Viewer's Deep Filter.",
-        checked = f.useDeepFilter,
+        text = "Filter Map",
+        desc = "Apply Discoveries Viewer filters (including Deep Filter) to map/minimap pins.",
+        checked = filterMapOn and true or false,
         keepShownOnClick = true,
         isNotRadio = true,
         func = function()
-            L.db.char.mapFilters.useDeepFilter = not L.db.char.mapFilters.useDeepFilter
-            Map.cacheIsDirty = true
-            Map:Update()
-            Map:UpdateMinimap()
+            if Viewer and Viewer.SetFilterMapEnabled then
+                Viewer:SetFilterMapEnabled(not Viewer:IsFilterMapEnabled())
+            else
+                L.db.char.mapFilters = L.db.char.mapFilters or {}
+                L.db.char.mapFilters.applyViewerFiltersOnMap = not L.db.char.mapFilters.applyViewerFiltersOnMap
+                Map.cacheIsDirty = true
+                Map:Update()
+                Map:UpdateMinimap()
+            end
+        end
+    })
+    table.insert(menu, {
+        text = "Clear Discoveries Filters",
+        notCheckable = true,
+        func = function()
+            if Viewer and Viewer.ClearDiscoveriesFilters then
+                Viewer:ClearDiscoveriesFilters()
+            end
         end
     })
   end
@@ -2854,6 +2855,30 @@ function Map:EnsureSearchUI()
 
     self._searchFrame = f
     self._searchBox = editBox
+end
+
+-- Show/hide the world-map search bar ("Filter:" + Find/Clear).
+-- show=true creates the UI if needed and displays it; show=false hides it and clears the term.
+function Map:ToggleSearchUI(show)
+    if not (L.db and L.db.profile and L.db.profile.mapFilters) then return end
+    L.db.profile.mapFilters.hideSearchBar = not show
+    -- Keep Settings toggle in sync when present.
+    if L.db.profile.mapFilters.showMapFilter ~= nil then
+        L.db.profile.mapFilters.showMapFilter = show and true or false
+    end
+
+    if show then
+        self:EnsureSearchUI()
+        if self._searchFrame then
+            self._searchFrame:Show()
+        end
+    else
+        if self._searchBox then self._searchBox:SetText("") end
+        if self._searchResultsFrame then self._searchResultsFrame:Hide() end
+        if self._searchFrame then self._searchFrame:Hide() end
+        self.cacheIsDirty = true
+        if self.Update then self:Update() end
+    end
 end
 
 function Map:ExecuteSearch()

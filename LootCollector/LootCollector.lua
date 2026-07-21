@@ -204,6 +204,7 @@ local dbDefaults = {
             minRarity = 0,
             usableByClasses = {},
             allowedEquipLoc = {},
+            applyViewerFiltersOnMap = false,
 			enableChatLinkIntegration = true,
 			disableProximityList = true,
 			filterButtonLocked = true,
@@ -643,7 +644,7 @@ function LootCollector:GetFilters()
     combined.showMysticScrolls = f.showMysticScrolls ~= false
     combined.showWorldforged = f.showWorldforged ~= false
     combined.showVendors = f.showVendors ~= false
-    combined.useDeepFilter = f.useDeepFilter or false
+    combined.applyViewerFiltersOnMap = f.applyViewerFiltersOnMap or false
     combined.autoTrackNearest = f.autoTrackNearest or false
 
     
@@ -804,6 +805,10 @@ function LootCollector:DiscoveryPassesFilters(d)
     local f = self:GetFilters()
     if not d or f.hideAll then return false end
 
+    -- When Filter Map is ON, Viewer owns overlapping dimensions (slots, usable-by,
+    -- rarity, looted, collected ME). Skip those map knobs so they cannot fight Viewer.
+    local skipOverlap = f.applyViewerFiltersOnMap
+
     local dt = d and (d.dt or (Constants and Constants.DISCOVERY_TYPE.UNKNOWN) or 0)
     if (Constants and dt == Constants.DISCOVERY_TYPE.BLACKMARKET) or (d and d.vendorType) then
         return f.showVendors ~= false
@@ -812,8 +817,10 @@ function LootCollector:DiscoveryPassesFilters(d)
     local s = self:GetDiscoveryStatus(d)
     if (s == STATUS_UNCONFIRMED and f.hideUnconfirmed) or
        (s == STATUS_FADING and f.hideFaded) or
-       (s == STATUS_STALE and f.hideStale) or
-       (f.hideLooted and d.g and self:IsLootedByChar(d.g)) then
+       (s == STATUS_STALE and f.hideStale) then
+        return false
+    end
+    if not skipOverlap and f.hideLooted and d.g and self:IsLootedByChar(d.g) then
         return false
     end
 
@@ -821,7 +828,7 @@ function LootCollector:DiscoveryPassesFilters(d)
         return false
     end
 
-    if f.hideCollectedME and Constants and d.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL and d.i and d.i > 0 and self:IsMysticEnchantCollected(d.i) then
+    if not skipOverlap and f.hideCollectedME and Constants and d.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL and d.i and d.i > 0 and self:IsMysticEnchantCollected(d.i) then
         return false
     end
 	
@@ -829,15 +836,17 @@ function LootCollector:DiscoveryPassesFilters(d)
         return false
     end
 
-    local quality = d.q or 0
-    if quality < (f.minRarity or 0) then return false end
+    if not skipOverlap then
+        local quality = d.q or 0
+        if quality < (f.minRarity or 0) then return false end
+    end
 
     if not Constants then return true end
 
     if dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL and not f.showMysticScrolls then return false end
     if dt == Constants.DISCOVERY_TYPE.WORLDFORGED  and not f.showWorldforged  then return false end
 
-    if next(f.usableByClasses) then
+    if not skipOverlap and next(f.usableByClasses) then
         local canBeUsed = false
         local isMysticScroll = (d.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL)
         if isMysticScroll then
@@ -866,7 +875,7 @@ function LootCollector:DiscoveryPassesFilters(d)
         if not canBeUsed then return false end
     end
 
-    if next(f.allowedEquipLoc) then
+    if not skipOverlap and next(f.allowedEquipLoc) then
         local equipLoc = _resolveEquipLoc(d, Constants)
         
         if equipLoc and not f.allowedEquipLoc[equipLoc] then
@@ -1487,6 +1496,18 @@ function LootCollector:OnInitialize()
     self.db.char        = self.db.char or {}
     self.db.char.looted = self.db.char.looted or {}
     self.db.char.hidden = self.db.char.hidden or {}
+    self.db.char.mapFilters = self.db.char.mapFilters or {}
+
+    -- Migrate legacy "Filter by Deep Filter" into Filter Map (once).
+    local cmf = self.db.char.mapFilters
+    if cmf.useDeepFilter and not cmf._migratedUseDeepFilterToFilterMap then
+        cmf.applyViewerFiltersOnMap = true
+        cmf.useDeepFilter = nil
+        cmf._migratedUseDeepFilterToFilterMap = true
+    end
+    if cmf.applyViewerFiltersOnMap == nil then
+        cmf.applyViewerFiltersOnMap = false
+    end
 
     self:EnsureDatabaseInitialized()
     
