@@ -653,7 +653,7 @@ function LootCollector:GetFilters()
     combined.pinSize = ui.pinSize or 16
     combined.minimapPinSize = ui.minimapPinSize or 10
     combined.disableFadeEffect = ui.disableFadeEffect or false
-    combined.showZoneSummaries = ui.showZoneSummaries or false
+    combined.showZoneSummaries = false -- Feature disabled (incomplete ZoneRelationshipsC data)
     combined.hideSearchBar = ui.hideSearchBar or false
     combined.disableProximityList = ui.disableProximityList or false
 	combined.enableChatLinkIntegration = ui.enableChatLinkIntegration ~= false

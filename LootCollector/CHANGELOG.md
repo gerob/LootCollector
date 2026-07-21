@@ -10,6 +10,7 @@
 - **Renamed Discoveries "Collected" filter to "Enchant"** so it is clearer this filters by Mystic Enchant collection, not pin loot status.
 - **Hidden Enchant filter on CoA realms** (Mystic Enchants do not exist there); any leftover Enchant filter state is cleared.
 - **Added Filter Map:** Opt-in toggle (Discoveries button + map menu) applies active Discoveries filters—including Deep Filter—to map/minimap pins and Arrow. Overlapping map knobs (slots, usable-by, min rarity, hide looted, hide collected ME) are skipped while it is on. Map menu also has Clear Discoveries Filters. Legacy "Filter by Deep Filter" migrates to Filter Map.
+- **Disabled Show Zone Summary** on the map menu for now (continent count badges only had Mulgore stub data).
 
 - Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
 - Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.

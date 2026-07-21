@@ -1668,17 +1668,8 @@ local function BuildFilterEasyMenu()
     end
   })
   
-  table.insert(menu, {
-      text = "Show Zone Summary",
-      desc = "Show total discovery counts for zones on the continent map.",
-      checked = f.showZoneSummaries,
-      keepShownOnClick = true,
-      isNotRadio = true,
-      func = function() 
-          L.db.profile.mapFilters.showZoneSummaries = not L.db.profile.mapFilters.showZoneSummaries
-          Map:Update() 
-      end
-  })
+  -- Zone Summary disabled: ZoneRelationshipsC only has Mulgore stub data.
+  -- Keep the draw path gated; do not expose a menu toggle until data is complete.
 
   do
     local Viewer = L:GetModule("Viewer", true)
