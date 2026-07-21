@@ -284,17 +284,20 @@ function Viewer:HasDeepFilters()
     return self.deepSearchCompiled ~= nil and #self.deepSearchCompiled > 0
 end
 
--- Public matcher (used by the Viewer list and by Filter Map / map pins).
--- Returns true if the given tooltip text satisfies every Deep Filter expression,
--- or if no filters are set.
-function Viewer:MatchesDeepFilter(tooltipText)
+-- Public matcher: every Deep Filter expression must match the given haystack
+-- (lowercased name + zone + tooltip text, space-joined).
+function Viewer:MatchesDeepFilter(haystack)
     local compiled = self.deepSearchCompiled
     if not compiled or #compiled == 0 then return true end
-    if not tooltipText or tooltipText == "" then return false end
+    if not haystack or haystack == "" then return false end
     for i = 1, #compiled do
-        if not EvalDeepRow(compiled[i], tooltipText) then return false end
+        if not EvalDeepRow(compiled[i], haystack) then return false end
     end
     return true
+end
+
+function Viewer:BuildDeepFilterHaystack(name, zone, tooltip)
+    return string.lower(tostring(name or "") .. " " .. tostring(zone or "") .. " " .. tostring(tooltip or ""))
 end
 
 function Viewer:IsFilterMapEnabled()
@@ -499,6 +502,36 @@ local function GetLocalizedZoneName(discovery)
     return localizedZoneName
 end
 
+-- Viewer list row: name OR zone OR tooltip (vendors use vendor name).
+function Viewer:MatchesDeepFilterOnRow(data)
+    if not data then return false end
+    local name = data.isVendor and (data.vendorName or "") or (data.itemName or "")
+    local zone = data.zoneNameStr or (data.discovery and GetLocalizedZoneName(data.discovery)) or ""
+    local tip = data.tooltipText or ""
+    return self:MatchesDeepFilter(self:BuildDeepFilterHaystack(name, zone, tip))
+end
+
+-- Map/Arrow discovery record: name + zone + cached tooltip (no SetHyperlink).
+function Viewer:MatchesDeepFilterOnDiscoveryRecord(d)
+    if not d then return false end
+    local Constants = L:GetModule("Constants", true)
+    local isVendor = (Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET) or d.vendorType
+    local name = ""
+    if isVendor then
+        name = d.n or d.vendorName or d.name or ""
+    else
+        local itemName = GetItemInfo(d.il or d.i or 0)
+        name = itemName or ""
+    end
+    local zone = GetLocalizedZoneName(d) or ""
+    local tip = ""
+    if not isVendor then
+        local Scanner = L:GetModule("Scanner", true)
+        tip = Scanner and Scanner.GetCachedFullText and Scanner:GetCachedFullText(d.i, d.il) or ""
+    end
+    return self:MatchesDeepFilter(self:BuildDeepFilterHaystack(name, zone, tip))
+end
+
 function Viewer:EnsureDeepFiltersLoaded()
     if L.db and L.db.profile then
         if type(L.db.profile.deepSearchFilters) ~= "table" then
@@ -514,7 +547,7 @@ function Viewer:EnsureDeepFiltersLoaded()
 end
 
 -- Viewer filters that should gate map pins when Filter Map is ON.
--- Excludes free-text search and date sort (Viewer-only).
+-- Date sort is Viewer-only and excluded.
 function Viewer:HasViewerFiltersForMap()
     self:EnsureDeepFiltersLoaded()
     if self.deepSearchFilters and #self.deepSearchFilters > 0 then return true end
@@ -546,10 +579,8 @@ function Viewer:DiscoveryPassesViewerFilters(d)
     local isMystic = Constants and d.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
     local isWF = not isVendor and not isMystic
 
-    if self:HasDeepFilters() and not isVendor then
-        local Scanner = L:GetModule("Scanner", true)
-        local fullText = Scanner and Scanner.GetCachedFullText and Scanner:GetCachedFullText(d.i, d.il) or ""
-        if not self:MatchesDeepFilter(fullText) then
+    if self:HasDeepFilters() then
+        if not self:MatchesDeepFilterOnDiscoveryRecord(d) then
             return false
         end
     end
@@ -1095,8 +1126,8 @@ local GetCascadedFilterContext, GetFilteredDatasetForUniqueValues, GetUniqueValu
 GetCascadedFilterContext = function(excludeColumn)
     local context = {
         currentFilter = Viewer.currentFilter,
-        searchTerm = Viewer.searchTerm,
-        excludeColumn = excludeColumn
+        excludeColumn = excludeColumn,
+        hasDeepFilters = Viewer:HasDeepFilters()
     }
 
     context.activeFilters = {}
@@ -1205,18 +1236,8 @@ GetFilteredDatasetForUniqueValues = function(context)
                 if not data.isVendor or data.vendorType ~= "MS" then passed = false end
             end
 
-            if passed and context.searchTerm and context.searchTerm ~= "" then
-                local searchLower = _strlower(context.searchTerm)
-                local nameMatch = false
-                if data.isVendor then
-                    nameMatch = _strfind(_strlower(data.vendorName or ""), searchLower, 1, true)
-                else
-                    nameMatch = _strfind(_strlower(data.itemName or ""), searchLower, 1, true)
-                end
-                
-                local zoneName = GetLocalizedZoneName(data.discovery)
-                local zoneMatch = _strfind(_strlower(zoneName), searchLower, 1, true)
-                if not (nameMatch or zoneMatch) then passed = false end
+            if passed and context.hasDeepFilters then
+                if not Viewer:MatchesDeepFilterOnRow(data) then passed = false end
             end
 
             if passed and context.activeFilters.slot then
@@ -1341,7 +1362,14 @@ end
 
 GetUniqueValues = function(column)
     local context = GetCascadedFilterContext(column)
-    local cacheKey = column .. ":" .. context.currentFilter .. ":" .. context.searchTerm
+    local deepKey = ""
+    if context.hasDeepFilters and Viewer.deepSearchFilters then
+        local dsf = {}
+        for i = 1, #Viewer.deepSearchFilters do dsf[i] = string.lower(Viewer.deepSearchFilters[i]) end
+        _tsort(dsf)
+        deepKey = _tconcat(dsf, "|")
+    end
+    local cacheKey = column .. ":" .. context.currentFilter .. ":" .. deepKey
 
     local filterKeys = {}
     for filterType, filters in pairs(context.activeFilters) do
@@ -2465,31 +2493,13 @@ function Viewer:GetFilteredDiscoveries()
         end,
 
         searchFilter = function(data)
-            data.matchedViaTooltip = false
-            if self.searchTerm == "" then return true end
-
-            local searchLower  = string.lower(self.searchTerm)
-            local nameToSearch = data.isVendor and data.vendorName or data.itemName
-            local nameMatch    = string.find(string.lower(nameToSearch or ""), searchLower, 1, true)
-
-            local zoneName  = GetLocalizedZoneName(data.discovery)
-            local zoneMatch = string.find(string.lower(zoneName), searchLower, 1, true)
-
-            local tooltipMatch = false
-            if Viewer.searchTooltipsEnabled and data.tooltipText then
-                tooltipMatch = string.find(data.tooltipText, searchLower, 1, true) ~= nil
-            end
-            
-            data.matchedViaTooltip = (not nameMatch and not zoneMatch and tooltipMatch)
-            return nameMatch or zoneMatch or tooltipMatch
+            -- Live free-text search removed; chips (deepSearchFilters) handle search.
+            return true
         end,
 
-        -- Deep Search FILTER: successive keyword expressions over tooltip text.
-        -- Separate from the Deep Search checkbox above (which augments the free
-        -- text search box). Each compiled row is its own AND/OR expression; an
-        -- item is kept only if it satisfies EVERY row (rows narrow further).
+        -- Search chips: name OR zone OR tooltip; rows AND together.
         deepSearchFilter = function(data)
-            return self:MatchesDeepFilter(data.tooltipText)
+            return self:MatchesDeepFilterOnRow(data)
         end,
 
         columnFilters = {
@@ -2573,8 +2583,8 @@ function Viewer:GetFilteredDiscoveries()
             
             if not filterPredicates.mainFilter(data) then passed = false end
             if passed and not filterPredicates.searchFilter(data) then passed = false end
-            -- Deep Search keyword filter (tooltip-based) applies to item views only
-            if passed and not isVendorView and not filterPredicates.deepSearchFilter(data) then passed = false end
+            -- Search chips (name/zone/tooltip) — includes vendors (name match).
+            if passed and not filterPredicates.deepSearchFilter(data) then passed = false end
 
             if passed and not data.isVendor and not data.isMystic then
                 if self.minReqLevel and (data.minLevel or 0) < self.minReqLevel then passed = false end
@@ -2780,7 +2790,6 @@ end
 function Viewer:GetFilterStateHash()
     local hashParts = {
         self.currentFilter,
-        self.searchTerm,
         self.sortColumn,
         tostring(self.sortAscending),
         tostring(self.minReqLevel),
@@ -2956,7 +2965,6 @@ local function GetColorForDiscovery(discovery, itemID)
 end
 
 function Viewer:HasActiveFilters()    
-    if self.searchTerm and self.searchTerm ~= "" then return true end
     if self.deepSearchFilters and #self.deepSearchFilters > 0 then return true end
     if self.minReqLevel or self.maxReqLevel then return true end
     if size(self.columnFilters.zone) > 0 then return true end
@@ -3590,7 +3598,7 @@ Version Beta-1.0r:
 - Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
 - Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.
 - Made Vendors discoverable and enabled 2 more types of vendors besides Blackmarket (1 broadcast per day)
-- Deep Search Tooltip Filtering: Search items by stats, spells, or effects, and filter map pins with matching keywords.
+- Merged Search + Deep Filter: Search box + Add commits chips matching name, zone, or tooltip (Deep Search checkbox removed).
 - Added the ability to filter out specific addon version and made 0.8.5 the minimum version by default. People are still using very old versions of the addon.
 - Multiple ways of self-cleaning duplicates and bad items received from older addons.
 - A lot of other bug fixes and performance tweaks, like the big hang when you Alt+Tab back into the game.
@@ -4041,16 +4049,23 @@ beta-0.8.6r:
         if Viewer.searchTypingTimer then C_Timer.CancelTimer(Viewer.searchTypingTimer) end
         searchBox:SetText("")
         searchBox:ClearFocus()
-        Viewer.searchTerm = ""
-        Viewer.currentPage = 1
-        Viewer:RefreshData()
-        Viewer:UpdateClearAllButton()
         clearBtn:Hide()
     end)
     clearBtn:Hide() 
     
+    local searchAddBtn = CreateFrame("Button", nil, window)
+    searchAddBtn:SetSize(48, 18)
+    searchAddBtn:SetPoint("LEFT", searchBox, "RIGHT", 6, 0)
+    searchAddBtn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+    searchAddBtn:SetBackdropColor(0.12, 0.20, 0.14, 0.90)
+    searchAddBtn:SetBackdropBorderColor(0.40, 0.60, 0.40, 0.90)
+    local searchAddBtnText = searchAddBtn:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    searchAddBtnText:SetPoint("CENTER", 0, 0)
+    searchAddBtnText:SetText("Add")
+    searchAddBtn:SetFontString(searchAddBtnText)
+
     local reqLevelLabel = window:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
-    reqLevelLabel:SetPoint("LEFT", searchBox, "RIGHT", 15, 0)
+    reqLevelLabel:SetPoint("LEFT", searchAddBtn, "RIGHT", 15, 0)
     reqLevelLabel:SetText("|cffaaaaaa Req Lvl:|r")
 
     local minReqLevelBox = CreateFrame("EditBox", nil, window)
@@ -4097,27 +4112,9 @@ beta-0.8.6r:
     maxBorder:SetTexture("Interface\\Buttons\\WHITE8X8")
     maxBorder:SetVertexColor(0.30, 0.30, 0.40, 0.80)
 
-    local tooltipCheck = CreateFrame("CheckButton", "LCSearchTooltipCheck", window, "UICheckButtonTemplate")
-    tooltipCheck:SetSize(24, 24)
-    tooltipCheck:SetPoint("LEFT", maxReqLevelBox, "RIGHT", 15, 0)
-    
-    if L.db and L.db.profile and L.db.profile.searchTooltipsEnabled ~= nil then
-        Viewer.searchTooltipsEnabled = L.db.profile.searchTooltipsEnabled
-    else
-        Viewer.searchTooltipsEnabled = false
-    end
-    tooltipCheck:SetChecked(Viewer.searchTooltipsEnabled)    
-    local tooltipLabel = tooltipCheck:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
-    tooltipLabel:SetPoint("LEFT", tooltipCheck, "RIGHT", 2, 0)
-    tooltipLabel:SetText("Deep Search")    
-
-
-    
     ------------------------------------------------------------------
-    -- Deep Search FILTER (multi-term tooltip keyword filter, AND/OR)
+    -- Search chips (Deep Filter list): Add via search box; manage in Filters panel
     ------------------------------------------------------------------
-    -- deepSearchFilters is a list of expression strings, shared by reference with
-    -- the saved profile so edits persist. deepSearchCompiled is the parsed form.
     if L.db and L.db.profile then
         if type(L.db.profile.deepSearchFilters) ~= "table" then L.db.profile.deepSearchFilters = {} end
         Viewer.deepSearchFilters = L.db.profile.deepSearchFilters
@@ -4130,7 +4127,7 @@ beta-0.8.6r:
 
     local deepFilterBtn = CreateFrame("Button", nil, window)
     deepFilterBtn:SetSize(96, DFB_H)
-    deepFilterBtn:SetPoint("LEFT", tooltipLabel, "RIGHT", 12, 0)
+    deepFilterBtn:SetPoint("LEFT", maxReqLevelBox, "RIGHT", 12, 0)
     deepFilterBtn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
     deepFilterBtn:SetBackdropColor(0.10, 0.10, 0.16, 0.90)
     deepFilterBtn:SetBackdropBorderColor(0.30, 0.30, 0.45, 0.85)
@@ -4138,13 +4135,10 @@ beta-0.8.6r:
     dfbText:SetPoint("CENTER", 0, 0)
     deepFilterBtn:SetFontString(dfbText)
 
-    -- The popup panel
+    -- Chip list panel (no add box — search row commits chips)
     local deepPanel = CreateFrame("Frame", "LCDeepFilterPanel", window)
-    deepPanel:SetSize(250, 210)
+    deepPanel:SetSize(250, 190)
     deepPanel:SetPoint("TOPLEFT", deepFilterBtn, "BOTTOMLEFT", 0, -4)
-    -- Top normal strata so it stays above the window even when the Viewer is
-    -- shown over the world map (a FULLSCREEN-strata frame). Frame level is also
-    -- bumped explicitly on each open (see the button OnClick).
     deepPanel:SetFrameStrata("FULLSCREEN_DIALOG")
     deepPanel:SetToplevel(true)
     deepPanel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
@@ -4156,59 +4150,36 @@ beta-0.8.6r:
 
     local dpTitle = deepPanel:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
     dpTitle:SetPoint("TOPLEFT", 10, -8)
-    dpTitle:SetText("Deep Search Filter")
+    dpTitle:SetText("Active Searches")
     dpTitle:SetTextColor(1, 0.82, 0)
 
-    local addBox = CreateFrame("EditBox", nil, deepPanel)
-    addBox:SetSize(170, 18)
-    addBox:SetPoint("TOPLEFT", 10, -30)
-    addBox:SetAutoFocus(false)
-    addBox:SetFontObject(UI_FONT_NAME)
-    addBox:SetTextColor(1, 1, 1, 1)
-    addBox:SetTextInsets(4, 4, 0, 0)
-    local abBg = addBox:CreateTexture(nil, "BACKGROUND"); abBg:SetAllPoints(true); abBg:SetTexture("Interface\\Buttons\\WHITE8X8"); abBg:SetVertexColor(0.08, 0.08, 0.14, 0.90)
-    local abBorder = addBox:CreateTexture(nil, "BORDER"); abBorder:SetPoint("TOPLEFT", -1, 1); abBorder:SetPoint("BOTTOMRIGHT", 1, -1); abBorder:SetTexture("Interface\\Buttons\\WHITE8X8"); abBorder:SetVertexColor(0.30, 0.30, 0.40, 0.80)
-
-    local addBtn = CreateFrame("Button", nil, deepPanel)
-    addBtn:SetSize(48, 18)
-    addBtn:SetPoint("LEFT", addBox, "RIGHT", 6, 0)
-    addBtn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-    addBtn:SetBackdropColor(0.12, 0.20, 0.14, 0.90)
-    addBtn:SetBackdropBorderColor(0.40, 0.60, 0.40, 0.90)
-    local addBtnText = addBtn:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
-    addBtnText:SetPoint("CENTER", 0, 0); addBtnText:SetText("Add")
-    addBtn:SetFontString(addBtnText)
-
     local listContainer = CreateFrame("Frame", nil, deepPanel)
-    listContainer:SetPoint("TOPLEFT", 10, -56)
-    listContainer:SetPoint("TOPRIGHT", -10, -56)
-    listContainer:SetHeight(140)
+    listContainer:SetPoint("TOPLEFT", 10, -28)
+    listContainer:SetPoint("TOPRIGHT", -10, -28)
+    listContainer:SetHeight(130)
 
     local dpHint = deepPanel:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
     dpHint:SetPoint("BOTTOMLEFT", 10, 8)
     dpHint:SetPoint("BOTTOMRIGHT", -10, 8)
     dpHint:SetJustifyH("LEFT")
     dpHint:SetTextColor(0.55, 0.55, 0.60)
-    dpHint:SetText("Each row narrows further (AND). Use AND / OR inside a row. Keywords match tooltips.")
+    dpHint:SetText("Matches name, zone, or tooltip. Each chip narrows further. Use AND / OR in a chip.")
 
-    -- Highlight the AND / OR operators inside a displayed expression.
     local function colorizeExpr(s)
         s = s:gsub("(%s)([Aa][Nn][Dd])(%s)", "%1|cff66ccff%2|r%3")
         s = s:gsub("(%s)([Oo][Rr])(%s)", "%1|cffff9944%2|r%3")
         return s
     end
 
-    -- Rebuilds the panel widgets from Viewer.deepSearchFilters (the expression
-    -- list). Exposed as a method so the Clear-All handlers can refresh it too.
     function Viewer:RefreshDeepFilterPanel()
         local filters = self.deepSearchFilters or {}
         local n = #filters
         if n > 0 then
-            dfbText:SetText("Deep Filter (" .. n .. ")")
+            dfbText:SetText("Filters (" .. n .. ")")
             dfbText:SetTextColor(1, 0.82, 0)
             deepFilterBtn:SetBackdropBorderColor(1, 0.82, 0, 0.95)
         else
-            dfbText:SetText("Deep Filter")
+            dfbText:SetText("Filters")
             dfbText:SetTextColor(0.90, 0.90, 0.90)
             deepFilterBtn:SetBackdropBorderColor(0.30, 0.30, 0.45, 0.85)
         end
@@ -4253,7 +4224,8 @@ beta-0.8.6r:
     end
 
     local function addDeepExpr()
-        local t = addBox:GetText()
+        if Viewer.searchTypingTimer then C_Timer.CancelTimer(Viewer.searchTypingTimer) end
+        local t = searchBox:GetText()
         t = t and strtrim(t) or ""
         if t ~= "" then
             local lower = string.lower(t)
@@ -4263,46 +4235,45 @@ beta-0.8.6r:
             end
             if not exists then _tinsert(Viewer.deepSearchFilters, t) end
         end
-        addBox:SetText("")
+        searchBox:SetText("")
+        clearBtn:Hide()
+        searchBox:ClearFocus()
         Viewer:RebuildDeepCompiled()
         Viewer:RefreshDeepFilterPanel()
         Viewer.currentPage = 1
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
         Viewer:RefreshData()
         Viewer:UpdateClearAllButton()
         Viewer:NotifyMapDeepFilterChanged()
     end
-    addBox:SetScript("OnEnterPressed", addDeepExpr)
-    addBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    addBtn:SetScript("OnClick", addDeepExpr)
+    searchAddBtn:SetScript("OnClick", addDeepExpr)
 
     deepFilterBtn:SetScript("OnClick", function()
         if deepPanel:IsShown() then
             deepPanel:Hide()
         else
             Viewer:RefreshDeepFilterPanel()
-            -- Force above the window (and anything it may be stacked over) on
-            -- every open, so re-opening never lands behind the UI.
             deepPanel:SetFrameStrata("FULLSCREEN_DIALOG")
             deepPanel:SetFrameLevel((window:GetFrameLevel() or 1) + 50)
             deepPanel:Show()
             deepPanel:Raise()
-            addBox:SetFocus()
         end
     end)
     deepFilterBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Deep Search Filter", 1, 1, 1)
-        GameTooltip:AddLine("Filter items by keywords in their tooltip.", 1, 0.82, 0, true)
-        GameTooltip:AddLine("Add rows like 'intellect and spell power', then 'haste or spell crit'.", 0.8, 0.8, 0.8, true)
-        GameTooltip:AddLine("Each row narrows further; use AND / OR within a row.", 0.8, 0.8, 0.8, true)
+        GameTooltip:SetText("Active Searches", 1, 1, 1)
+        GameTooltip:AddLine("Shows search chips added from the Search box.", 1, 0.82, 0, true)
+        GameTooltip:AddLine("Each chip matches item name, zone, or tooltip. Use AND / OR inside a chip.", 0.8, 0.8, 0.8, true)
         GameTooltip:Show(); GameTooltip:SetFrameStrata("TOOLTIP")
     end)
     deepFilterBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     Viewer.deepFilterPanel = deepPanel
+    Viewer.searchBox = searchBox
     Viewer:RefreshDeepFilterPanel()
 
-    -- Filter Map: apply Discoveries filters (incl. Deep Filter) to map/minimap pins.
+    -- Filter Map: apply Discoveries filters (incl. search chips) to map/minimap pins.
     local filterMapBtn = CreateFrame("Button", nil, window)
     filterMapBtn:SetSize(88, DFB_H)
     filterMapBtn:SetPoint("LEFT", deepFilterBtn, "RIGHT", 8, 0)
@@ -4336,20 +4307,13 @@ beta-0.8.6r:
     filterMapBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText("Filter Map", 1, 1, 1)
-        GameTooltip:AddLine("When on, map and minimap pins use your Discoveries filters (including Deep Filter).", 1, 0.82, 0, true)
+        GameTooltip:AddLine("When on, map and minimap pins use your Discoveries filters (including search chips).", 1, 0.82, 0, true)
         GameTooltip:AddLine("Map-only options (hide unconfirmed/faded, show WF/MS/vendors, etc.) still apply.", 0.8, 0.8, 0.8, true)
         GameTooltip:Show(); GameTooltip:SetFrameStrata("TOOLTIP")
     end)
     filterMapBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     Viewer:UpdateFilterMapButton()
 
-    local function showDeepSearchTooltip(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Deep Search", 1, 1, 1)
-        GameTooltip:AddLine("Searches item tooltips for stats (e.g., 'Strength', 'On use', 'Chance', 'hit').", 1, 0.82, 0, true)
-        GameTooltip:Show()
-    end
-    
     refreshDataBtn:ClearAllPoints()
     refreshDataBtn:SetPoint("LEFT", filterMapBtn, "RIGHT", 12, 0)
     refreshDataBtn:SetSize(110, BUTTON_HEIGHT)
@@ -4389,31 +4353,6 @@ beta-0.8.6r:
         print("|cff00ff00LootCollector Discord Invite:|r https://discord.gg/GmeSCJGdzs")
     end)
 
-    local tooltipLabelHover = CreateFrame("Button", nil, window)
-    tooltipLabelHover:SetPoint("TOPLEFT", tooltipLabel, "TOPLEFT")
-    tooltipLabelHover:SetPoint("BOTTOMRIGHT", tooltipLabel, "BOTTOMRIGHT")
-    tooltipLabelHover:EnableMouse(true)
-    tooltipLabelHover:SetScript("OnEnter", showDeepSearchTooltip)
-    tooltipLabelHover:SetScript("OnLeave", GameTooltip_Hide)
-    tooltipLabelHover:SetScript("OnClick", function()
-        tooltipCheck:Click()
-    end)
-
-    tooltipCheck:SetScript("OnClick", function(self)
-        Viewer.searchTooltipsEnabled = self:GetChecked()
-        if L.db and L.db.profile then
-            L.db.profile.searchTooltipsEnabled = Viewer.searchTooltipsEnabled
-        end
-        Viewer.currentPage = 1
-        -- PERF: this used to force a full chunked rebuild of the entire
-        -- discoveries cache (thousands of rows) just to flip a flag that is
-        -- only read by the search predicate. Invalidate the filtered-results
-        -- cache instead; the underlying row cache is untouched.
-        Cache.filteredResults = {}
-        Cache.lastFilterState = nil
-        Viewer:RefreshData()
-    end)
-
     local function UpdateReqLevelFilter()
         Viewer.minReqLevel = tonumber(minReqLevelBox:GetText())
         Viewer.maxReqLevel = tonumber(maxReqLevelBox:GetText())
@@ -4441,8 +4380,8 @@ beta-0.8.6r:
         if autocompleteDropdown then return autocompleteDropdown end
         autocompleteDropdown = CreateFrame("Frame", "LootCollectorSearchAutocomplete", Viewer.window)
         autocompleteDropdown:SetSize(200, 20)
-        autocompleteDropdown:SetFrameStrata("DIALOG")
-        autocompleteDropdown:SetFrameLevel(FRAME_LEVEL)
+        autocompleteDropdown:SetFrameStrata("FULLSCREEN_DIALOG")
+        autocompleteDropdown:SetFrameLevel((Viewer.window:GetFrameLevel() or 1) + 60)
         autocompleteDropdown:Hide()
 
         autocompleteDropdown:SetBackdrop({
@@ -4456,7 +4395,7 @@ beta-0.8.6r:
         local content = CreateFrame("Frame", nil, autocompleteDropdown)
         content:SetPoint("TOPLEFT", 5, -5)
         content:SetPoint("BOTTOMRIGHT", -5, 5)
-        content:SetFrameLevel(autocompleteDropdown:GetFrameLevel())
+        content:SetFrameLevel(autocompleteDropdown:GetFrameLevel() + 1)
 
         autocompleteDropdown.content = content
         autocompleteDropdown.buttons = {}
@@ -4473,39 +4412,52 @@ beta-0.8.6r:
     local function getSearchCandidates(text)
         if not text or text == "" then return {} end
         local textLower = _strlower(text)
+        local prefixLen = string.len(textLower)
         local candidates = {}
-        candidates[math.min(#Cache.discoveries, 100)] = nil 
         local seen = {}
+        local MAX_CANDIDATES = 10
 
-        if Cache.discoveriesBuilt then
-            for _, data in ipairs(Cache.discoveries) do
-                if data.itemName then
-                    local nameLower = _strlower(data.itemName)
-                    if string.sub(nameLower, 1, string.len(textLower)) == textLower then
-                        if not seen[data.itemName] then
-                            _tinsert(candidates, data.itemName)
-                            seen[data.itemName] = true
-                        end
-                    end
-                end
+        local rows
+        if Cache.discoveriesBuilding then
+            rows = (Cache.discoveriesBuilt and Cache.discoveries) or {}
+        else
+            local filterState = Viewer:GetFilterStateHash()
+            if Cache.lastFilterState == filterState and Cache.filteredResults then
+                rows = Cache.filteredResults
+            else
+                rows = Viewer:GetFilteredDiscoveries() or {}
+            end
+        end
+        if not rows or #rows == 0 then return {} end
 
-                local zoneName = GetLocalizedZoneName(data.discovery)
-                if zoneName then
-                    local zoneLower = _strlower(zoneName)
-                    if string.sub(zoneLower, 1, string.len(textLower)) == textLower then
-                        if not seen[zoneName] then
-                            _tinsert(candidates, zoneName)
-                            seen[zoneName] = true
-                        end
-                    end
-                end
+        local function consider(label)
+            if not label or label == "" or seen[label] then return end
+            local lower = _strlower(label)
+            if string.sub(lower, 1, prefixLen) == textLower then
+                seen[label] = true
+                _tinsert(candidates, label)
             end
         end
 
+        for i = 1, #rows do
+            local data = rows[i]
+            if data then
+                if data.isVendor then
+                    consider(data.vendorName)
+                else
+                    consider(data.itemName)
+                end
+                local zoneName = data.zoneNameStr
+                if not zoneName and data.discovery then
+                    zoneName = GetLocalizedZoneName(data.discovery)
+                end
+                consider(zoneName)
+            end
+            if #candidates >= MAX_CANDIDATES then break end
+        end
+
         _tsort(candidates)
-        local limitedCandidates = {}
-        for i = 1, math.min(10, #candidates) do _tinsert(limitedCandidates, candidates[i]) end
-        return limitedCandidates
+        return candidates
     end
 
     local function updateAutocompleteSelection()
@@ -4530,14 +4482,16 @@ beta-0.8.6r:
         selectedSuggestionIndex = 0
 
         local dropdown = createAutocompleteDropdown()
+        dropdown:SetFrameStrata("FULLSCREEN_DIALOG")
+        dropdown:SetFrameLevel((Viewer.window:GetFrameLevel() or 1) + 60)
         local content = dropdown.content
+        content:SetFrameLevel(dropdown:GetFrameLevel() + 1)
 
         for _, button in ipairs(dropdown.buttons) do button:Hide() end
         dropdown.buttons = {}
-        dropdown.buttons[math.min(#candidates, 20)] = nil 
 
         local buttonHeight = 16
-        local maxHeight = 160 
+        local maxHeight = 160
         local totalHeight = math.min(#candidates * buttonHeight, maxHeight)
         dropdown:SetSize(200, totalHeight + 10)
 
@@ -4545,13 +4499,13 @@ beta-0.8.6r:
             local button = CreateFrame("Button", nil, content)
             button:SetSize(190, buttonHeight)
             button:SetPoint("TOPLEFT", 5, -(i - 1) * buttonHeight)
-            button:SetFrameLevel(FRAME_LEVEL)
+            button:SetFrameLevel(content:GetFrameLevel() + 1)
 
             local textObj = button:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
             textObj:SetPoint("LEFT", 5, 0)
             textObj:SetText(candidate)
             textObj:SetJustifyH("LEFT")
-            textObj:SetTextColor(1, 1, 1) 
+            textObj:SetTextColor(1, 1, 1)
 
             button:SetNormalTexture("Interface\\Buttons\\WHITE8X8")
             button:SetHighlightTexture("Interface\\Buttons\\WHITE8X8")
@@ -4560,12 +4514,8 @@ beta-0.8.6r:
 
             button:SetScript("OnClick", function()
                 searchBox:SetText(candidate)
-                searchBox:ClearFocus()
                 hideAutocompleteDropdown()
-                Viewer.searchTerm = candidate
-                Viewer.currentPage = 1
-                Viewer:RefreshData()
-                Viewer:UpdateClearAllButton()
+                addDeepExpr()
             end)
 
             button:SetScript("OnEnter", function()
@@ -4580,6 +4530,7 @@ beta-0.8.6r:
         dropdown:ClearAllPoints()
         dropdown:SetPoint("TOPLEFT", searchBox, "BOTTOMLEFT", 0, -2)
         dropdown:Show()
+        dropdown:Raise()
     end
 
     local function selectNextSuggestion()
@@ -4601,35 +4552,28 @@ beta-0.8.6r:
         if selectedSuggestionIndex < 1 or selectedSuggestionIndex > #autocompleteSuggestions then return end
         local suggestion = autocompleteSuggestions[selectedSuggestionIndex]
         searchBox:SetText(suggestion)
-        searchBox:ClearFocus()
         hideAutocompleteDropdown()
-        Viewer.searchTerm = suggestion
-        Viewer.currentPage = 1
-        Viewer:RefreshData()
-        Viewer:UpdateClearAllButton()
+        addDeepExpr()
     end
 
     searchBox:SetScript("OnTextChanged", function(self)
-        Viewer.searchTerm = self:GetText() or ""
-        if Viewer.searchTerm and Viewer.searchTerm ~= "" then
+        local text = self:GetText() or ""
+        if text ~= "" then
             clearBtn:Show()
-            showAutocompleteSuggestions(Viewer.searchTerm)
+            if Viewer.searchTypingTimer then C_Timer.CancelTimer(Viewer.searchTypingTimer) end
+            Viewer.searchTypingTimer = C_Timer.After(0.2, function()
+                showAutocompleteSuggestions(text)
+            end)
         else
             clearBtn:Hide()
             hideAutocompleteDropdown()
         end
-        if Viewer.searchTypingTimer then C_Timer.CancelTimer(Viewer.searchTypingTimer) end
-        Viewer.searchTypingTimer = C_Timer.After(0.2, function()
-            Viewer.currentPage = 1
-            Viewer:RefreshData()
-            Viewer:UpdateClearAllButton()
-        end)
     end)
     searchBox:SetScript("OnEnterPressed", function(self)
         if autocompleteDropdown and autocompleteDropdown:IsShown() and selectedSuggestionIndex > 0 then
             applySelectedSuggestion()
         else
-            self:ClearFocus()
+            addDeepExpr()
         end
     end)
     searchBox:SetScript("OnEscapePressed", function(self)
@@ -4639,43 +4583,33 @@ beta-0.8.6r:
             if Viewer.searchTypingTimer then C_Timer.CancelTimer(Viewer.searchTypingTimer) end
             self:SetText("")
             self:ClearFocus()
-            Viewer.searchTerm = ""
-            Viewer.currentPage = 1
-            Viewer:RefreshData()
-            Viewer:UpdateClearAllButton()
             clearBtn:Hide()
         end
     end)
     searchBox:SetScript("OnTabPressed", function(self)
-        if autocompleteDropdown and autocompleteDropdown:IsShown() then
-            if #autocompleteSuggestions > 0 then
-                local suggestion = autocompleteSuggestions[1]
-                searchBox:SetText(suggestion)
-                searchBox:ClearFocus()
-                hideAutocompleteDropdown()
-                Viewer.searchTerm = suggestion
-                Viewer.currentPage = 1
-                Viewer:RefreshData()
-                Viewer:UpdateClearAllButton()
-            end
+        if autocompleteDropdown and autocompleteDropdown:IsShown() and #autocompleteSuggestions > 0 then
+            searchBox:SetText(autocompleteSuggestions[1])
+            hideAutocompleteDropdown()
+            addDeepExpr()
         end
     end)
     searchBox:SetScript("OnKeyDown", function(self, key)
         if autocompleteDropdown and autocompleteDropdown:IsShown() then
             if key == "DOWN" then selectNextSuggestion(); return true
             elseif key == "UP" then selectPreviousSuggestion(); return true
-            elseif key == "ENTER" then applySelectedSuggestion(); return true
+            elseif key == "ENTER" then
+                if selectedSuggestionIndex > 0 then
+                    applySelectedSuggestion()
+                else
+                    addDeepExpr()
+                end
+                return true
             elseif key == "ESCAPE" then hideAutocompleteDropdown(); return true
             elseif key == "TAB" then
                 if #autocompleteSuggestions > 0 then
-                    local suggestion = autocompleteSuggestions[1]
-                    searchBox:SetText(suggestion)
-                    searchBox:ClearFocus()
+                    searchBox:SetText(autocompleteSuggestions[1])
                     hideAutocompleteDropdown()
-                    Viewer.searchTerm = suggestion
-                    Viewer.currentPage = 1
-                    Viewer:RefreshData()
-                    Viewer:UpdateClearAllButton()
+                    addDeepExpr()
                 end
                 return true
             end
@@ -6788,9 +6722,6 @@ function Viewer:UpdateRows()
                     local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
                     if selectedPhase > 0 and data.displayItemID and data.discovery.i and data.displayItemID ~= data.discovery.i then
                         itemName = itemName .. " |cff00ff00▲|r"
-                    end
-                    if data.matchedViaTooltip then
-                        itemName = itemName .. " |cffffd100[DS]|r"
                     end
                     if data.isNew then
                         itemName = itemName .. " |cffff7f00[NEW]|r"

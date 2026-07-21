@@ -680,7 +680,7 @@ local function passesFiltersLocal(d, searchTerm)
     if not L:DiscoveryPassesFilters(d) then
         return false
     end
-    -- Filter Map: gate pins by Discoveries Viewer filters (incl. Deep Filter).
+    -- Filter Map: gate pins by Discoveries Viewer filters (incl. search chips).
     -- Overlapping map knobs are already skipped inside DiscoveryPassesFilters.
     local mf = L.db and L.db.char and L.db.char.mapFilters
     if mf and mf.applyViewerFiltersOnMap then
@@ -1676,7 +1676,7 @@ local function BuildFilterEasyMenu()
     local filterMapOn = f.applyViewerFiltersOnMap
     table.insert(menu, {
         text = "Filter Map",
-        desc = "Apply Discoveries Viewer filters (including Deep Filter) to map/minimap pins.",
+        desc = "Apply Discoveries Viewer filters (including search chips) to map/minimap pins.",
         checked = filterMapOn and true or false,
         keepShownOnClick = true,
         isNotRadio = true,
