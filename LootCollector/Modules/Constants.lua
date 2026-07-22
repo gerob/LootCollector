@@ -293,8 +293,33 @@ Constants.CLASS_PROFICIENCIES = {
 function Constants:DetermineRealmCapabilities()
     local mode = "WR"
     local realmName = L.GetActiveRealmKey and L:GetActiveRealmKey() or (GetRealmName() or "")
-    
-    
+    local lower = string.lower(realmName or "")
+    local compact = lower:gsub("[%s%-%_':]", "")
+
+    local function has(token)
+        return string.find(compact, token, 1, true) ~= nil
+    end
+
+    -- Known Ascension realms win over a stale settings override.
+    -- CoA: Rexxar, Vol'jin | WR: Bronzebeard
+    -- Freepick: Dawnrise (S10), Area 52 (current) | Wildcard: Darkmoon (S10)
+    local knownMode = nil
+    if has("rexxar") or has("voljin") or string.find(lower, "conquest of azeroth", 1, true) then
+        knownMode = "COA"
+    elseif has("bronzebeard") or has("warcraftreborn") then
+        knownMode = "WR"
+    elseif has("dawnrise") or has("area52") or has("freepick") or has("elune") then
+        knownMode = "CLASSLESS"
+    elseif has("darkmoon") or has("a25") then
+        knownMode = "WILDCARD"
+    end
+
+    if knownMode then
+        self.ACTIVE_REALM_TYPE = knownMode
+        self:_ApplyCapabilitiesForType(knownMode)
+        return
+    end
+
     if L.db and L.db.profile and L.db.profile.featureOverrides then
         local override = L.db.profile.featureOverrides.realmType
         if override and override ~= "AUTO" then
@@ -304,56 +329,42 @@ function Constants:DetermineRealmCapabilities()
         end
     end
 
-    
-    
-    if string.find(realmName, "Vol'jin") or string.find(realmName, "CoA") then
-        mode = "COA"
-    elseif string.find(realmName, "Elune") then
-        mode = "CLASSLESS"
-    elseif string.find(realmName, "Area 52") or string.find(realmName, "A:25") then
-        mode = "WILDCARD"
-    elseif string.find(realmName, "Bronzebeard") or string.find(realmName, "Warcraft Reborn") then
-        mode = "WR"
-    else
-        
-        local isCoA = false
-        local isWildcard = false
-        local isClassless = false
+    local isCoA = false
+    local isWildcard = false
+    local isClassless = false
 
-        
-        if _G.C_GameMode and _G.Enum and _G.Enum.GameMode then
-            if _G.C_GameMode:IsGameModeActive(_G.Enum.GameMode.WildCard) then
-                isWildcard = true
-            end
+    if _G.C_GameMode and _G.Enum and _G.Enum.GameMode then
+        if _G.C_GameMode:IsGameModeActive(_G.Enum.GameMode.WildCard) then
+            isWildcard = true
         end
+    end
 
-        
-        if _G.C_CharacterCreate and _G.C_CharacterCreate.CanCreateArchetype then
-            local ok, canCreate = pcall(_G.C_CharacterCreate.CanCreateArchetype)
-            if ok and canCreate then
-                isCoA = true
-            end
+    -- CoA-like create APIs also exist on Free Pick; only treat as CoA
+    -- when Wildcard was not already detected.
+    if not isWildcard and _G.C_CharacterCreate and _G.C_CharacterCreate.CanCreateArchetype then
+        local ok, canCreate = pcall(_G.C_CharacterCreate.CanCreateArchetype)
+        if ok and canCreate then
+            isCoA = true
         end
+    end
 
-        
-        if not isCoA and _G.C_Player then
-            if _G.C_Player.IsCustomClass and _G.C_Player:IsCustomClass("player") then
-                isCoA = true
-            end
+    if not isCoA and not isWildcard and _G.C_Player then
+        if _G.C_Player.IsCustomClass and _G.C_Player:IsCustomClass("player") then
+            isCoA = true
         end
+    end
 
-        
-        if not isCoA and not isWildcard and _G.C_Player then
-            if _G.C_Player.IsHero and _G.C_Player:IsHero("player") then
-                isClassless = true
-            end
+    if not isCoA and not isWildcard and _G.C_Player then
+        if _G.C_Player.IsHero and _G.C_Player:IsHero("player") then
+            isClassless = true
         end
+    end
 
-        if isCoA then mode = "COA"
-        elseif isWildcard then mode = "WILDCARD"
-        elseif isClassless then mode = "CLASSLESS"
-        else mode = "WR"
-        end
+    -- Prefer Wildcard / freepick signals over CoA when both fire.
+    if isWildcard then mode = "WILDCARD"
+    elseif isClassless then mode = "CLASSLESS"
+    elseif isCoA then mode = "COA"
+    else mode = "WR"
     end
 
     self.ACTIVE_REALM_TYPE = mode
@@ -365,8 +376,10 @@ function Constants:_ApplyCapabilitiesForType(mode)
         self._hasArchetypes = true
         self._hasMysticScrolls = false
     elseif mode == "WILDCARD" then
+        -- Wildcard seasons (e.g. Darkmoon) are expected to keep Mystic Scrolls;
+        -- prior Wildcard-like seasons did. Confirm after S10 launch if needed.
         self._hasArchetypes = false
-        self._hasMysticScrolls = false
+        self._hasMysticScrolls = true
     elseif mode == "CLASSLESS" or mode == "WR" then
         self._hasArchetypes = false
         self._hasMysticScrolls = true
@@ -386,7 +399,9 @@ function Constants:CanSendMessages()
 
     local realmName = L.GetActiveRealmKey and L:GetActiveRealmKey() or (GetRealmName() or "")
     
-    if string.find(realmName, "Area 52") or self.ACTIVE_REALM_TYPE == "WILDCARD" then
+    if string.find(realmName, "Area 52", 1, true) or string.find(realmName, "Dawnrise", 1, true)
+        or string.find(realmName, "Darkmoon", 1, true)
+        or self.ACTIVE_REALM_TYPE == "WILDCARD" or self.ACTIVE_REALM_TYPE == "CLASSLESS" then
         if UnitLevel("player") < 10 then
             return false
         end

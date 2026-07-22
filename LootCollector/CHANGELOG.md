@@ -8,7 +8,8 @@
 - **Safer Deep Filter on the map:** Map/minimap rebuilds use Scanner RAM cache only and no longer call `SetHyperlink` per pin (avoids hitching when "Filter by Deep Filter" is on).
 - **Added `/lcdiag <itemID|link>`:** Dumps every local discovery for an item (per-zone counts, c/z/xy/mc, plausibility flags). This is to help see if the item sought has multiple entries and identify which has the highest mc count.
 - **Renamed Discoveries "Collected" filter to "Enchant"** so it is clearer this filters by Mystic Enchant collection, not pin loot status.
-- **Hidden Enchant filter on CoA realms** (Mystic Enchants do not exist there); any leftover Enchant filter state is cleared.
+- **Hidden Enchant filter on CoA realms** (Mystic Enchants do not exist there); any leftover Enchant filter state is cleared. Only hides when CoA is confirmed (Rexxar / Vol'jin, or manual CoA override)—not on Freepick (Area 52 / Dawnrise) or Wildcard (Darkmoon).
+- **Updated Ascension realm map:** CoA = Rexxar/Vol'jin; WR = Bronzebeard; Freepick = Dawnrise/Area 52; Wildcard = Darkmoon. 
 - **Added Filter Map:** Opt-in toggle (Discoveries button + map menu) applies active Discoveries filters—including search chips—to map/minimap pins and Arrow. Overlapping map knobs (slots, usable-by, min rarity, hide looted, hide collected ME) are skipped while it is on. Map menu also has Clear Discoveries Filters. Legacy "Filter by Deep Filter" migrates to Filter Map.
 - **Disabled Show Zone Summary** on the map menu for now (continent count badges only had Mulgore stub data).
 - **Merged Search + Deep Filter:** One Search box + Add commits chips (name, zone, or tooltip). Removed the Deep Search checkbox and separate Deep Filter entry field. Chips still support AND/OR within a row; Filter Map uses the same chip matching.

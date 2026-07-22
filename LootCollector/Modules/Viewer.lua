@@ -3194,8 +3194,9 @@ function Viewer:UpdateFilterButtonStates()
     local showNormalFilters = not isBmv
 
     local CoreMod = L:GetModule("Core", true)
-    local isCoA = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
-    if isCoA and Viewer.collectedMEFilterState ~= nil then
+    -- Enchant is ME-collection; hide only on confirmed CoA (Rexxar/Vol'jin).
+    local hideEnchantFilter = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
+    if hideEnchantFilter and Viewer.collectedMEFilterState ~= nil then
         Viewer.collectedMEFilterState = nil
         Cache.filteredResults = {}
         Cache.lastFilterState = nil
@@ -3211,7 +3212,7 @@ function Viewer:UpdateFilterButtonStates()
     if self.slotsFilterBtn then self.slotsFilterBtn:SetShown(showSlots) end
     if self.usableByFilterBtn then self.usableByFilterBtn:SetShown(showNormalFilters) end
     if self.lootedFilterBtn then self.lootedFilterBtn:SetShown(showNormalFilters) end
-    if self.collectedMEFilterBtn then self.collectedMEFilterBtn:SetShown(showNormalFilters and not isCoA) end
+    if self.collectedMEFilterBtn then self.collectedMEFilterBtn:SetShown(showNormalFilters and not hideEnchantFilter) end
     if self.lsFilterBtn then self.lsFilterBtn:SetShown(showNormalFilters) end
     if self.duplicatesFilterBtn then self.duplicatesFilterBtn:SetShown(showDuplicates) end
 

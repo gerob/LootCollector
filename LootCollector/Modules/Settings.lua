@@ -1467,9 +1467,9 @@ local function buildOptions()
 						values = {
                             ["AUTO"] = "Auto-Detect (Recommended)",
                             ["WR"] = "Warcraft Reborn (Bronzebeard) + Mystic Scrolls",
-                            ["WILDCARD"] = "Wildcard (Elune)",
-                            ["COA"] = "CoA (Vol'jin) - No Scrolls",
-                            ["CLASSLESS"] = "Classless (A:25) - No Scrolls",
+                            ["CLASSLESS"] = "Freepick (Dawnrise / Area 52) + Mystic Scrolls",
+                            ["WILDCARD"] = "Wildcard (Darkmoon) + Mystic Scrolls",
+                            ["COA"] = "CoA (Rexxar / Vol'jin) - No Scrolls",
                         },
 						get = function() return L.db.profile.featureOverrides.realmType end,
 						set = function(_, v) 

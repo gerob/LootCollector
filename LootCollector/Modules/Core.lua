@@ -1573,21 +1573,34 @@ function Core:PurgeInvalidMysticScrolls()
 end
 
 function Core:IsConfirmedCoARealm()
-    local Constants = L:GetModule("Constants", true)
-    if not Constants then return false end
+    -- Only true when we are sure this is Conquest of Azeroth (Rexxar / Vol'jin).
+    -- Known non-CoA realm names always win over a stale COA settings override.
+    local realmName = (L.GetActiveRealmKey and L:GetActiveRealmKey()) or (GetRealmName() or "")
+    local lower = string.lower(realmName)
+    -- "Area-52", "Area_52", "Area 52", "Vol'jin" → compact tokens
+    local compact = lower:gsub("[%s%-%_':]", "")
 
-    local activeType = Constants:GetActiveRealmType()
-    if activeType ~= "COA" then return false end
+    local function has(token)
+        return string.find(compact, token, 1, true) ~= nil
+    end
 
-    
-    local p = L.db and L.db.profile
-    if p and p.featureOverrides and p.featureOverrides.realmType == "COA" then
+    -- Explicitly not CoA (Freepick / Wildcard / WR)
+    if has("bronzebeard") or has("warcraftreborn")
+        or has("dawnrise") or has("darkmoon")
+        or has("area52") or has("freepick") or has("elune") then
+        return false
+    end
+
+    -- Sure CoA realm names
+    if has("rexxar") or has("voljin") or string.find(lower, "conquest of azeroth", 1, true) then
         return true
     end
 
-    local realmName = GetRealmName() or ""
-    if string.find(realmName, "Vol'jin") or string.find(realmName, "CoA") then
-        return true
+    -- Ambiguous / unknown realm name: honor manual override only
+    local p = L.db and L.db.profile
+    local override = p and p.featureOverrides and p.featureOverrides.realmType
+    if override and override ~= "AUTO" then
+        return override == "COA"
     end
 
     return false
