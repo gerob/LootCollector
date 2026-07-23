@@ -1518,6 +1518,22 @@ local function buildOptions()
                         fontSize = "large",
                         order = 10,
                     },
+                    download_desc = {
+                        type = "description",
+                        name = "\nShare or download the addon from GitHub (Ctrl+C in the popup):",
+                        fontSize = "medium",
+                        order = 20,
+                    },
+                    download_button = {
+                        type = "execute",
+                        name = "• Download (GitHub)",
+                        order = 21,
+                        func = function()
+                            local url = "https://github.com/gerob/LootCollector"
+                            OpenCopyPopup("LootCollector Download", url)
+                            print("|cff00ff00LootCollector Download:|r " .. url)
+                        end,
+                    },
                     donations_desc = {
                         type = "description",
                         name = "\nFor those who'd like to support development, sponsorships are welcome at:",

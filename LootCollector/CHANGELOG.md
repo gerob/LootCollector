@@ -8,6 +8,7 @@
 ### Viewer Type filter + Favorites scope
 - **Restored Worldforged Type filter** (top-bar button): Armor (Cloth/Leather/Mail/Plate), Weapon subtypes, and Misc (`Miscellaneous` — Neck/Finger/Trinket/etc.) via EasyMenu, wired to existing `columnFilters.eq.type` (ported from JollyGG).
 - **Opt-in per-character Favorites:** Default remains shared (`profile.favorites`). Settings → Viewer Setup → “Per-character Favorites” uses `char.favorites`. First enable copies the shared list into the character list when empty; disabling returns to the shared list without wiping either.
+- **Settings → About → Download (GitHub):** Copy popup for `https://github.com/gerob/LootCollector` (Ctrl+C) and prints the URL to chat.
 
 ### Performance & hibernation pass
 - **Fixed minimap filter-cache thrash:** Zones (or filter sets) with zero matching discoveries no longer force a rebuild every minimap tick. An empty result is treated as valid.
