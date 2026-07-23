@@ -3646,35 +3646,9 @@ beta-0.8.6r:
             end
         end
 
-        -- Make the text bigger
-        for i = 1, 10 do
-            local txt = _G["GameTooltipTextLeft" .. i]
-            if txt then
-                local fontName, fontHeight, fontFlags = txt:GetFont()
-                if fontName then
-                    self._origFonts = self._origFonts or {}
-                    if not self._origFonts[i] then
-                        self._origFonts[i] = fontHeight
-                    end
-                    txt:SetFont(fontName, i == 1 and 15 or 13, fontFlags)
-                end
-            end
-        end
-
         GameTooltip:Show()
     end)
     versionBtn:SetScript("OnLeave", function(self)
-        if self._origFonts then
-            for i = 1, 10 do
-                local txt = _G["GameTooltipTextLeft" .. i]
-                if txt and self._origFonts[i] then
-                    local fontName, _, fontFlags = txt:GetFont()
-                    if fontName then
-                        txt:SetFont(fontName, self._origFonts[i], fontFlags)
-                    end
-                end
-            end
-        end
         GameTooltip:Hide()
     end)
 
