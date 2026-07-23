@@ -2,7 +2,7 @@
 
 **LootCollector** is a collaborative hunting and navigation tool for Worldforged gear, chest spawns, special vendors, and Mystic Scrolls on Project Ascension. The addon pools discovery data from the community so you can filter for the upgrades your character needs and navigate straight to them.
 
-[Map overview with LootCollector pins](docs/images/map-icons.png)
+[Map overview with LootCollector pins](https://github.com/gerob/LootCollector/blob/main/docs/images/map-icons.png)
 
 > [!IMPORTANT]
 > **Compatibility:** Built for Project Ascension realms including **WR** (Bronzebeard), **CoA** (Rexxar / Vol’jin), **Freepick** (Dawnrise / Area 52), and **Wildcard** (Darkmoon). The sharing model works best for **static world spawns** (chests, nodes, vendors). On setups where drops are mostly random from mobs, coordinate sharing is less useful.
@@ -26,7 +26,7 @@
 
 The Starter DB and Custom Import addons load on demand with LootCollector. If you only copy `LootCollector`, the Viewer still works, but you will not get the bundled community starter database or the custom-import helpers.
 
-[Settings About tab with Download link](docs/images/settings-about.png)`
+[Settings About tab with Download link](https://github.com/gerob/LootCollector/blob/main/docs/images/settings-about.png)
 
 ---
 
@@ -43,9 +43,7 @@ The Starter DB and Custom Import addons load on demand with LootCollector. If yo
 - **Type, slot, and more:** Narrow by **Type** (Armor / Weapon / Misc), equip slot, quality, Favorites, Looted, **Enchant** (Mystic Enchants; hidden on CoA), Undiscovered Worldforged, and date filters.
 - **Filter Map:** Opt-in toggle applies your active Discoveries filters (including chips) to world map, minimap, and Arrow pins.
 
-[Discoveries Viewer with search chips and filters](docs/images/viewer-search-filters.png)
-
-
+[Discoveries Viewer with search chips and filters](https://github.com/gerob/LootCollector/blob/main/docs/images/viewer-search-filters.png)
 
 ### 2. Streamline Your Farming Routes
 
@@ -53,9 +51,7 @@ The Starter DB and Custom Import addons load on demand with LootCollector. If yo
 - **Skip and recalculate:** Skip awkward or dangerous nodes from the map menu; the arrow picks the next target.
 - **Cut map clutter:** Hide looted items, bags, low quality, and use **Filter Map** so only what you care about stays on the map.
 
-[Filtered map pins and navigation arrow](docs/images/map-filter-arrow.png)
-
-
+[Filtered map pins and navigation arrow](https://github.com/gerob/LootCollector/blob/main/Docs/Images/map-filter-arrow.png)
 
 ### 3. Coordinate with Community and Allies
 
@@ -63,9 +59,7 @@ The Starter DB and Custom Import addons load on demand with LootCollector. If yo
 - **Real-time updates:** Toasts and map updates as others find items.
 - **“Show to…”:** Right-click a pin → **Show to…** to ping a friend; if they accept, it pulses on their map.
 
-[Show to menu](docs/images/showto.png)
-
-
+[Show to menu](https://github.com/gerob/LootCollector/blob/main/docs/images/showto.png)
 
 ### 4. Vendors, Accuracy, and Realm Data
 
@@ -73,7 +67,7 @@ The Starter DB and Custom Import addons load on demand with LootCollector. If yo
 - **Report as Gone:** Right-click a pin to vote a spawn empty; enough agreement fades/removes stale nodes.
 - **Realm isolation:** Data stays in realm buckets so Seasonal, Wildcard, WR, and CoA data do not mix.
 
-[Vendors tab in the Viewer](docs/images/vendors-tab.png)
+[Vendors tab in the Viewer](https://github.com/gerob/LootCollector/blob/main/docs/images/vendors-tab.png)
 
 ---
 
