@@ -176,6 +176,7 @@ local dbDefaults = {
         offeredOptionalDB = nil,
         minQuality = 2,
         favorites = {},
+        perCharacterFavorites = false,
 	    checkOnlySingleItemLoot = true,
 	    enhancedWFTooltip = true,
         mapFilters = { 
@@ -267,6 +268,7 @@ local dbDefaults = {
     char = { 
         looted = {}, 
         hidden = {},
+        favorites = {},
         paused = false,      
         autoPauseInBG = true,
         autoPauseInRaidInstance = true,
@@ -672,6 +674,52 @@ end
 function LootCollector:IsLootedByChar(guid)
     if not (self.db and self.db.char and self.db.char.looted) then return false end
     return self.db.char.looted[guid] and true or false
+end
+
+-- Favorites storage: shared (profile) by default; optional per-character (char).
+function LootCollector:GetFavoritesDB()
+    if not self.db then return {} end
+    if self.db.profile and self.db.profile.perCharacterFavorites then
+        self.db.char = self.db.char or {}
+        self.db.char.favorites = self.db.char.favorites or {}
+        return self.db.char.favorites
+    end
+    self.db.profile = self.db.profile or {}
+    self.db.profile.favorites = self.db.profile.favorites or {}
+    return self.db.profile.favorites
+end
+
+-- Enable/disable per-character Favorites. On first enable for this character,
+-- copy profile.favorites into char.favorites when the char list is empty.
+-- Disabling returns to the shared profile list without wiping either table.
+function LootCollector:SetPerCharacterFavorites(enabled)
+    if not (self.db and self.db.profile) then return end
+    enabled = enabled and true or false
+    local p = self.db.profile
+    local was = p.perCharacterFavorites and true or false
+    if was == enabled then return end
+
+    p.perCharacterFavorites = enabled
+    if enabled then
+        self.db.char = self.db.char or {}
+        self.db.char.favorites = self.db.char.favorites or {}
+        if not next(self.db.char.favorites) and p.favorites then
+            for itemID, val in pairs(p.favorites) do
+                self.db.char.favorites[itemID] = val
+            end
+        end
+    end
+
+    local Viewer = self:GetModule("Viewer", true)
+    if Viewer then
+        if Viewer.InvalidateFilterCache then Viewer:InvalidateFilterCache() end
+        if Viewer.window and Viewer.window:IsShown() and Viewer.RefreshData then
+            Viewer:RefreshData()
+        end
+        if Viewer.ScheduleMapViewerFilterNotify then
+            Viewer:ScheduleMapViewerFilterNotify()
+        end
+    end
 end
 
 local appearanceCache = {}
@@ -1496,7 +1544,12 @@ function LootCollector:OnInitialize()
     self.db.char        = self.db.char or {}
     self.db.char.looted = self.db.char.looted or {}
     self.db.char.hidden = self.db.char.hidden or {}
+    self.db.char.favorites = self.db.char.favorites or {}
     self.db.char.mapFilters = self.db.char.mapFilters or {}
+    if self.db.profile.perCharacterFavorites == nil then
+        self.db.profile.perCharacterFavorites = false
+    end
+    self.db.profile.favorites = self.db.profile.favorites or {}
 
     -- Migrate legacy "Filter by Deep Filter" into Filter Map (once).
     local cmf = self.db.char.mapFilters

@@ -1546,16 +1546,17 @@ function Map:OpenPinMenu(anchorFrame)
     
     
     if d.i and d.i > 0 then
-        local isFavorite = L.db.profile.favorites[d.i]
+        local favorites = L:GetFavoritesDB()
+        local isFavorite = favorites[d.i]
         table.insert(menuList, {
             text = isFavorite and "Remove from Favorites" or "Add to Favorites",
             notCheckable = true,
             func = function()
                 PlaySound("igMainMenuOptionCheckBoxOn")
                 if isFavorite then
-                    L.db.profile.favorites[d.i] = nil
+                    favorites[d.i] = nil
                 else
-                    L.db.profile.favorites[d.i] = true
+                    favorites[d.i] = true
                 end
                 Map.cacheIsDirty = true
                 Map:Update()

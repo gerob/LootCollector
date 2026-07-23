@@ -10,6 +10,17 @@ function ViewerSetSelectedRow(row)
     end
 end
 
+local TYPE_FILTER_ARMOR = { "Cloth", "Leather", "Mail", "Plate" }
+local TYPE_FILTER_WEAPON = {
+    "One-Handed Axes", "Two-Handed Axes", "Bows", "Guns",
+    "One-Handed Maces", "Two-Handed Maces", "Polearms",
+    "One-Handed Swords", "Two-Handed Swords", "Staves",
+    "Fist Weapons", "Daggers", "Thrown", "Crossbows", "Wands", "Fishing Poles",
+}
+-- GetItemInfo subtype for Neck / Finger / Trinket / Shirt / Tabard (and similar).
+local TYPE_FILTER_MISC = { "Miscellaneous" }
+local TypeFilterMenuHost = CreateFrame("Frame", "LootCollectorViewerTypeFilterMenuHost", UIParent, "UIDropDownMenuTemplate")
+
 local SOURCE_NAMES = {
     ["world_loot"] = "World Drop",
     ["mail"] = "Mail",
@@ -456,6 +467,29 @@ local function GetItemTypeIDs(itemType, itemSubType)
     return it, ist
 end
 
+-- Match Viewer type filter selections (English subtype names) against row data.
+-- Prefer localized itemSubType from GetItemInfo; fall back to persisted ist /
+-- subtype-ID round-trip so "Miscellaneous" matches Finger/Neck/Trinket, etc.
+local function DiscoveryMatchesTypeFilter(data, typeFilters)
+    if not typeFilters or size(typeFilters) == 0 then return true end
+    local Constants = L:GetModule("Constants", true)
+    local typeValue = (data and data.itemSubType) or ""
+    if typeValue ~= "" and typeFilters[typeValue] then return true end
+    if Constants then
+        if typeValue ~= "" and Constants.ITEM_SUBTYPE_TO_ID and Constants.ID_TO_ITEM_SUBTYPE then
+            local id = Constants.ITEM_SUBTYPE_TO_ID[typeValue]
+            local englishName = id and Constants.ID_TO_ITEM_SUBTYPE[id]
+            if englishName and typeFilters[englishName] then return true end
+        end
+        local ist = data and data.ist
+        if ist and Constants.ID_TO_ITEM_SUBTYPE then
+            local englishName = Constants.ID_TO_ITEM_SUBTYPE[ist]
+            if englishName and typeFilters[englishName] then return true end
+        end
+    end
+    return false
+end
+
 local function GetItemInfoSafe(itemLink, itemID)
     local queryTarget = itemLink or itemID
     if not queryTarget then return nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil end
@@ -620,7 +654,7 @@ function Viewer:DiscoveryPassesViewerFilters(d)
         end
 
         if self.favoritesFilterState == true then
-            if not (d.i and L.db and L.db.profile and L.db.profile.favorites and L.db.profile.favorites[d.i]) then
+            if not (d.i and L.db and L:GetFavoritesDB()[d.i]) then
                 return false
             end
         end
@@ -667,8 +701,9 @@ function Viewer:DiscoveryPassesViewerFilters(d)
 
         if size(self.columnFilters.eq.type) > 0 then
             local _, _, _, _, _, _, itemSubType = GetItemInfo(d.il or d.i or 0)
-            itemSubType = itemSubType or ""
-            if not self.columnFilters.eq.type[itemSubType] then return false end
+            if not DiscoveryMatchesTypeFilter({ itemSubType = itemSubType or "", ist = d.ist }, self.columnFilters.eq.type) then
+                return false
+            end
         end
 
         if size(self.columnFilters.eq.class) > 0 and Constants and Constants.CLASS_PROFICIENCIES then
@@ -1246,8 +1281,7 @@ GetFilteredDatasetForUniqueValues = function(context)
             end
 
             if passed and context.activeFilters.type then
-                local typeValue = data.itemSubType or ""
-                if not context.activeFilters.type[typeValue] then passed = false end
+                if not DiscoveryMatchesTypeFilter(data, context.activeFilters.type) then passed = false end
             end
 
             if passed and context.activeFilters.class then
@@ -2510,9 +2544,7 @@ function Viewer:GetFilteredDiscoveries()
                     return self.columnFilters.eq.slot[slotValue] ~= nil
                 end,
                 type = function(data)
-                    if size(self.columnFilters.eq.type) == 0 then return true end
-                    local typeValue = data.itemSubType or ""
-                    return self.columnFilters.eq.type[typeValue] ~= nil
+                    return DiscoveryMatchesTypeFilter(data, self.columnFilters.eq.type)
                 end,
             },
             ms = {
@@ -2668,7 +2700,7 @@ function Viewer:GetFilteredDiscoveries()
             end
 
             if passed and Viewer.favoritesFilterState == true and not isVendorView then
-                if not (data.discovery.i and L.db.profile.favorites[data.discovery.i]) then passed = false end
+                if not (data.discovery.i and L:GetFavoritesDB()[data.discovery.i]) then passed = false end
             end
 
             if passed and Viewer.collectedMEFilterState ~= nil and not isVendorView then
@@ -2735,8 +2767,8 @@ function Viewer:GetFilteredDiscoveries()
         elseif self.sortColumn == "foundBy" then
             a_val = a.discovery.fp or ""; b_val = b.discovery.fp or ""
         elseif self.sortColumn == "favorite" then
-            local a_fav = (a.discovery and a.discovery.i and L.db.profile.favorites[a.discovery.i]) and 1 or 0
-            local b_fav = (b.discovery and b.discovery.i and L.db.profile.favorites[b.discovery.i]) and 1 or 0
+            local a_fav = (a.discovery and a.discovery.i and L:GetFavoritesDB()[a.discovery.i]) and 1 or 0
+            local b_fav = (b.discovery and b.discovery.i and L:GetFavoritesDB()[b.discovery.i]) and 1 or 0
             if a_fav == b_fav then
                 if self.sortAscending then return a.sortName < b.sortName else return a.sortName > b.sortName end
             end
@@ -2833,6 +2865,11 @@ function Viewer:GetFilterStateHash()
     end
     if self.favoritesFilterState == true then
         _tinsert(filterEntries, "favorites:true")
+    end
+    if L.db and L.db.profile and L.db.profile.perCharacterFavorites then
+        _tinsert(filterEntries, "favoritesScope:char")
+    else
+        _tinsert(filterEntries, "favoritesScope:profile")
     end
     if self.deepSearchFilters and #self.deepSearchFilters > 0 then
         -- Order among rows doesn't change the result set (all AND), so sort for
@@ -3056,6 +3093,114 @@ function Viewer:GetUndiscoveredCount()
     return count
 end
 
+function Viewer:BuildTypeFilterEasyMenu()
+    local typeFilters = Viewer.columnFilters.eq.type
+
+    local function afterTypeChange()
+        Viewer.currentPage = 1
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+        Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
+        Viewer:UpdateFilterButtonStates()
+    end
+
+    local function rebuildMenu()
+        afterTypeChange()
+        if EasyMenu and Viewer.typeFilterBtn then
+            HideDropDownMenu(1)
+            EasyMenu(Viewer:BuildTypeFilterEasyMenu(), TypeFilterMenuHost, Viewer.typeFilterBtn, 0, 0, "MENU", 2)
+        end
+    end
+
+    local function toggleSubtype(name)
+        if typeFilters[name] then
+            typeFilters[name] = nil
+        else
+            typeFilters[name] = true
+        end
+        afterTypeChange()
+    end
+
+    local function buildSubtypeSubmenu(title, list)
+        local sub = {
+            { text = title, isTitle = true, notCheckable = true },
+            {
+                text = "Select All",
+                notCheckable = true,
+                func = function()
+                    for _, name in ipairs(list) do
+                        typeFilters[name] = true
+                    end
+                    rebuildMenu()
+                end,
+            },
+            {
+                text = "Clear All",
+                notCheckable = true,
+                func = function()
+                    for _, name in ipairs(list) do
+                        typeFilters[name] = nil
+                    end
+                    rebuildMenu()
+                end,
+            },
+        }
+        for _, name in ipairs(list) do
+            _tinsert(sub, {
+                text = name,
+                checked = typeFilters[name] and true or false,
+                keepShownOnClick = true,
+                isNotRadio = true,
+                func = function() toggleSubtype(name) end,
+            })
+        end
+        return sub
+    end
+
+    return {
+        {
+            text = "Clear Type Filters",
+            notCheckable = true,
+            func = function()
+                wipe(typeFilters)
+                afterTypeChange()
+            end,
+        },
+        {
+            text = "Armor",
+            hasArrow = true,
+            notCheckable = true,
+            menuList = buildSubtypeSubmenu("Armor", TYPE_FILTER_ARMOR),
+        },
+        {
+            text = "Weapon",
+            hasArrow = true,
+            notCheckable = true,
+            menuList = buildSubtypeSubmenu("Weapon", TYPE_FILTER_WEAPON),
+        },
+        {
+            text = "Misc",
+            hasArrow = true,
+            notCheckable = true,
+            menuList = buildSubtypeSubmenu("Misc", TYPE_FILTER_MISC),
+        },
+    }
+end
+
+function Viewer:ShowTypeFilterMenu(anchor)
+    if not EasyMenu or not anchor then return end
+
+    local dropdownList = _G["DropDownList1"]
+    if Viewer.currentFilterAnchor == anchor and dropdownList and dropdownList:IsShown() then
+        HideDropDownMenu(1)
+        Viewer.currentFilterAnchor = nil
+        return
+    end
+    Viewer.currentFilterAnchor = anchor
+    EasyMenu(self:BuildTypeFilterEasyMenu(), TypeFilterMenuHost, anchor, 0, 0, "MENU", 2)
+end
+
 function Viewer:UpdateFilterButtonStates()
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -3132,6 +3277,17 @@ function Viewer:UpdateFilterButtonStates()
         end
         self.slotsFilterBtn:SetText("Slots")
     end
+
+    if self.typeFilterBtn then
+        local typeFilters = self.columnFilters.eq and self.columnFilters.eq.type
+        local typeActive = typeFilters and size(typeFilters) > 0
+        if typeActive then
+            setButtonTextColor(self.typeFilterBtn, 1, 0.8, 0.2)
+        else
+            setButtonTextColor(self.typeFilterBtn, 1, 1, 1)
+        end
+        self.typeFilterBtn:SetText("Type")
+    end
     
     if self.usableByFilterBtn then
         local classActive = false
@@ -3190,6 +3346,7 @@ function Viewer:UpdateFilterButtonStates()
     local isMs = (self.currentFilter == "ms")
 
     local showSlots = isEq
+    local showItemType = isEq
     local showVendorType = isBmv
     local showNormalFilters = not isBmv
 
@@ -3209,6 +3366,7 @@ function Viewer:UpdateFilterButtonStates()
     if self.sourceFilterBtn then self.sourceFilterBtn:SetShown(showNormalFilters) end
     if self.qualityFilterBtn then self.qualityFilterBtn:SetShown(showNormalFilters) end
     if self.favoritesFilterBtn then self.favoritesFilterBtn:SetShown(showNormalFilters) end
+    if self.typeFilterBtn then self.typeFilterBtn:SetShown(showItemType) end
     if self.slotsFilterBtn then self.slotsFilterBtn:SetShown(showSlots) end
     if self.usableByFilterBtn then self.usableByFilterBtn:SetShown(showNormalFilters) end
     if self.lootedFilterBtn then self.lootedFilterBtn:SetShown(showNormalFilters) end
@@ -3238,6 +3396,7 @@ function Viewer:UpdateFilterButtonStates()
             self.sourceFilterBtn,
             self.qualityFilterBtn,
             self.vendorTypeFilterBtn,
+            self.typeFilterBtn,
             self.slotsFilterBtn,
             self.usableByFilterBtn,
             self.favoritesFilterBtn,
@@ -3598,6 +3757,8 @@ function Viewer:CreateWindow()
 Version Beta-1.0.1r:
 - Merged Search + Deep Filter: Search box + Add commits chips matching name, zone, or tooltip (Deep Search checkbox removed).
 - Added Filter Map: apply Discoveries filters (including search chips) to map/minimap pins and Arrow.
+- Restored Worldforged Type filter (Armor/Weapon subtypes) on the Viewer Filters bar.
+- Opt-in per-character Favorites (Settings); default remains shared across characters.
 - Renamed Discoveries "Collected" filter to "Enchant"; hidden on CoA realms.
 - Autocomplete suggests from the currently filtered Discoveries list.
 - Hibernation (/lcpause) now fully stops sync, reinforce, and minimap work until resumed.
@@ -3605,6 +3766,7 @@ Version Beta-1.0.1r:
 - Faster map/Arrow filters; map Deep Filter no longer calls SetHyperlink per pin.
 - Added /lcdiag <itemID|link> to dump local discoveries for an item.
 - Disabled Show Zone Summary on the map menu for now.
+- Fixed Honor Quartermaster buy/sell/buyback freezes (no full ScanMerchant on ordinary vendors).
 
 Version Beta-1.0r:
 - Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
@@ -4671,7 +4833,13 @@ beta-0.8.6r:
     end)
     qualityFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local vendorTypeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 55, qualityFilterBtn, "RIGHT")
+    local typeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 42, qualityFilterBtn, "RIGHT")
+    typeFilterBtn:SetScript("OnClick", function(self, button)
+        Viewer:ShowTypeFilterMenu(self)
+    end)
+    typeFilterBtn:RegisterForClicks("LeftButtonUp")
+
+    local vendorTypeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 55, typeFilterBtn, "RIGHT")
     vendorTypeFilterBtn:SetScript("OnClick", function(self, button)
         local values = GetUniqueValues("vendorType")
         Viewer:ShowColumnFilterDropdown("vendorType", self, values)
@@ -4786,6 +4954,7 @@ beta-0.8.6r:
     
     self.sourceFilterBtn = sourceFilterBtn
     self.qualityFilterBtn = qualityFilterBtn
+    self.typeFilterBtn = typeFilterBtn
     self.vendorTypeFilterBtn = vendorTypeFilterBtn
     self.slotsFilterBtn = slotsFilterBtn
     self.usableByFilterBtn = usableByFilterBtn
@@ -5319,13 +5488,14 @@ beta-0.8.6r:
     self.paginationFrame = paginationFrame
     self.duplicatesFilterBtn = duplicatesFilterBtn 
     self.vendorTypeFilterBtn = vendorTypeFilterBtn
+    self.typeFilterBtn = typeFilterBtn
     self.slotsFilterBtn = slotsFilterBtn
     self.usableByFilterBtn = usableByFilterBtn
     self.lsFilterBtn = lsFilterBtn
     
     self.interactiveElements = {
         equipmentBtn, mysticBtn, bmvBtn,
-        searchBox, sourceFilterBtn, qualityFilterBtn, lootedFilterBtn, duplicatesFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn,
+        searchBox, sourceFilterBtn, qualityFilterBtn, typeFilterBtn, lootedFilterBtn, duplicatesFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn,
         nameHeader, levelHeader, slotHeader, typeHeader, classHeader, zoneHeader,  foundByHeader,
         vendorNameHeader, vendorPriceHeader, vendorZoneHeader, vendorContinentHeader, vendorTypeHeader,
         clearAllBtn, prevBtn, nextBtn, items25Btn, items50Btn, items100Btn, items500Btn, itemsAllBtn,
@@ -5691,12 +5861,13 @@ function Viewer:CreateRows(count)
                     end
 
                     PlaySound("igMainMenuOptionCheckBoxOn")
-                    if L.db.profile.favorites[itemId] then
-                        L.db.profile.favorites[itemId] = nil
+                    local favorites = L:GetFavoritesDB()
+                    if favorites[itemId] then
+                        favorites[itemId] = nil
                         favIcon:SetDesaturated(true)
                         favIcon:SetVertexColor(0.5, 0.5, 0.5, 0.5)
                     else
-                        L.db.profile.favorites[itemId] = true
+                        favorites[itemId] = true
                         favIcon:SetDesaturated(false)
                         favIcon:SetVertexColor(1, 1, 1, 1)
                     end
@@ -6784,7 +6955,7 @@ function Viewer:UpdateRows()
                     
                     if row.favIcon then
                         row.favBtn:Show()
-                        if discovery.i and L.db.profile.favorites[discovery.i] then
+                        if discovery.i and L:GetFavoritesDB()[discovery.i] then
                             row.favIcon:SetDesaturated(false)
                             row.favIcon:SetVertexColor(1, 1, 1, 1)
                         else

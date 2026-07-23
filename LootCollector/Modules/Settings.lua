@@ -149,6 +149,11 @@ local function ensureDefaults()
     p.viewer.inlineVendorView = true
     if p.viewer.splitRatio == nil then p.viewer.splitRatio = 0.64 end
     if p.viewer.asyncLoading == nil then p.viewer.asyncLoading = true end
+    if p.perCharacterFavorites == nil then p.perCharacterFavorites = false end
+    p.favorites = p.favorites or {}
+    if L.db.char then
+        L.db.char.favorites = L.db.char.favorites or {}
+    end
     
 	p.sharing = p.sharing or {}
 	if p.sharing.enabled == nil then p.sharing.enabled = true end
@@ -796,6 +801,20 @@ local function buildOptions()
 						type = "description",
 						name = "Customize the fonts and spacing for the Discovery Viewer.",
 						order = 1,
+					},
+					perCharacterFavorites = {
+						type = "toggle",
+						name = "Per-character Favorites",
+						desc = "When enabled, each character has its own Favorites list. When disabled (default), Favorites are shared across characters on this profile. Turning it on copies your shared list to this character if their list is empty; turning it off returns to the shared list without deleting either.",
+						order = 1.5,
+						get = function() return L.db.profile.perCharacterFavorites end,
+						set = function(_, v)
+							if L.SetPerCharacterFavorites then
+								L:SetPerCharacterFavorites(v)
+							else
+								L.db.profile.perCharacterFavorites = v and true or false
+							end
+						end,
 					},
 					rowFont = {
 						type = "select",
