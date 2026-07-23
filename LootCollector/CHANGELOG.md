@@ -9,6 +9,7 @@
 - **Special vendor gossip no longer wipes inventory:** Gossip before the shop opens no longer stamps the vendor or pushes an empty item list; Core also refuses to overwrite a known inventory with empty/nil.
 - **Clear button updates for Favorites / Looted / Enchant / Date** toggles (was staying hidden while those filters were active).
 - **Favorites header tooltip** now reflects shared vs per-character scope from Settings.
+- **Cleanup:** Removed duplicate Viewer Hide / delete popup definitions; dropped unused Detect recovery-suppression fields; `/lcvendor` skips force-scan unless the shop window is open on `npc`.
 
 ### Viewer Type filter + Favorites scope
 - **Restored Worldforged Type filter** (top-bar button): Armor (Cloth/Leather/Mail/Plate), Weapon subtypes, and Misc (`Miscellaneous` — Neck/Finger/Trinket/etc.) via EasyMenu, wired to existing `columnFilters.eq.type` (ported from JollyGG).
@@ -20,7 +21,7 @@
 - **Fixed filter-cache wipe during ZoneIndex build:** The minimap cache is no longer wiped when the zone index is not ready yet, avoiding blank/flicker spins at login.
 - **Hibernation (`/lcpause`) now truly stops background work:** Leaves the public sync channel, cancels the Comm ticker, pauses Reinforce, and stops the minimap ticker. On resume, tickers and channel join are restored.
 - **Faster map/Arrow filters:** Equip-slot lookups cache `equipLoc` on the discovery when resolved; "Usable by" class filters use a precomputed IST set instead of nested loops per pin.
-- **Safer Deep Filter on the map:** Map/minimap rebuilds use Scanner RAM cache only and no longer call `SetHyperlink` per pin (avoids hitching when "Filter by Deep Filter" is on).
+- **Safer Filter Map on the map:** Map/minimap rebuilds use Scanner RAM cache only and no longer call `SetHyperlink` per pin (avoids hitching when Filter Map is on).
 - **Added `/lcdiag <itemID|link>`:** Dumps every local discovery for an item (per-zone counts, c/z/xy/mc, plausibility flags). This is to help see if the item sought has multiple entries and identify which has the highest mc count.
 - **Renamed Discoveries "Collected" filter to "Enchant"** so it is clearer this filters by Mystic Enchant collection, not pin loot status.
 - **Hidden Enchant filter on CoA realms** (Mystic Enchants do not exist there); any leftover Enchant filter state is cleared. Only hides when CoA is confirmed (Rexxar / Vol'jin, or manual CoA override)—not on Freepick (Area 52 / Dawnrise) or Wildcard (Darkmoon).
@@ -30,6 +31,7 @@
 - **Merged Search + Deep Filter:** One Search box + Add commits chips (name, zone, or tooltip). Removed the Deep Search checkbox and separate Deep Filter entry field. Chips still support AND/OR within a row; Filter Map uses the same chip matching.
 - **Added Weapons to Felsworn** Felsworn were given the ability to use Polearms, Two-Handed Maces and Fist Weapons but were missing from filter, they will now show up in 'Useable By'.
 
+## LootCollector 1.0 
 - Added ~240 new & undiscovered Worldforged items into the viewer so you can see what's left to find. These were released with CoA's launch, but I don't know if all of them are in the game.
 - Added Phase selection for Worldforged items, so you can see their upgrades in the Viewer and on the map.
 - Made Vendors discoverable and enabled 2 more types of vendors besides Blackmarket (1 broadcast per day)

@@ -7705,6 +7705,9 @@ end
 function Viewer:Hide()
     if self.window then self.window:Hide() end
     self.pendingMapAreaID = nil
+    Cache.discoveriesBuilding = false
+    scanQueue = {}
+    scanCursor = 0
 end
 
 function Viewer:Toggle()
@@ -7734,36 +7737,6 @@ StaticPopupDialogs["LOOTCOLLECTOR_DISCORD_BUG_REPORT"] = {
     whileDead = true,
     hideOnEscape = true,
 }
-
-StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_DELETE"] = {
-    text = "%s",
-    button1 = "Yes, Delete",
-    button2 = "No, Cancel",
-    OnAccept = function(self, data)
-        if data and data.viewer and data.guid then
-            data.viewer:DeleteDiscovery(data.guid)
-        end
-    end,
-    OnCancel = function(self, data)
-        if data and data.viewer then
-            data.viewer:UpdateRows() 
-        end
-    end,
-    timeout = 0,
-    whileDead = 1,
-    hideOnEscape = 1,
-    showAlert = true,
-}
-
-function Viewer:Hide()
-    if self.window then self.window:Hide() end
-    self.pendingMapAreaID = nil
-    
-    
-    Cache.discoveriesBuilding = false
-    scanQueue = {}
-    scanCursor = 0
-end
 
 StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_DELETE"] = {
     text = "%s",

@@ -13,8 +13,6 @@ Detect._bagUpdateTimer = nil
 
 Detect._lastDiscoveryGUID = nil
 Detect._lastDiscoveryTime = 0
-Detect._recoverySuppressionUntil = 0
-local RECOVERY_SUPPRESSION_WINDOW = 9.0
 
 local NPCScanTip = CreateFrame("GameTooltip", "LootCollector_NPCScanTip", UIParent, "GameTooltipTemplate")
 NPCScanTip:SetOwner(UIParent, "ANCHOR_NONE")
@@ -406,7 +404,9 @@ SlashCmdList["LCVENDORCHECK"] = function()
         return
     end
     if unit ~= "npc" or merch == 0 then
-        print("  |cffffff00Note:|r recording requires the SHOP WINDOW to be OPEN (merchant items > 0).")
+        print("  |cffffff00Note:|r recording requires the SHOP WINDOW to be OPEN (UnitExists(\"npc\") and merchant items > 0).")
+        print("  |cffff5555Skipped force-scan.|r Open the shop and run /lcvendor again.")
+        return
     end
     if Detect.recentlyScannedNPCs then
         local g = UnitGUID(unit)
