@@ -236,7 +236,7 @@ function Detect:OnRetroactiveSuppressionEvent(event, arg1, arg2)
         L._ddebug("Detect", "Retroactive suppression event detected: " .. event)
         local now = GetTime()
         
-        
+        -- Only undo a discovery recorded within the last 2.5s (same clock as stamps above).
         if self._lastDiscoveryGUID and (now - self._lastDiscoveryTime < 2.5) then
             local Core = L:GetModule("Core", true)
             if Core and Core.RemoveDiscoveryByGuid then
@@ -325,15 +325,16 @@ if L:IsPaused() then return end
             self._nonSpecialNPCs[npcGUID] = true
             return
         end
+    elseif numMerchantItems == 0 then
+        -- Special BM/EX/RING matched on gossip before the shop is open:
+        -- do not stamp or push an empty inventory to Core.
+        return
     end
 
     -- Confirmed special / MS vendor: rate-limit full inventory scans.
     self.recentlyScannedNPCs[npcGUID] = time()
 
-    local merchantItems = {}
-    if numMerchantItems > 0 then
-        merchantItems = ScanMerchant()
-    end
+    local merchantItems = ScanMerchant()
 
     local vendorType = isMSVendor and "MS" or specialVendorType
     local now = time()
@@ -673,12 +674,13 @@ function Detect:OnChatMsgLoot(_, msg)
     end
     
     local last = self._recent[link] or 0
-    if nowTime - last < 1.0 then 
+    local nowSession = GetTime()
+    if nowSession - last < 1.0 then 
         L._ddebug("Detect", "Dropped: Throttled (Looted multiple in <1s).")
         if pTime then L:ProfileStop("Detect:OnChatMsgLoot", pTime) end 
         return 
     end
-    self._recent[link] = nowTime
+    self._recent[link] = nowSession
 
     L._ddebug("Detect", "SUCCESS: Passing " .. tostring(link) .. " to Core:HandleLocalLoot.")
     local discovery = { il = link, c = c, z = z, iz = iz, xy = { x = x_val, y = y_val }, t0 = nowTime, src = src, fp = looter }
@@ -687,7 +689,8 @@ function Detect:OnChatMsgLoot(_, msg)
         local itemID = tonumber(link:match("item:(%d+)"))
         local guid = L:GenerateGUID(c, z, iz, itemID, x_val, y_val)
         self._lastDiscoveryGUID = guid
-        self._lastDiscoveryTime = nowTime
+        -- Session clock: must match GetTime() in OnRetroactiveSuppressionEvent.
+        self._lastDiscoveryTime = GetTime()
         Core:HandleLocalLoot(discovery)
     end
     
@@ -778,7 +781,8 @@ function Detect:ProcessPotentialDiscovery(link, sourceHint, looterName)
         local itemID = tonumber(link:match("item:(%d+)"))
         local guid = L:GenerateGUID(c, z, iz, itemID, px, py)
         self._lastDiscoveryGUID = guid
-        self._lastDiscoveryTime = nowTime
+        -- Session clock: must match GetTime() in OnRetroactiveSuppressionEvent.
+        self._lastDiscoveryTime = GetTime()
         Core:HandleLocalLoot(discovery)
     end
     
@@ -799,13 +803,16 @@ local function ProcessDirtyBags()
         return 
     end
     
-    local now = time()
-    if now > Detect._expectingItemUntil then
+    -- Session clock must match _expectingItemUntil (set via GetTime()).
+    local nowSession = GetTime()
+    if nowSession > Detect._expectingItemUntil then
         wipe(Detect._dirtyBags)
         if pTime then L:ProfileStop("Detect:ProcessDirtyBags", pTime) end 
         return
     end
 
+    -- Wall clock for classifySource (ctx stamps use time()).
+    local now = time()
     local src = classifySource(Detect._ctx, now)
     local deniedSources = { mail = true, quest_reward = true, trade = true, crafting = true, mystic_altar = true, vendor = true, vendor_buyback = true, bank = true, guild_bank = true, achievement = true, auction = true }
     if deniedSources[src] then 
@@ -815,7 +822,7 @@ local function ProcessDirtyBags()
     end
     
     for link, timestamp in pairs(Detect._recent) do
-        if now - timestamp > 3.0 then
+        if nowSession - timestamp > 3.0 then
             Detect._recent[link] = nil
         end
     end
@@ -836,7 +843,7 @@ local function ProcessDirtyBags()
                         end
                     end
                 else
-                    Detect._recent[link] = now
+                    Detect._recent[link] = nowSession
                     if qualifies then 
                         Detect:ProcessPotentialDiscovery(link, "bag_update", UnitName("player"))
                     end

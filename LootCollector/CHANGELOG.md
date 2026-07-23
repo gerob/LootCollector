@@ -4,6 +4,11 @@
 - **Fixed freezes (and reported crashes) when buying/selling/buyback at Honor Quartermaster and other non-special merchants:** Ordinary vendors are classified once (cheap subname / name-only MS probe) and remembered for the session — `MERCHANT_UPDATE` no longer re-runs a full `ScanMerchant` after the old 10s stamp expires. Full inventory scans are reserved for confirmed special/MS vendors.
 - **CHAT_MSG_LOOT now denies vendor/buyback sources before tooltip WF scans**, so sell/buyback loot spam does not call `SetHyperlink`.
 - **ProcessDirtyBags now skips denied sources** (vendor, mail, trade, bank, etc.), matching chat/discovery gates so bag churn during vendor buys does not kick off discovery work.
+- **Fixed bag-update discovery window:** `ProcessDirtyBags` now uses the same session clock as `_expectingItemUntil`, so loot-closed / gossip-closed bag scans actually run for ~9s instead of always bailing out.
+- **Fixed false discovery wipes after item recovery / store purchase:** The “undo last discovery” safety window now uses a consistent session clock, so it only applies within ~2.5s of a real detection instead of matching any older find.
+- **Special vendor gossip no longer wipes inventory:** Gossip before the shop opens no longer stamps the vendor or pushes an empty item list; Core also refuses to overwrite a known inventory with empty/nil.
+- **Clear button updates for Favorites / Looted / Enchant / Date** toggles (was staying hidden while those filters were active).
+- **Favorites header tooltip** now reflects shared vs per-character scope from Settings.
 
 ### Viewer Type filter + Favorites scope
 - **Restored Worldforged Type filter** (top-bar button): Armor (Cloth/Leather/Mail/Plate), Weapon subtypes, and Misc (`Miscellaneous` — Neck/Finger/Trinket/etc.) via EasyMenu, wired to existing `columnFilters.eq.type` (ported from JollyGG).

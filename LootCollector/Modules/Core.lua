@@ -3003,7 +3003,10 @@ function Core:HandleLocalLoot(discovery)
             if vType == "MS" then self:PurgeMysticScrollsNearVendors() end
         else
             existing.ls = discovery.t0
-            existing.vendorItems = discovery.vendorItems 
+            -- Never wipe a known inventory with an empty/nil scan (e.g. gossip before shop open).
+            if discovery.vendorItems and #discovery.vendorItems > 0 then
+                existing.vendorItems = discovery.vendorItems
+            end
             existing.dt = dt
             existing.vendorType = discovery.vendorType
             if not existing.il then existing.il = itemLink end 

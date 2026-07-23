@@ -1521,7 +1521,7 @@ function LootCollector:OnInitialize()
     -- Build stamp: NOT part of the comm-version string (which other
     -- clients' version filters compare); purely for humans to verify which
     -- fix pass is actually installed (minimap tooltip + /lcvendor).
-    self.BuildStamp   = "1.0r"
+    self.BuildStamp   = "beta-1.0.1r"
 
     local Constants = self:GetModule("Constants", true)
     if Constants and Constants.GetDefaultChannel then

@@ -1,15 +1,16 @@
-# 1.0.1 tester checklist (Discord)
+# 1.0.1r tester checklist (Discord)
 
 Copy everything inside the box below into Discord.
 
 ```
-LootCollector 1.0.1 — quick test
-Install 1.0.1 → type /reload → note your realm.
+LootCollector beta-1.0.1r — quick test
+Install beta-1.0.1r → type /reload → note your realm.
 
 Reply with Pass / Fail / Skipped for each section.
 
 0) Version
-Open Discoveries, hover version (top-left). Should say Beta-1.0.1.
+Open Discoveries, hover version (top-left). Should say Beta-1.0.1r.
+Minimap button tooltip / /lcvendor should show build beta-1.0.1r.
 
 1) Search chips
 • Search row = one box + Add (no Deep Search checkbox)

@@ -4867,6 +4867,7 @@ beta-0.8.6r:
         Cache.filteredResults = {}
         Cache.lastFilterState = nil
         Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
         Viewer:UpdateFilterButtonStates()
     end)
     favoritesFilterBtn:RegisterForClicks("LeftButtonUp")
@@ -4880,6 +4881,7 @@ beta-0.8.6r:
         Cache.filteredResults = {}
         Cache.lastFilterState = nil
         Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
         Viewer:UpdateFilterButtonStates()
     end)
     lootedFilterBtn:RegisterForClicks("LeftButtonUp")
@@ -4903,6 +4905,7 @@ beta-0.8.6r:
         Cache.filteredResults = {}
         Cache.lastFilterState = nil
         Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
         Viewer:UpdateFilterButtonStates()
     end)
     collectedMEFilterBtn:RegisterForClicks("LeftButtonUp")
@@ -4916,6 +4919,7 @@ beta-0.8.6r:
         Cache.filteredResults = {}
         Cache.lastFilterState = nil
         Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
         Viewer:UpdateFilterButtonStates()
     end)
     lsFilterBtn:RegisterForClicks("LeftButtonUp")
@@ -5008,7 +5012,11 @@ beta-0.8.6r:
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Favorites", 1, 1, 1)
         GameTooltip:AddLine("Click the star next to an item to favorite it.", nil, nil, nil, true)
-        GameTooltip:AddLine("Your favorite items are saved per-character.", 1, 0.8, 0, true)
+        if L.db and L.db.profile and L.db.profile.perCharacterFavorites then
+            GameTooltip:AddLine("Favorites are saved per-character (Settings → Viewer Setup).", 1, 0.8, 0, true)
+        else
+            GameTooltip:AddLine("Favorites are shared across characters on this profile (opt into per-character in Settings → Viewer Setup).", 1, 0.8, 0, true)
+        end
         GameTooltip:Show()
     end)
     favHeader:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
