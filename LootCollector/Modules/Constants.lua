@@ -267,7 +267,7 @@ Constants.CLASS_PROFICIENCIES = {
     HERO = { armor = {1, 2, 3, 4, 5, 6, 7, 8, 9}, weapons = {30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45}, },
 
     
-    DEMONHUNTER = { armor = {1, 2}, weapons = {30, 31, 32, 37, 38, 39, 41, 42, 44}, }, 
+    DEMONHUNTER = { armor = {1, 2}, weapons = {30, 31, 32, 35, 36, 37, 38, 39, 40, 41, 42, 44}, }, 
     PROPHET = { armor = {1, 2, 3}, weapons = {32, 34, 35, 36, 39, 41, 42, 43, 44}, }, 
     GUARDIAN = { armor = {1, 2, 3, 4, 5}, weapons = {30, 32, 33, 34, 37, 42, 43}, },
     SPIRITMAGE = { armor = {1, 2}, weapons = {30, 31, 36, 37, 38, 39, 42, 44}, }, 
