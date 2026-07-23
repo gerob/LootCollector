@@ -3,7 +3,10 @@ local Detect = L:NewModule("Detect", "AceEvent-3.0")
 
 local LEGACY_DETECT_MODE = false 
 
-Detect.recentlyScannedNPCs = Detect.recentlyScannedNPCs or {} 
+Detect.recentlyScannedNPCs = Detect.recentlyScannedNPCs or {}
+-- NPCs confirmed as ordinary (non-special) merchants. Session-scoped so
+-- MERCHANT_UPDATE buy/sell/buyback never re-probes Honor Quartermaster etc.
+Detect._nonSpecialNPCs = Detect._nonSpecialNPCs or {}
 Detect._cache, Detect._recent = { isWF = {}, isMS = {} }, {}
 Detect._dirtyBags = {}
 Detect._bagUpdateTimer = nil
@@ -284,34 +287,53 @@ if L:IsPaused() then return end
     local npcGUID = UnitGUID(unitToCheck)
     if not npcGUID then return end
 
-    
+    -- Ordinary merchants (Honor Quartermaster, etc.): never ScanMerchant on
+    -- buy/sell/buyback. Remembered for the session after first classification.
+    if self._nonSpecialNPCs[npcGUID] then
+        return
+    end
+
     if self.recentlyScannedNPCs[npcGUID] and (time() - self.recentlyScannedNPCs[npcGUID] < 10) then
         return
     end
 
+    -- Cheap subname check first — do not build a full merchant inventory yet.
     local specialVendorType = GetSpecialVendorType(unitToCheck)
     local isBMVendor = specialVendorType ~= nil
     local isMSVendor = false
-
-    local merchantItems = {}
-    if GetMerchantNumItems() > 0 then
-        merchantItems = ScanMerchant()
-    end
-
     local Constants = L:GetModule("Constants", true)
-    if not isBMVendor and Constants and Constants:HasMysticScrolls() then
-        for _, itemData in ipairs(merchantItems) do
-            if itemData.name and string.find(itemData.name, "Mystic Scroll", 1, true) then
-                isMSVendor = true
-                break
+    local numMerchantItems = (GetMerchantNumItems and GetMerchantNumItems()) or 0
+
+    if not isBMVendor then
+        if numMerchantItems == 0 then
+            -- Gossip-only / merchant not ready: do not classify as ordinary yet
+            -- (an MS vendor may still open after gossip).
+            return
+        end
+        -- Name-only MS probe (no cost/link tables). Honor QM still pays this
+        -- once per session, then is remembered as non-special.
+        if Constants and Constants:HasMysticScrolls() then
+            for i = 1, numMerchantItems do
+                local name = GetMerchantItemInfo(i)
+                if name and string.find(name, "Mystic Scroll", 1, true) then
+                    isMSVendor = true
+                    break
+                end
             end
+        end
+        if not isMSVendor then
+            self._nonSpecialNPCs[npcGUID] = true
+            return
         end
     end
 
-    if not isMSVendor and not isBMVendor then return end
-
-
+    -- Confirmed special / MS vendor: rate-limit full inventory scans.
     self.recentlyScannedNPCs[npcGUID] = time()
+
+    local merchantItems = {}
+    if numMerchantItems > 0 then
+        merchantItems = ScanMerchant()
+    end
 
     local vendorType = isMSVendor and "MS" or specialVendorType
     local now = time()
@@ -388,6 +410,10 @@ SlashCmdList["LCVENDORCHECK"] = function()
     if Detect.recentlyScannedNPCs then
         local g = UnitGUID(unit)
         if g then Detect.recentlyScannedNPCs[g] = nil end
+    end
+    if Detect._nonSpecialNPCs then
+        local g = UnitGUID(unit)
+        if g then Detect._nonSpecialNPCs[g] = nil end
     end
     local function scanDB()
         local dbV = L.GetVendorsDB and L:GetVendorsDB()
@@ -564,6 +590,15 @@ function Detect:OnChatMsgLoot(_, msg)
     local src = classifySource(self._ctx, nowTime)
     L._ddebug("Detect", "Source originally classified as: " .. tostring(src))
 
+    -- Fast-deny vendor/mail/etc. before tooltip WF scans. quest_reward stays
+    -- until after the WF override below (WF world drops can be mis-tagged).
+    local earlyDenied = { mail = true, trade = true, crafting = true, mystic_altar = true, vendor = true, vendor_buyback = true, bank = true, guild_bank = true, achievement = true, auction = true }
+    if earlyDenied[src] then 
+        L._ddebug("Detect", "Dropped: Source is in denied list (" .. tostring(src) .. ")")
+        if pTime then L:ProfileStop("Detect:OnChatMsgLoot", pTime) end 
+        return 
+    end
+
     local isWF = self:IsWorldforged(link)
     if isWF and src == "quest_reward" then
         if lastLootContext.openedAt and (nowTime - lastLootContext.openedAt) <= LOOT_VALIDITY_WINDOW then
@@ -572,9 +607,8 @@ function Detect:OnChatMsgLoot(_, msg)
         end
     end
 
-    local deniedSources = { mail = true, quest_reward = true, trade = true, crafting = true, mystic_altar = true, vendor = true, vendor_buyback = true, bank = true, guild_bank = true, achievement = true, auction = true }
-    if deniedSources[src] then 
-        L._ddebug("Detect", "Dropped: Source is in denied list (" .. tostring(src) .. ")")
+    if src == "quest_reward" then
+        L._ddebug("Detect", "Dropped: Source is in denied list (quest_reward)")
         if pTime then L:ProfileStop("Detect:OnChatMsgLoot", pTime) end 
         return 
     end
@@ -770,6 +804,14 @@ local function ProcessDirtyBags()
         wipe(Detect._dirtyBags)
         if pTime then L:ProfileStop("Detect:ProcessDirtyBags", pTime) end 
         return
+    end
+
+    local src = classifySource(Detect._ctx, now)
+    local deniedSources = { mail = true, quest_reward = true, trade = true, crafting = true, mystic_altar = true, vendor = true, vendor_buyback = true, bank = true, guild_bank = true, achievement = true, auction = true }
+    if deniedSources[src] then 
+        wipe(Detect._dirtyBags)
+        if pTime then L:ProfileStop("Detect:ProcessDirtyBags", pTime) end 
+        return 
     end
     
     for link, timestamp in pairs(Detect._recent) do

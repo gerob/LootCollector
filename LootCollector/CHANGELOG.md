@@ -1,5 +1,10 @@
 ## Version Beta-1.0.1r
 
+### Honor Quartermaster / merchant freeze fix
+- **Fixed freezes (and reported crashes) when buying/selling/buyback at Honor Quartermaster and other non-special merchants:** Ordinary vendors are classified once (cheap subname / name-only MS probe) and remembered for the session — `MERCHANT_UPDATE` no longer re-runs a full `ScanMerchant` after the old 10s stamp expires. Full inventory scans are reserved for confirmed special/MS vendors.
+- **CHAT_MSG_LOOT now denies vendor/buyback sources before tooltip WF scans**, so sell/buyback loot spam does not call `SetHyperlink`.
+- **ProcessDirtyBags now skips denied sources** (vendor, mail, trade, bank, etc.), matching chat/discovery gates so bag churn during vendor buys does not kick off discovery work.
+
 ### Performance & hibernation pass
 - **Fixed minimap filter-cache thrash:** Zones (or filter sets) with zero matching discoveries no longer force a rebuild every minimap tick. An empty result is treated as valid.
 - **Fixed filter-cache wipe during ZoneIndex build:** The minimap cache is no longer wiped when the zone index is not ready yet, avoiding blank/flicker spins at login.
