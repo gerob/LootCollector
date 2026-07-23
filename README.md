@@ -1,118 +1,176 @@
 # LootCollector for Project Ascension
 
-**LootCollector** is a collaborative hunting and navigation tool designed to help you find Worldforged gear, chest spawns, and Mystic Scrolls across Project Ascension realms. Instead of wandering the world blindly, the addon pools discovery data from the community to map out active upgrade locations, letting you target the exact gear your character needs to build power quickly.
+**LootCollector** is a collaborative hunting and navigation tool for Worldforged gear, chest spawns, special vendors, and Mystic Scrolls on Project Ascension. The addon pools discovery data from the community so you can filter for the upgrades your character needs and navigate straight to them.
 
-> [!IMPORTANT]  
-> **Compatibility Notice:** This addon has been developed and tested specifically for the **Bronzebeard** realm of Project Ascension, with support recently extended to Conquest of Azeroth (CoA) realms. Its data-sharing model is designed for static world object spawns (e.g., clickable chests/nodes). On realms where items like Mystic Scrolls drop from random mobs, sharing coordinates is not useful, and this addon may not function as intended.
+[Map overview with LootCollector pins](docs/images/map-icons.png)
+
+> [!IMPORTANT]
+> **Compatibility:** Built for Project Ascension realms including **WR** (Bronzebeard), **CoA** (Rexxar / Vol’jin), **Freepick** (Dawnrise / Area 52), and **Wildcard** (Darkmoon). The sharing model works best for **static world spawns** (chests, nodes, vendors). On setups where drops are mostly random from mobs, coordinate sharing is less useful.
 
 > [!TIP]
-> **Support Development:** Keeping this complex codebase updated and stable takes continuous time and energy. If LootCollector helps streamline your progression, consider supporting the development on [GitHub Sponsors](https://github.com/sponsors/gerob) to help maintain compatibility, prevent regressions, and fund ongoing updates.
+> **Support development:** If LootCollector helps your progression, consider [GitHub Sponsors](https://github.com/sponsors/gerob). In-game: **Settings → About** has Discord and a **Download (GitHub)** copy link.
 
 ---
 
-## How LootCollector Speeds Up Your Character Progression
 
-### 1. Target the Exact Upgrades for Your Build
-* **Filter by Class and Archetype:** Stop wasting time running to discoveries you cannot use. On Conquest of Azeroth (CoA) realms, the map automatically filters out original classes and highlights gear usable by your custom archetype (e.g., *Templar*, *Venomancer*).
-* **Deep Search:** Looking for a specific stat or a particular equip effect to complete your build? Toggle the "Deep Search" option in the Viewer to search through the tooltips of discovered items. Matches are highlighted with a distinct `[DS]` tag.
-* **Filter by Slot:** Narrow your map down to specific equipment slots, allowing you to focus strictly on replacing your lowest-item-level gear (like searching only for trinkets or weapons).
-![LootCollector_features](https://raw.githubusercontent.com/mmobrain/stuffforstuff/refs/heads/main/lc/2.jpg)
-
-### 2. Streamline Your Farming Routes
-* **Auto-Track the Closest Upgrades:** Load **TomTom** addon to activate a navigation arrow that automatically points to the nearest unlooted discovery matching your active filters or set it manually to your desired target.
-* **Skip and Filter Targets:** If a specific node is too dangerous or out of the way, you can temporarily "skip" it from the map menu, and the navigation arrow will automatically recalculate the route to your next option.
-* **Clean Map Clutter:** Toggle options to hide already looted items, low-quality gear, or bags, leaving only high-value upgrades visible on your world map and minimap.
-![LootCollector_features](https://raw.githubusercontent.com/mmobrain/stuffforstuff/refs/heads/main/lc/1.jpg)
-
-### 3. Coordinate with Community and Allies
-* **Automatic Sharing:** When you loot a qualifying item, its location is automatically shared with other LootCollector users.
-* **Real-Time Updates:** Receive notifications and map updates as other players discover items.
-* **Direct Point-of-Interest Pings ("Show to"):** Right-click any pin on your map and select "Show to..." to send the exact location directly to a friend. If they accept, the item is highlighted on their map with a pulsing animation so they can collect their upgrade immediately.
-
-### 4. Spend Less Time on Empty Spawns
-* **Community-Driven Mapping:** Spawns are kept accurate through a community vote system. If an item is no longer at a location, players can right-click the pin to **"Report as Gone."** If enough players agree, the node fades and is removed, saving you from running to empty camp spots.
-* **Realm Isolation:** Your data is kept organized by realm (Realm Buckets). Seasonal, Wildcard, and Main realm data never mix.
-
----
-
-## Essential Shortcuts for Quick Navigation
-
-* **Shift + Left Click (on any Discovery):** Instantly pans the world map to that item's location and plays a pulsing highlight.
-* **Ctrl + Alt + Left Click:** Automatically links the item and its map coordinates directly into your active chat window (party, guild, or whisper).
-* **Alt + Mouseover:** Displays additional information about the discovery in the tooltip.
-* **Ctrl + Mouseover:** Disables the nearby proximity list when hovering over tightly packed clusters of pins, making it easier to select a single target.
-* **Shift + Left Click (on Minimap Button):** Allows you to drag and reposition the button.
-
----
-
-## Simple Slash Commands
-
-* `/lc` – Opens the configuration panel to toggle filters, visibility, and settings.
-* `/lcv` – Opens the Discovery Viewer to search the database of items, stats, and locations.
-* `/lcarrow` – Toggles the navigation arrow.
-* `/lcarrow clearskip` – Clears your list of temporarily skipped targets, resetting your navigation path.
-* `/lctoggle` – Instantly toggles the visibility of all pins on your world map and minimap.
-* `/lcshare <party|raid|guild|whisper> [player]` – Broadcasts your discovery database to other players.
-* `/lcexport` / `/lcimport` – Opens the manual text import/export windows to share databases outside of the game (e.g., via Discord).
-* `/lcpause` - Hibernates addon functionality.
-* `/lcdiag <itemID|link>` – Dump stored continent/zone/coords/merge-count for one item (useful when diagnosing misplaced pins).
-
----
 
 ## Installation
 
-1.  Download the latest version from the [Releases](https://github.com/gerob/LootCollector/releases) page.
-2.  Extract the ZIP file.
-3.  Copy the `LootCollector` folder into your `Interface\AddOns` directory in your World of Warcraft installation.
-4.  Restart World of Warcraft.
+1. Download the latest release from [Releases](https://github.com/gerob/LootCollector/releases).
+2. Extract the ZIP.
+3. Copy these three folders into `Interface\AddOns` (keep the folder names exactly as they are):
+  - `LootCollector`
+  - `LootCollector_StarterDB`
+  - `LootCollector_CustomImport`
+4. Restart World of Warcraft.
+
+The Starter DB and Custom Import addons load on demand with LootCollector. If you only copy `LootCollector`, the Viewer still works, but you will not get the bundled community starter database or the custom-import helpers.
+
+[Settings About tab with Download link](docs/images/settings-about.png)`
 
 ---
 
+
+
+## How LootCollector Speeds Up Progression
+
+
+
+### 1. Target the Exact Upgrades for Your Build
+
+- **Filter by class and archetype:** On CoA, filters highlight gear usable by your custom archetype (e.g. *Templar*, *Venomancer*) and hide incompatible relics where appropriate.
+- **Search + chips:** In the Discoveries Viewer (`/lcv`), search by **name**, **zone**, or **tooltip text** (stats, effects, spells), then **Add** chips. Chips support AND/OR within a row.
+- **Type, slot, and more:** Narrow by **Type** (Armor / Weapon / Misc), equip slot, quality, Favorites, Looted, **Enchant** (Mystic Enchants; hidden on CoA), Undiscovered Worldforged, and date filters.
+- **Filter Map:** Opt-in toggle applies your active Discoveries filters (including chips) to world map, minimap, and Arrow pins.
+
+[Discoveries Viewer with search chips and filters](docs/images/viewer-search-filters.png)
+
+
+
+### 2. Streamline Your Farming Routes
+
+- **Auto-track closest upgrades:** With **TomTom**, the navigation arrow points to the nearest unlooted discovery that matches your filters (or a pin you set manually).
+- **Skip and recalculate:** Skip awkward or dangerous nodes from the map menu; the arrow picks the next target.
+- **Cut map clutter:** Hide looted items, bags, low quality, and use **Filter Map** so only what you care about stays on the map.
+
+[Filtered map pins and navigation arrow](docs/images/map-filter-arrow.png)
+
+
+
+### 3. Coordinate with Community and Allies
+
+- **Automatic sharing:** Qualifying discoveries can sync with other LootCollector users on the public channel (when sharing is enabled).
+- **Real-time updates:** Toasts and map updates as others find items.
+- **“Show to…”:** Right-click a pin → **Show to…** to ping a friend; if they accept, it pulses on their map.
+
+[Show to menu](docs/images/showto.png)
+
+
+
+### 4. Vendors, Accuracy, and Realm Data
+
+- **Special vendors:** Detect and list vendors such as Blackmarket / Exquisite / Ring Vendor styles; inventory shows on the Vendors tab and can appear as map pins.
+- **Report as Gone:** Right-click a pin to vote a spawn empty; enough agreement fades/removes stale nodes.
+- **Realm isolation:** Data stays in realm buckets so Seasonal, Wildcard, WR, and CoA data do not mix.
+
+[Vendors tab in the Viewer](docs/images/vendors-tab.png)
+
+---
+
+
+
+## Essential Shortcuts
+
+- **Shift + Left Click** (on a discovery): Pan the world map to that location with a pulse highlight.
+- **Ctrl + Alt + Left Click:** Link the item and coordinates into your active chat (party, guild, or whisper).
+- **Alt + Mouseover:** Extra discovery details in the tooltip.
+- **Ctrl + Mouseover:** Soften crowded pin tooltips so you can pick one target.
+- **Shift + Left Click** (minimap button): Drag to reposition the button.
+
+---
+
+
+
+## Slash Commands
+
+- `/lc` – Settings (filters, visibility, About / Download).
+- `/lcv` – Discoveries Viewer.
+- `/lcarrow` – Toggle navigation arrow.
+- `/lcarrow clearskip` – Clear skipped targets.
+- `/lctoggle` – Show/hide map and minimap pins.
+- `/lcshare <party|raid|guild|whisper> [player]` – Broadcast your discovery **database** to others (not the GitHub download link).
+- `/lcexport` / `/lcimport` – Manual text export/import (e.g. Discord).
+- `/lcpause` – Hibernate background work (channel, tickers); run again to resume.
+- `/lcdiag <itemID|link>` – Dump local discoveries for one item (zones, coords, merge counts).
+
+---
+
+
+
 ## FAQ
 
-#### I just installed or updated the addon and my map is empty. What should I do?
-Because the addon separates databases by realm, your map might appear empty if you have not discovered any items on that character yet. You can quickly populate your map by importing a community-shared database string via `/lcimport` or by syncing with guild members who are running the addon.
 
-#### How do I send a specific weapon or armor location to a friend?
-Right-click the pin on your world map, select "Show to...", and enter your friend's character name. They will receive a prompt to view the location directly on their map.
 
-#### Why did a pin fade or disappear from my map?
-Other players have reported that the Discovery is no longer at that location. This system removed outdated or missing entry automatically.
+#### I just installed or updated and my map is empty. What should I do?
 
-#### How do I share data with friends?
-You can use the `/lcshare party` command to broadcast your database to party members, or use `/lcexport` to generate a text string that can be pasted into Discord or forums. Friends can use `/lcimport` to load it.
+Databases are per realm. Import a community string with `/lcimport`, sync with friends/guild via `/lcshare`, or play until discoveries (and public sync, if enabled) fill the map. A starter database may merge on login for new installs.
 
-#### Why do some discoveries appear on the Continent map instead of a specific zone?
-Certain sub-zones in the 3.3.5a client do not have their own specific map data/texture. When inside these areas, the game defaults to the Continent view. To maintain coordinate accuracy, LootCollector records these exactly as reported by the game. Building a solution around this would ultimately create more problems than it solves.
+#### How do I send one specific location to a friend?
 
-**Known affected areas include:**
-*   **Dire Maul** (appears on Kalimdor map, located in Feralas)
-*   **Caverns of Time** Entrance (appears on Kalimdor map, located in Tanaris)
-*   **Blackrock Mountain** (appears on Eastern Kingdoms map, located between Searing Gorge/Burning Steppes)
-*   **The Deadmines** Entrance (appears on Eastern Kingdoms map, located in Westfall)
-*   **Wailing Caverns** Entrance (appears on Kalimdor map, located in The Barrens)
-*   **Scarlet Monastery** Entrance (appears on Eastern Kingdoms map, located in Tirisfal Glades)
+Right-click the pin → **Show to…** → their character name. They get a prompt to show it on their map.
 
-#### Why are some item names or icons missing?**
-The addon caches item information as it encounters it. If you see "Unknown Item" or a question mark icon, the server hasn't sent the item data to your client yet. The addon will automatically retry fetching this information in the background.
+#### Why did a pin fade or disappear?
 
-#### I don't see any tooltip changes with "Enhanced WF Toltip" enabled.**
-You need AtlasLoot installed and AtlasLoot_Cache enabled for the enhanced tooltips to appear.
+Other players reported it gone. Enough votes remove outdated entries so you waste fewer trips.
 
-#### I can't click the map pins or open the right-click menu.**
-The default "M" map key opens the map in a mode that sometimes blocks LC interaction. To fully interact with pins, use the command `/script WorldMapFrame:Show()` (you can create macro and keyind it) or install a map addon like **Magnify (WotLK Edition)** or **ElvUI**, which handle this automatically.
+#### How do I share my full database?
+
+`/lcshare party` (or raid/guild/whisper), or `/lcexport` for a pasteable string. Recipients use `/lcimport`. For the **addon download URL**, use Settings → About → **Download (GitHub)** (copy popup).
+
+#### Shared vs per-character Favorites?
+
+By default Favorites are **shared** across characters on the account profile. Settings → Viewer Setup → **Per-character Favorites** is opt-in; turning it on copies the shared list into an empty character list the first time.
+
+#### Why do some discoveries show on the continent map?
+
+Some 3.3.5a sub-zones lack their own map textures, so the client uses the continent. LootCollector stores coordinates as the game reports them.
+
+**Known examples:** Dire Maul, Caverns of Time entrance, Blackrock Mountain, Deadmines entrance, Wailing Caverns entrance, Scarlet Monastery entrance.
+
+#### Why are some item names or icons missing?
+
+The client has not cached that item yet (“Unknown Item” / ?). The addon retries lookups in the background.
+
+#### Enhanced Worldforged tooltips do nothing?
+
+Install **AtlasLoot** with **AtlasLoot_Cache** enabled.
+
+#### I can’t click map pins or open the right-click menu?
+
+The default **M** map can block pin interaction. Use `/script WorldMapFrame:Show()` (macro it), or a map addon such as **Magnify (WotLK Edition)** or **ElvUI**.
+
+---
+
+
 
 ## Contributing
 
-This project is open to contributions from the community. If you are interested in fixing a bug or adding a new feature, please refer to the **[CONTRIBUTING.md](CONTRIBUTING.md)** guide for developer guidelines and best practices.
+Bug fixes and features are welcome. See **[CONTRIBUTING.md](LootCollector/CONTRIBUTING.md)** for guidelines.
 
 #### Credits
-*   **Author:** Skulltrail
-*   **Contributors:** Deidre, Rhenyra, Morty, Markosz, Bandit Tech, xan, Stilnight, Xurkon and Jollygg
-*   **Early alpha Top Collectors:** Morty, Laya, Brokenheart, Mie, Rhen, Aaltrix, Insanestar, Harrydn, Blutact
+
+- **Author:** Skulltrail
+- **Contributors:** Deidre, Rhenyra, Morty, Markosz, Bandit Tech, xan, Stilnight, Xurkon, Jollygg, and community helpers
+- **Early alpha top collectors:** Morty, Laya, Brokenheart, Mie, Rhen, Aaltrix, Insanestar, Harrydn, Blutact
+
+
 
 #### Sponsors
-*   **Sponsors:** @ERitzman (First-ever sponsor-thank you!)
+
+- @ERitzman (first sponsor — thank you!)
+
+
 
 #### License
-This project is released under the [MIT License](LICENSE.md).
+
+[MIT License](LootCollector/LICENSE.MD)
