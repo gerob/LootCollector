@@ -40,7 +40,7 @@ The Starter DB and Custom Import addons load on demand with LootCollector. If yo
 
 - **Filter by class and archetype:** On CoA, filters highlight gear usable by your custom archetype (e.g. *Templar*, *Venomancer*) and hide incompatible relics where appropriate.
 - **Search + chips:** In the Discoveries Viewer (`/lcv`), search by **name**, **zone**, **tooltip text** (stats, effects, spells), **Type**, or **Slot**, then **Add** chips. Chips support AND/OR within a row.
-- **Type, slot, and more:** Narrow by **Type** (Armor / Weapon / Misc), equip slot, quality, Favorites, Looted, **Enchant** (Mystic Enchants; hidden on CoA), Undiscovered Worldforged, and date filters.
+- **Type, slot, and more:** Narrow by **Type** (Armor including Shields / Weapon / Misc), equip slot, quality, Favorites, Looted, **Enchant** (Mystic Enchants; hidden on CoA), Undiscovered Worldforged, and date filters.
 - **Filter Map:** Opt-in toggle applies your active Discoveries filters (including chips) to world map, minimap, and Arrow pins.
 
 ![Discoveries Viewer with search chips and filters](Docs/Images/viewer-search-filters.png)

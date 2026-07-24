@@ -1,3 +1,6 @@
+#Project Specific
+Docs/Plans/*
+
 # Editor / AI backups
 *.lua.bak*
 *~

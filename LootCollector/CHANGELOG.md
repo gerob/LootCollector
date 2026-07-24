@@ -1,5 +1,8 @@
 ## Version Beta-1.0.1r
 
+### Viewer Type filter
+- **Armor Type filter now includes Shields** (Cloth / Leather / Mail / Plate / Shields). Misc remains `Miscellaneous` only (Neck / Finger / Trinket / etc.). Librams / Idols / Totems / Sigils stay out of Type (unequippable and purged on CoA).
+
 ### Honor Quartermaster / merchant freeze fix
 - **Fixed freezes (and reported crashes) when buying/selling/buyback at Honor Quartermaster and other non-special merchants:** Ordinary vendors are classified once (cheap subname / name-only MS probe) and remembered for the session — `MERCHANT_UPDATE` no longer re-runs a full `ScanMerchant` after the old 10s stamp expires. Full inventory scans are reserved for confirmed special/MS vendors.
 - **CHAT_MSG_LOOT now denies vendor/buyback sources before tooltip WF scans**, so sell/buyback loot spam does not call `SetHyperlink`.
@@ -12,7 +15,7 @@
 - **Cleanup:** Removed duplicate Viewer Hide / delete popup definitions; dropped unused Detect recovery-suppression fields; `/lcvendor` skips force-scan unless the shop window is open on `npc`.
 
 ### Viewer Type filter + Favorites scope
-- **Restored Worldforged Type filter** (top-bar button): Armor (Cloth/Leather/Mail/Plate), Weapon subtypes, and Misc (`Miscellaneous` — Neck/Finger/Trinket/etc.) via EasyMenu, wired to existing `columnFilters.eq.type` (ported from JollyGG).
+- **Restored Worldforged Type filter** (top-bar button): Armor (Cloth/Leather/Mail/Plate/Shields), Weapon subtypes, and Misc (`Miscellaneous` — Neck/Finger/Trinket/etc.) via EasyMenu, wired to existing `columnFilters.eq.type` (ported from JollyGG).
 - **Opt-in per-character Favorites:** Default remains shared (`profile.favorites`). Settings → Viewer Setup → “Per-character Favorites” uses `char.favorites`. First enable copies the shared list into the character list when empty; disabling returns to the shared list without wiping either.
 - **Settings → About → Download (GitHub):** Copy popup for `https://github.com/gerob/LootCollector` (Ctrl+C) and prints the URL to chat.
 

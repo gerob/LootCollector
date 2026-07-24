@@ -10,7 +10,8 @@ function ViewerSetSelectedRow(row)
     end
 end
 
-local TYPE_FILTER_ARMOR = { "Cloth", "Leather", "Mail", "Plate" }
+-- GetItemInfo Armor subtypes offered in the Type filter (Shields is ist=5).
+local TYPE_FILTER_ARMOR = { "Cloth", "Leather", "Mail", "Plate", "Shields" }
 local TYPE_FILTER_WEAPON = {
     "One-Handed Axes", "Two-Handed Axes", "Bows", "Guns",
     "One-Handed Maces", "Two-Handed Maces", "Polearms",
