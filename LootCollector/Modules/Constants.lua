@@ -269,7 +269,7 @@ Constants.CLASS_PROFICIENCIES = {
     
     DEMONHUNTER = { armor = {1, 2}, weapons = {30, 31, 32, 35, 36, 37, 38, 39, 40, 41, 42, 44}, }, 
     PROPHET = { armor = {1, 2, 3}, weapons = {32, 34, 35, 36, 39, 41, 42, 43, 44}, }, 
-    GUARDIAN = { armor = {1, 2, 3, 4, 5}, weapons = {30, 32, 33, 34, 37, 42, 43}, },
+    GUARDIAN = { armor = {1, 2, 3, 4, 5}, weapons = {30, 32, 33, 34, 36, 37, 40, 42, 43}, },
     SPIRITMAGE = { armor = {1, 2}, weapons = {30, 31, 36, 37, 38, 39, 42, 44}, }, 
     SUNCLERIC = { armor = {1, 2, 3, 4, 5}, weapons = {32, 34, 35, 36, 37, 38, 39, 43, 44}, },
     MONK = { armor = {1, 2, 3}, weapons = {30, 31, 32, 34, 35, 36, 37, 38, 39, 43}, }, 

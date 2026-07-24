@@ -2,6 +2,7 @@
 
 ### Viewer Type filter
 - **Armor Type filter now includes Shields** (Cloth / Leather / Mail / Plate / Shields). Misc remains `Miscellaneous` only (Neck / Finger / Trinket / etc.). Librams / Idols / Totems / Sigils stay out of Type (unequippable and purged on CoA).
+- **Guardian Usable By:** Added Polearms and Fist Weapons to Guardian weapon proficiencies.
 
 ### Honor Quartermaster / merchant freeze fix
 - **Fixed freezes (and reported crashes) when buying/selling/buyback at Honor Quartermaster and other non-special merchants:** Ordinary vendors are classified once (cheap subname / name-only MS probe) and remembered for the session — `MERCHANT_UPDATE` no longer re-runs a full `ScanMerchant` after the old 10s stamp expires. Full inventory scans are reserved for confirmed special/MS vendors.
