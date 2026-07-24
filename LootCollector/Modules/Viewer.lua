@@ -219,7 +219,8 @@ end
 -- Each filter row is a typed expression of keywords joined by AND / OR, e.g.
 -- "intellect and spellpower" or "haste or spell crit". Rows are combined with
 -- AND (each added row narrows the results further). Keywords are matched as
--- case-insensitive substrings of an item's tooltip text.
+-- case-insensitive substrings of name, zone, tooltip, Type (itemSubType), and
+-- Slot (localized equipLoc).
 --
 -- CompileDeepExpression turns a string into { tokens = {...}, ops = {...} }
 -- where ops[i] is the operator ("and"/"or") that joins tokens[i] and tokens[i+1].
@@ -307,8 +308,14 @@ function Viewer:MatchesDeepFilter(haystack)
     return true
 end
 
-function Viewer:BuildDeepFilterHaystack(name, zone, tooltip)
-    return string.lower(tostring(name or "") .. " " .. tostring(zone or "") .. " " .. tostring(tooltip or ""))
+function Viewer:BuildDeepFilterHaystack(name, zone, tooltip, itemSubType, slot)
+    return string.lower(
+        tostring(name or "") .. " " ..
+        tostring(zone or "") .. " " ..
+        tostring(tooltip or "") .. " " ..
+        tostring(itemSubType or "") .. " " ..
+        tostring(slot or "")
+    )
 end
 
 function Viewer:IsFilterMapEnabled()
@@ -536,34 +543,47 @@ local function GetLocalizedZoneName(discovery)
     return localizedZoneName
 end
 
--- Viewer list row: name OR zone OR tooltip (vendors use vendor name).
+-- Viewer list row: name / zone / tooltip / Type / Slot (vendors use vendor name).
 function Viewer:MatchesDeepFilterOnRow(data)
     if not data then return false end
     local name = data.isVendor and (data.vendorName or "") or (data.itemName or "")
     local zone = data.zoneNameStr or (data.discovery and GetLocalizedZoneName(data.discovery)) or ""
     local tip = data.tooltipText or ""
-    return self:MatchesDeepFilter(self:BuildDeepFilterHaystack(name, zone, tip))
+    local itemSubType = data.itemSubType or ""
+    local slot = data.equipLoc and _G[data.equipLoc] or ""
+    return self:MatchesDeepFilter(self:BuildDeepFilterHaystack(name, zone, tip, itemSubType, slot))
 end
 
--- Map/Arrow discovery record: name + zone + cached tooltip (no SetHyperlink).
+-- Map/Arrow discovery record: name + zone + cached tooltip + Type + Slot (no SetHyperlink).
 function Viewer:MatchesDeepFilterOnDiscoveryRecord(d)
     if not d then return false end
     local Constants = L:GetModule("Constants", true)
     local isVendor = (Constants and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET) or d.vendorType
     local name = ""
+    local tip = ""
+    local itemSubType = ""
+    local slot = ""
     if isVendor then
         name = d.n or d.vendorName or d.name or ""
     else
-        local itemName = GetItemInfo(d.il or d.i or 0)
+        local itemName, _, _, _, _, _, subType, _, equipLoc = GetItemInfo(d.il or d.i or 0)
         name = itemName or ""
-    end
-    local zone = GetLocalizedZoneName(d) or ""
-    local tip = ""
-    if not isVendor then
+        itemSubType = subType or ""
+        if itemSubType == "" and Constants and d.ist and Constants.ID_TO_ITEM_SUBTYPE then
+            itemSubType = Constants.ID_TO_ITEM_SUBTYPE[d.ist] or ""
+        end
+        if not equipLoc or equipLoc == "" then
+            equipLoc = d.el
+        end
+        if (not equipLoc or equipLoc == "") and Constants and d.ist and Constants.IST_TO_EQUIPLOC then
+            equipLoc = Constants.IST_TO_EQUIPLOC[d.ist]
+        end
+        slot = equipLoc and _G[equipLoc] or ""
         local Scanner = L:GetModule("Scanner", true)
         tip = Scanner and Scanner.GetCachedFullText and Scanner:GetCachedFullText(d.i, d.il) or ""
     end
-    return self:MatchesDeepFilter(self:BuildDeepFilterHaystack(name, zone, tip))
+    local zone = GetLocalizedZoneName(d) or ""
+    return self:MatchesDeepFilter(self:BuildDeepFilterHaystack(name, zone, tip, itemSubType, slot))
 end
 
 function Viewer:EnsureDeepFiltersLoaded()
