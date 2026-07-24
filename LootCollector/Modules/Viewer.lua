@@ -10,7 +10,7 @@ function ViewerSetSelectedRow(row)
     end
 end
 
-local TYPE_FILTER_ARMOR = { "Cloth", "Leather", "Mail", "Plate" }
+local TYPE_FILTER_ARMOR = { "Cloth", "Leather", "Mail", "Plate", "Shields" }
 local TYPE_FILTER_WEAPON = {
     "One-Handed Axes", "Two-Handed Axes", "Bows", "Guns",
     "One-Handed Maces", "Two-Handed Maces", "Polearms",
@@ -19,6 +19,37 @@ local TYPE_FILTER_WEAPON = {
 }
 -- GetItemInfo subtype for Neck / Finger / Trinket / Shirt / Tabard (and similar).
 local TYPE_FILTER_MISC = { "Miscellaneous" }
+
+-- Blizzard's global INVTYPE_* strings collapse distinct equip locations onto
+-- the same visible label: INVTYPE_SHIELD and INVTYPE_WEAPONOFFHAND are both
+-- "Off Hand", so shields could never be filtered on their own. SlotLabel()
+-- gives the ambiguous cases their own name and falls through to the global
+-- string for everything else.
+local SLOT_LABEL_OVERRIDE = {
+    INVTYPE_SHIELD      = "Shield",
+    INVTYPE_HOLDABLE    = "Held In Off-hand",
+    INVTYPE_RANGEDRIGHT = "Ranged",
+    INVTYPE_ROBE        = "Chest",
+}
+
+local function SlotLabel(equipLoc)
+    if not equipLoc or equipLoc == "" then return "" end
+    return SLOT_LABEL_OVERRIDE[equipLoc] or _G[equipLoc] or ""
+end
+
+-- The Slots dropdown is built from whatever GetItemInfo has cached, so slots
+-- with no cached items yet (Neck, Finger, Trinket, Two-Hand...) simply never
+-- appeared as options. These are always offered regardless of cache state.
+local CANONICAL_SLOT_EQUIPLOCS = {
+    "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_CLOAK",
+    "INVTYPE_CHEST", "INVTYPE_BODY", "INVTYPE_TABARD", "INVTYPE_WRIST",
+    "INVTYPE_HAND", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET",
+    "INVTYPE_FINGER", "INVTYPE_TRINKET",
+    "INVTYPE_WEAPON", "INVTYPE_2HWEAPON", "INVTYPE_WEAPONMAINHAND",
+    "INVTYPE_WEAPONOFFHAND", "INVTYPE_SHIELD", "INVTYPE_HOLDABLE",
+    "INVTYPE_RANGED", "INVTYPE_RANGEDRIGHT", "INVTYPE_THROWN",
+    "INVTYPE_RELIC", "INVTYPE_BAG", "INVTYPE_QUIVER", "INVTYPE_AMMO",
+}
 local TypeFilterMenuHost = CreateFrame("Frame", "LootCollectorViewerTypeFilterMenuHost", UIParent, "UIDropDownMenuTemplate")
 
 local SOURCE_NAMES = {
@@ -695,7 +726,7 @@ function Viewer:DiscoveryPassesViewerFilters(d)
                     equipLoc = Constants.IST_TO_EQUIPLOC[d.ist]
                 end
             end
-            local slotValue = equipLoc and _G[equipLoc] or ""
+            local slotValue = SlotLabel(equipLoc)
             if not self.columnFilters.eq.slot[slotValue] then return false end
         end
 
@@ -1276,7 +1307,7 @@ GetFilteredDatasetForUniqueValues = function(context)
             end
 
             if passed and context.activeFilters.slot then
-                local slotValue = data.equipLoc and _G[data.equipLoc] or ""
+                local slotValue = SlotLabel(data.equipLoc)
                 if not context.activeFilters.slot[slotValue] then passed = false end
             end
 
@@ -1482,7 +1513,7 @@ GetUniqueValues = function(column)
         }
 
        local columnExtractor = {
-            slot = function(data) return data.equipLoc and _G[data.equipLoc] or "" end,
+            slot = function(data) return SlotLabel(data.equipLoc) end,
             type = function(data) return data.itemSubType or "" end,
             class = function(data)
                 if data.cl and data.cl ~= "cl" then
@@ -1528,6 +1559,19 @@ GetUniqueValues = function(column)
                 if value and value ~= "" and not seen[value] then
                     seen[value] = true
                     _tinsert(values, value)
+                end
+            end
+        end
+
+        -- Always offer every real equip location, even when nothing matching
+        -- it has been cached yet, so Neck / Finger / Trinket / Shield / etc.
+        -- are selectable instead of silently absent.
+        if column == "slot" then
+            for _, equipLoc in ipairs(CANONICAL_SLOT_EQUIPLOCS) do
+                local label = SlotLabel(equipLoc)
+                if label ~= "" and not seen[label] then
+                    seen[label] = true
+                    _tinsert(values, label)
                 end
             end
         end
@@ -1848,7 +1892,7 @@ function Viewer:ShowColumnFilterDropdown(column, anchor, values)
             else
                 local NUMERIC_SOURCE_MAP = { [0]="world_loot", [1]="npc_gossip", [2]="emote_event", [3]="direct" }
                 local columnExtractor = {
-                    slot = function(data) return data.equipLoc and _G[data.equipLoc] or "" end,
+                    slot = function(data) return SlotLabel(data.equipLoc) end,
                     type = function(data) return data.itemSubType or "" end,
                     class = function(data) return data.characterClass or "" end,
                     source = function(data)
@@ -2328,7 +2372,7 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                 row.sortName      = itemName or ""
                 row.sortClass     = characterClass or ""
                 row.sortType      = itemSubTypeVal or ""
-                row.sortSlot      = equipLocVal and _G[equipLocVal] or ""
+                row.sortSlot      = SlotLabel(equipLocVal)
 
                 if Core and itemID and not Core:IsItemCached(itemID) then
                     Core:QueueItemForCaching(itemID)
@@ -2540,7 +2584,7 @@ function Viewer:GetFilteredDiscoveries()
             eq = {
                 slot = function(data)
                     if size(self.columnFilters.eq.slot) == 0 then return true end
-                    local slotValue = data.equipLoc and _G[data.equipLoc] or ""
+                    local slotValue = SlotLabel(data.equipLoc)
                     return self.columnFilters.eq.slot[slotValue] ~= nil
                 end,
                 type = function(data)
@@ -6865,7 +6909,7 @@ function Viewer:UpdateRows()
                             data.sortName = name
                             data.sortClass = characterClass or ""
                             data.sortType = itemSubTypeVal or ""
-                            data.sortSlot = equipLocVal and _G[equipLocVal] or ""
+                            data.sortSlot = SlotLabel(equipLocVal)
                             -- Healed data can change filtering (e.g. CoA
                             -- relic hiding) and sorting; refilter soon.
                             Viewer:ScheduleFilterInvalidation()
@@ -6916,7 +6960,7 @@ function Viewer:UpdateRows()
                     local lastElement = row.levelText
                     
                     if isEqView then
-                        row.slotText:SetText(data.equipLoc and _G[data.equipLoc] or "")
+                        row.slotText:SetText(SlotLabel(data.equipLoc))
                         row.slotText:SetAlpha(alpha)
                         row.typeText:SetText(data.itemSubType or "")
                         row.typeText:SetAlpha(alpha)
@@ -7494,7 +7538,7 @@ function Viewer:OnGetItemInfoReceived(itemID)
                     row.sortName      = name
                     row.sortClass     = characterClass or ""
                     row.sortType      = itemSubTypeVal or ""
-                    row.sortSlot      = equipLocVal and _G[equipLocVal] or ""
+                    row.sortSlot      = SlotLabel(equipLocVal)
                     updatedAny = true
                 end
             end
