@@ -1,5 +1,8 @@
 ## Version Beta-1.0.1r
 
+### Enhanced WF Tooltip
+- **Fixed upgrade lines missing when hovering Worldforged IDs:** Tooltip now resolves the base item via `GetBaseItemID` and builds Dung–T3 from `WorldforgedUpgrades` (same source as Viewer), falling back to `GetItemDifficultyID` only when the item is absent from that table.
+
 ### Viewer Type filter
 - **Armor Type filter now includes Shields** (Cloth / Leather / Mail / Plate / Shields). Misc remains `Miscellaneous` only (Neck / Finger / Trinket / etc.). Librams / Idols / Totems / Sigils stay out of Type (unequippable and purged on CoA).
 - **Guardian Usable By:** Added Polearms and Fist Weapons to Guardian weapon proficiencies.

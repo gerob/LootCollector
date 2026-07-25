@@ -484,7 +484,35 @@ local function AddUpgradeInfo(tooltip, upgradeChain)
     return true
 end
 
-local function BuildUpgradeChain(baseItemID)
+local function ResolveUpgradeIDForTier(baseItemID, tierIndex)
+    local upgrades = L.WorldforgedUpgrades and L.WorldforgedUpgrades[baseItemID]
+    if upgrades then
+        local id = upgrades[tierIndex]
+        if id and id ~= 0 and id ~= baseItemID then
+            return id
+        end
+        -- Sparse table entry: nil means no upgrade for this tier (do not ask the API).
+        return nil
+    end
+
+    if GetItemDifficultyID then
+        local upgradedID = GetItemDifficultyID(baseItemID, tierIndex)
+        if upgradedID and upgradedID ~= 0 and upgradedID ~= baseItemID then
+            return upgradedID
+        end
+    end
+    return nil
+end
+
+local function BuildUpgradeChain(itemID)
+    local baseItemID = itemID
+    if L.GetBaseItemID then
+        baseItemID = L:GetBaseItemID(itemID) or itemID
+    end
+    if baseItemID ~= itemID then
+        DebugPrint(">>> Resolved baseItemID:", baseItemID, "from hovered:", itemID)
+    end
+
     if upgradeCache[baseItemID] then
         local chain = upgradeCache[baseItemID]
         for _, upgrade in ipairs(chain) do
@@ -506,18 +534,13 @@ local function BuildUpgradeChain(baseItemID)
         return chain
     end
 
-    if not GetItemDifficultyID then
-        DebugPrint(">>> ERROR: GetItemDifficultyID not found")
-        return nil
-    end
-
     local newChain = {}
 
     for _, tier in ipairs(DIFFICULTY_TIERS) do
-        local upgradedID = GetItemDifficultyID(baseItemID, tier.index)
+        local upgradedID = ResolveUpgradeIDForTier(baseItemID, tier.index)
         DebugPrint(">>> Tier", tier.index, "(", tier.short, ") ->", tostring(upgradedID))
 
-        if upgradedID and upgradedID ~= 0 and upgradedID ~= baseItemID then
+        if upgradedID then
             local itemName, itemLink, itemQuality = GetItemInfo(upgradedID)
             local entry = {
                 itemID = upgradedID,
@@ -559,6 +582,7 @@ local function BuildUpgradeChain(baseItemID)
         return newChain
     end
 
+    DebugPrint(">>> BuildUpgradeChain: empty for base", baseItemID)
     return nil
 end
 
@@ -573,7 +597,7 @@ local function OnTooltipSetItem(tooltip)
         return
     end
 
-    if not GetItemDifficultyID then
+    if not GetItemDifficultyID and not (L.WorldforgedUpgrades) then
         return
     end
 
@@ -601,6 +625,8 @@ local function OnTooltipSetItem(tooltip)
         AddUpgradeInfo(tooltip, upgradeChain)
         tooltip:Show()
         DebugPrint(">>> Tooltip updated")
+    else
+        DebugPrint(">>> No upgrade chain to display")
     end
 
     DebugPrint("==========================================")
