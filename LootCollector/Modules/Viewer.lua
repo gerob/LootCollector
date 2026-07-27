@@ -165,8 +165,11 @@ Viewer.columnFilters  = {
     quality  = {},
     looted   = {},
     vendorType = {},
+    stats    = {},
     duplicates = false,
 }
+
+Viewer.statsMatchAll = false
 
 Viewer.vendorInventoryFrame = nil      
 Viewer.vendorInventoryLines = nil      
@@ -615,6 +618,7 @@ function Viewer:HasViewerFiltersForMap()
     if size(self.columnFilters.source) > 0 then return true end
     if size(self.columnFilters.quality) > 0 then return true end
     if size(self.columnFilters.vendorType) > 0 then return true end
+    if size(self.columnFilters.stats) > 0 then return true end
     if self.lootedFilterState ~= nil or size(self.columnFilters.looted) > 0 then return true end
     if self.collectedMEFilterState ~= nil then return true end
     if self.columnFilters.duplicates then return true end
@@ -1175,6 +1179,26 @@ function Viewer:ShowVendorInventoryForDiscovery(discovery)
         self.vendorInventoryFrame.scrollFrame:SetVerticalScroll(0)
     end
     self:UpdateVendorInventoryScroll()
+end
+
+--[[ Stat filtering: detection and the stat list live in the Scanner module, so
+     the Viewer's Stats filter and the map pin Stats filter share one
+     implementation. --]]
+local function GetStatFilterDefs()
+    local Scanner = L:GetModule("Scanner", true)
+    return (Scanner and Scanner.STAT_FILTERS) or {}
+end
+
+local function RowMatchesStatFilter(data)
+    local selected = Viewer.columnFilters.stats
+    if not selected or size(selected) == 0 then return true end
+
+    local Scanner = L:GetModule("Scanner", true)
+    if not Scanner then return true end
+
+    local d = data.discovery
+    return Scanner:MatchesStatFilter(d and d.i, d and d.il, selected,
+                                     Viewer.statsMatchAll, data.tooltipText)
 end
 
 local GetCascadedFilterContext, GetFilteredDatasetForUniqueValues, GetUniqueValues
@@ -1828,6 +1852,89 @@ for i = 1, MAX_LEVELS do
         list:HookScript("OnShow", function(self)
             local info = lastAnchor[i] or {}
             RepositionList(i, info.dropDownFrame, info.anchorTo)
+        end)
+    end
+end
+
+function Viewer:ShowStatsFilterDropdown(anchor)
+    local dropdownList = _G["DropDownList1"]
+    if Viewer.currentFilterAnchor == anchor and dropdownList and dropdownList:IsShown() then
+        HideDropDownMenu(1)
+        Viewer.currentFilterAnchor = nil
+        return
+    end
+    Viewer.currentFilterAnchor = anchor
+
+    HideDropDownMenu(1)
+
+    local function ApplyStatChange()
+        Viewer.currentPage = 1
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+        Cache.uniqueValuesValid = false
+        Cache.uniqueValuesContext = {}
+        Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
+        Viewer:UpdateFilterButtonStates()
+    end
+
+    local dropdown = CreateFrame("Frame", "LootCollectorViewerStatsDropdown", Viewer.window, "UIDropDownMenuTemplate")
+    UIDropDownMenu_Initialize(dropdown, function(self, level)
+        UIDropDownMenu_AddButton({
+            text = Viewer.statsMatchAll and "Match: |cff00ff00All selected|r" or "Match: |cffffd100Any selected|r",
+            notCheckable = true,
+            func = function()
+                Viewer.statsMatchAll = not Viewer.statsMatchAll
+                ApplyStatChange()
+                HideDropDownMenu(1)
+            end
+        }, level)
+
+        UIDropDownMenu_AddButton({
+            text = "Clear Stat Filters",
+            notCheckable = true,
+            func = function()
+                wipe(Viewer.columnFilters.stats)
+                Viewer.statsMatchAll = false
+                ApplyStatChange()
+                HideDropDownMenu(1)
+            end
+        }, level)
+
+        UIDropDownMenu_AddButton({ text = "", notCheckable = true, disabled = true }, level)
+
+        local statDefs = GetStatFilterDefs()
+        for i = 1, #statDefs do
+            local def = statDefs[i]
+            UIDropDownMenu_AddButton({
+                text = def.label,
+                checked = Viewer.columnFilters.stats[def.key] ~= nil,
+                keepShownOnClick = true,
+                func = function()
+                    local selected = Viewer.columnFilters.stats
+                    if selected[def.key] then
+                        selected[def.key] = nil
+                    else
+                        selected[def.key] = true
+                    end
+                    ApplyStatChange()
+                end
+            }, level)
+        end
+    end, "MENU")
+
+    ToggleDropDownMenu(1, nil, dropdown, anchor, 0, 0)
+
+    local list = _G["DropDownList1"]
+    if list then
+        list:SetScript("OnLeave", function(self)
+            createTimer(0.1, function()
+                if list and list:IsShown() then
+                    if not list:IsMouseOver() and not anchor:IsMouseOver() then
+                        HideDropDownMenu(1)
+                    end
+                end
+            end)
         end)
     end
 end
@@ -2615,6 +2722,10 @@ function Viewer:GetFilteredDiscoveries()
                 local qualityValue = QUALITY_NAMES[quality] or ("Quality " .. tostring(quality))
                 return self.columnFilters.quality[qualityValue] ~= nil
             end,
+            stats = function(data)
+                if isVendorView then return true end
+                return RowMatchesStatFilter(data)
+            end,
             looted = function(data)
                 if isVendorView then return true end
                 if size(self.columnFilters.looted) == 0 then return true end
@@ -2648,6 +2759,7 @@ function Viewer:GetFilteredDiscoveries()
                 if not filterPredicates.columnFilters.source(data)   then passed = false end
                 if passed and not filterPredicates.columnFilters.quality(data)  then passed = false end
                 if passed and not filterPredicates.columnFilters.looted(data)   then passed = false end
+                if passed and not filterPredicates.columnFilters.stats(data)    then passed = false end
             end
           
             if passed and self.currentFilter == "eq" then
@@ -2887,6 +2999,11 @@ function Viewer:GetFilterStateHash()
     if self.favoritesFilterState == true then
         _tinsert(filterEntries, "favorites:true")
     end
+    if size(self.columnFilters.stats) > 0 then
+        local statKeys = keys(self.columnFilters.stats)
+        _tsort(statKeys)
+        _tinsert(filterEntries, concatStrings("stats:", self.statsMatchAll and "all:" or "any:", _tconcat(statKeys, ",")))
+    end
     if L.db and L.db.profile and L.db.profile.perCharacterFavorites then
         _tinsert(filterEntries, "favoritesScope:char")
     else
@@ -3038,6 +3155,7 @@ function Viewer:HasActiveFilters()
     if size(self.columnFilters.source) > 0 then return true end
     if size(self.columnFilters.quality) > 0 then return true end
     if size(self.columnFilters.vendorType) > 0 then return true end
+    if size(self.columnFilters.stats) > 0 then return true end
     if self.lootedFilterState ~= nil or size(self.columnFilters.looted) > 0 then return true end
     if self.collectedMEFilterState ~= nil then return true end
     if self.columnFilters.duplicates then return true end
@@ -3326,6 +3444,17 @@ function Viewer:UpdateFilterButtonStates()
         self.usableByFilterBtn:SetText("Usable By")
     end
 
+    if self.statsFilterBtn then
+        local statCount = size(self.columnFilters.stats)
+        if statCount > 0 then
+            setButtonTextColor(self.statsFilterBtn, 1, 0.8, 0.2)
+            self.statsFilterBtn:SetText(concatStrings("Stats (", statCount, ")"))
+        else
+            setButtonTextColor(self.statsFilterBtn, 1, 1, 1)
+            self.statsFilterBtn:SetText("Stats")
+        end
+    end
+
     if self.collectedMEFilterBtn then
         if self.collectedMEFilterState == true then
             setButtonTextColor(self.collectedMEFilterBtn, 1, 0.8, 0.2)
@@ -3391,6 +3520,7 @@ function Viewer:UpdateFilterButtonStates()
     if self.slotsFilterBtn then self.slotsFilterBtn:SetShown(showSlots) end
     if self.usableByFilterBtn then self.usableByFilterBtn:SetShown(showNormalFilters) end
     if self.lootedFilterBtn then self.lootedFilterBtn:SetShown(showNormalFilters) end
+    if self.statsFilterBtn then self.statsFilterBtn:SetShown(showNormalFilters) end
     if self.collectedMEFilterBtn then self.collectedMEFilterBtn:SetShown(showNormalFilters and not hideEnchantFilter) end
     if self.lsFilterBtn then self.lsFilterBtn:SetShown(showNormalFilters) end
     if self.duplicatesFilterBtn then self.duplicatesFilterBtn:SetShown(showDuplicates) end
@@ -3422,6 +3552,7 @@ function Viewer:UpdateFilterButtonStates()
             self.usableByFilterBtn,
             self.favoritesFilterBtn,
             self.lootedFilterBtn,
+            self.statsFilterBtn,
             self.collectedMEFilterBtn,
             self.lsFilterBtn,          
             self.duplicatesFilterBtn,
@@ -4907,7 +5038,23 @@ beta-0.8.6r:
     end)
     lootedFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local collectedMEFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Enchant", 82, lootedFilterBtn, "RIGHT")
+    local statsFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Stats", 45, lootedFilterBtn, "RIGHT")
+    statsFilterBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText("Filter by item stats", 1, 0.82, 0)
+        GameTooltip:AddLine("Pick one or more stats (Strength, Crit, Armor, ...).", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("Match: Any shows items with at least one of them.", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("Match: All shows only items that have every one.", 0.8, 0.8, 0.8, true)
+        GameTooltip:Show()
+    end)
+    statsFilterBtn:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
+    statsFilterBtn:SetScript("OnClick", function(self, button)
+        Viewer:ShowStatsFilterDropdown(self)
+    end)
+    statsFilterBtn:RegisterForClicks("LeftButtonUp")
+    self.statsFilterBtn = statsFilterBtn
+
+    local collectedMEFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Enchant", 82, statsFilterBtn, "RIGHT")
     collectedMEFilterBtn:SetScript("OnEnter", function(self) 
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Filter by which Mystic Enchants have been collected.")
@@ -7188,6 +7335,7 @@ function Viewer:ClearCaches()
         quality = {},
         looted = {},
         vendorType = {},
+        stats = {},
         duplicates = false 
     }
     self.columnFilters = copy(defaultFilters)

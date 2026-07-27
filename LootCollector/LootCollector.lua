@@ -205,6 +205,10 @@ local dbDefaults = {
             minRarity = 0,
             usableByClasses = {},
             allowedEquipLoc = {},
+            statFilters = {},
+            statFiltersMatchAll = false,
+            minReqLevel = 0,
+            maxReqLevel = 0,
             applyViewerFiltersOnMap = false,
 			enableChatLinkIntegration = true,
 			disableProximityList = true,
@@ -643,6 +647,10 @@ function LootCollector:GetFilters()
     combined.minRarity = f.minRarity or 0
     combined.allowedEquipLoc = f.allowedEquipLoc or {}
     combined.usableByClasses = f.usableByClasses or {}
+    combined.statFilters = f.statFilters or {}
+    combined.statFiltersMatchAll = f.statFiltersMatchAll or false
+    combined.minReqLevel = f.minReqLevel or 0
+    combined.maxReqLevel = f.maxReqLevel or 0
     combined.showMysticScrolls = f.showMysticScrolls ~= false
     combined.showWorldforged = f.showWorldforged ~= false
     combined.showVendors = f.showVendors ~= false
@@ -933,7 +941,42 @@ function LootCollector:DiscoveryPassesFilters(d)
         end
     end
 
+
+    if not skipOverlap and next(f.statFilters) then
+        local Scanner = self:GetModule("Scanner", true)
+        if Scanner and not Scanner:MatchesStatFilter(d.i, d.il, f.statFilters, f.statFiltersMatchAll) then
+            return false
+        end
+    end
+
+    if not skipOverlap then
+        local minLvl, maxLvl = f.minReqLevel or 0, f.maxReqLevel or 0
+        if minLvl > 0 or maxLvl > 0 then
+            local Scanner = self:GetModule("Scanner", true)
+            if Scanner then
+                local reqLevel = Scanner:GetItemReqLevel(d.i, d.il)
+
+                if not reqLevel then return false end
+                if minLvl > 0 and reqLevel < minLvl then return false end
+                if maxLvl > 0 and reqLevel > maxLvl then return false end
+            end
+        end
+    end
+
     return true
+end
+
+-- True when the user has set a filter that actually narrows the result set.
+-- Continent/world maps only draw pins in that case - unfiltered they would
+-- render the whole database at once.
+function LootCollector:HasNarrowingMapFilters()
+    local f = self:GetFilters()
+    if next(f.statFilters) then return true end
+    if (f.minReqLevel or 0) > 0 or (f.maxReqLevel or 0) > 0 then return true end
+    if next(f.allowedEquipLoc) then return true end
+    if next(f.usableByClasses) then return true end
+    if (f.minRarity or 0) > 0 then return true end
+    return false
 end
 
 StaticPopupDialogs["LOOTCOLLECTOR_MIGRATION_RELOAD"] = {

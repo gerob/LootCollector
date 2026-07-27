@@ -1,3 +1,21 @@
+## Unreleased
+
+### Stat Filter
+- **Viewer:** New "Stats" button filters items by the stats on them - Strength, Agility, Stamina, Intellect, Spirit, Attack Power, Spell Power, Bonus Healing, MP5, Hit, Crit, Haste, Expertise, Armor Penetration, Armor, Defense, Dodge, Parry, Block Rating, Block Value and Resilience.
+- **Map:** Matching "Stats" submenu in the map filter menu, saved per character alongside the other map filters and included in "Copy Filters From...".
+- **Any / All matching:** Both stat filters can require *any* selected stat or *all* of them, so gear for a specific spec can be narrowed in one pass.
+- **Detection:** Primary source is Blizzard's `GetItemStats` API (exact, localisation-proof); tooltip text parsing fills in what the API does not report - shield block value, "chance to block/hit/crit" wordings and custom stat lines.
+- **Persistence:** Parsed stats are stored per item as a compact bitmask in the scanner cache, so once any character on the account has seen an item its stats are known instantly at load, with no rescan and no dependency on the client item cache.
+
+### Required Level Filter (Map)
+- **Min Level / Max Level** submenus in the map filter menu, inclusive at both ends. Reads the persisted required level, so it works without the client item cache.
+- A `scanOK` marker now distinguishes "this item has no level requirement" from "this item was never scanned successfully", so a failed scan is no longer cached as level 0.
+
+### Continent Map Pins
+- Discoveries now draw on continent maps, placed by an exact zone-to-continent transform derived from the Astrolabe 3.3.5 dataset and verified against `Map.WorldMapSize`.
+- Pins only appear on a continent while a narrowing filter is set (stats, level range, slots, usable-by or minimum quality) - unfiltered, a continent would try to draw the whole database at once.
+- Starter sub-zones (Valley of Trials, Northshire Valley, ...) are not separate map areas in the reference dataset, so they resolve through their parent zone's entrance point.
+
 ## Version Beta-1.0.1r
 
 ### Enhanced WF Tooltip

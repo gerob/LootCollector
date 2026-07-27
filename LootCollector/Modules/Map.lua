@@ -843,6 +843,124 @@ Map.WorldMapSize = {
     },
 };
 
+-- Continent-space rectangles for every zone, in the Astrolabe reference
+-- frame (origin = continent map top-left, yards). Generated from the
+-- Astrolabe 3.3.5 dataset; verified against Map.WorldMapSize dimensions.
+Map.ContinentZoneRects = {
+    [1] = { name = "Kalimdor", width = 36800.21, height = 24533.03,
+      zones = {
+          [5] = { x = 19029.31, y = 10991.49, w = 5287.56, h = 3524.98 }, -- Durotar
+          [10] = { x = 15018.85, y = 13072.72, w = 5137.56, h = 3424.98 }, -- Mulgore
+          [12] = { x = 14443.84, y = 11187.32, w = 10133.44, h = 6756.20 }, -- The Barrens
+          [42] = { x = 13252.16, y = 968.64, w = 5091.72, h = 3393.73 }, -- Teldrassil
+          [43] = { x = 14125.09, y = 4466.54, w = 6550.07, h = 4366.64 }, -- Darkshore
+          [44] = { x = 15366.77, y = 8126.93, w = 5766.73, h = 3843.72 }, -- Ashenvale
+          [62] = { x = 17500.12, y = 16766.45, w = 4400.05, h = 2933.31 }, -- Thousand Needles
+          [82] = { x = 13820.92, y = 9883.16, w = 4883.39, h = 3256.23 }, -- Stonetalon Mountains
+          [102] = { x = 12833.41, y = 12347.73, w = 4495.88, h = 2997.90 }, -- Desolace
+          [122] = { x = 11625.06, y = 15166.46, w = 6950.07, h = 4633.30 }, -- Feralas
+          [142] = { x = 18041.80, y = 14833.13, w = 5250.06, h = 3499.98 }, -- Dustwallow Marsh
+          [162] = { x = 17285.54, y = 18674.77, w = 6900.08, h = 4599.97 }, -- Tanaris
+          [182] = { x = 20343.90, y = 7458.18, w = 5070.89, h = 3381.23 }, -- Azshara
+          [183] = { x = 15425.10, y = 5666.53, w = 5750.06, h = 3833.31 }, -- Felwood
+          [202] = { x = 16533.45, y = 18766.43, w = 3700.04, h = 2466.65 }, -- Un'Goro Crater
+          [242] = { x = 18448.05, y = 4308.20, w = 2308.36, h = 1539.57 }, -- Moonglade
+          [262] = { x = 14529.26, y = 18758.10, w = 3483.37, h = 2322.90 }, -- Silithus
+          [282] = { x = 17383.46, y = 4266.54, w = 7100.08, h = 4733.30 }, -- Winterspring
+          [465] = { x = 9966.71, y = 5460.28, w = 4070.88, h = 2714.56 }, -- Azuremyst Isle
+          [477] = { x = 9541.70, y = 3424.88, w = 3262.54, h = 2174.98 }, -- Bloodmyst Isle
+      },
+    },
+    [2] = { name = "Eastern Kingdoms", width = 40741.18, height = 27149.80,
+      zones = {
+          [16] = { x = 17388.63, y = 9676.38, w = 2800.00, h = 1866.67 }, -- Alterac Mountains
+          [17] = { x = 19038.63, y = 11309.72, w = 3600.00, h = 2400.01 }, -- Arathi Highlands
+          [18] = { x = 20251.13, y = 17065.99, w = 2487.50, h = 1658.34 }, -- Badlands
+          [20] = { x = 19413.63, y = 21743.10, w = 3350.00, h = 2233.34 }, -- Blasted Lands
+          [21] = { x = 15138.64, y = 7338.87, w = 4518.75, h = 3012.51 }, -- Tirisfal Glades
+          [22] = { x = 14721.97, y = 9509.71, w = 4200.00, h = 2800.01 }, -- Silverpine Forest
+          [23] = { x = 17755.30, y = 7809.71, w = 4300.00, h = 2866.68 }, -- Western Plaguelands
+          [24] = { x = 20459.47, y = 7472.21, w = 4031.25, h = 2687.51 }, -- Eastern Plaguelands
+          [25] = { x = 17105.30, y = 10776.39, w = 3200.00, h = 2133.34 }, -- Hillsbrad Foothills
+          [27] = { x = 19746.97, y = 9709.72, w = 3850.00, h = 2566.68 }, -- The Hinterlands
+          [28] = { x = 16369.88, y = 15053.49, w = 4925.00, h = 3283.35 }, -- Dun Morogh
+          [29] = { x = 18494.88, y = 17276.41, w = 2231.25, h = 1487.51 }, -- Searing Gorge
+          [30] = { x = 18438.63, y = 18207.67, w = 2929.17, h = 1952.09 }, -- Burning Steppes
+          [31] = { x = 16636.55, y = 19116.00, w = 3470.83, h = 2314.59 }, -- Elwynn Forest
+          [33] = { x = 19005.30, y = 21043.09, w = 2500.00, h = 1666.67 }, -- Deadwind Pass
+          [35] = { x = 17338.63, y = 20893.09, w = 2700.00, h = 1800.01 }, -- Duskwood
+          [36] = { x = 20165.72, y = 15663.91, w = 2758.33, h = 1839.59 }, -- Loch Modan
+          [37] = { x = 19742.80, y = 19751.42, w = 2170.83, h = 1447.92 }, -- Redridge Mountains
+          [38] = { x = 15951.14, y = 22345.18, w = 6381.25, h = 4254.18 }, -- Stranglethorn Vale
+          [39] = { x = 20394.88, y = 20797.26, w = 2293.75, h = 1529.17 }, -- Swamp of Sorrows
+          [40] = { x = 15155.30, y = 20576.43, w = 3500.00, h = 2333.34 }, -- Westfall
+          [41] = { x = 18561.55, y = 13324.31, w = 4135.42, h = 2756.26 }, -- Wetlands
+          [463] = { x = 16369.88, y = 15053.49, w = 4925.00, h = 3283.35 }, -- Eversong Woods
+          [464] = { x = 21055.30, y = 5309.70, w = 3300.00, h = 2200.01 }, -- Ghostlands
+      },
+    },
+    [3] = { name = "Outland", width = 17463.99, height = 11642.36,
+      zones = {
+          [466] = { x = 7456.42, y = 4339.97, w = 5164.56, h = 3443.64 }, -- Hellfire Peninsula
+          [468] = { x = 3521.02, y = 3885.82, w = 5027.06, h = 3351.98 }, -- Zangarmarsh
+          [474] = { x = 8770.99, y = 7769.03, w = 5499.97, h = 3666.55 }, -- Shadowmoon Valley
+          [476] = { x = 4150.18, y = 1412.98, w = 5424.97, h = 3616.55 }, -- Blade's Edge Mountains
+          [478] = { x = 2700.19, y = 5779.51, w = 5524.97, h = 3683.22 }, -- Nagrand
+          [479] = { x = 5912.68, y = 6821.15, w = 5399.97, h = 3599.89 }, -- Terokkar Forest
+          [480] = { x = 7512.67, y = 365.10, w = 5574.97, h = 3716.55 }, -- Netherstorm
+      },
+    },
+    [4] = { name = "Northrend", width = 17751.40, height = 11834.31,
+      zones = {
+          [487] = { x = 646.32, y = 5695.48, w = 5764.58, h = 3843.76 }, -- Borean Tundra
+          [489] = { x = 5590.07, y = 5018.39, w = 5608.33, h = 3739.60 }, -- Dragonblight
+          [491] = { x = 10327.57, y = 5076.73, w = 5250.00, h = 3500.01 }, -- Grizzly Hills
+          [492] = { x = 10615.07, y = 7476.74, w = 6045.83, h = 4031.27 }, -- Howling Fjord
+          [493] = { x = 3773.40, y = 1166.30, w = 6270.83, h = 4181.27 }, -- Icecrown
+          [494] = { x = 2287.99, y = 3305.89, w = 4356.25, h = 2904.18 }, -- Sholazar Basin
+          [496] = { x = 7375.48, y = 395.46, w = 7112.50, h = 4741.68 }, -- The Storm Peaks
+          [497] = { x = 9817.15, y = 2924.64, w = 4993.75, h = 3329.18 }, -- Zul'Drak
+          [502] = { x = 4887.99, y = 4876.73, w = 2975.00, h = 1983.34 }, -- Wintergrasp
+          [511] = { x = 7773.40, y = 4091.31, w = 2722.92, h = 1814.59 }, -- Crystalsong Forest
+      },
+    },
+};
+
+-- Continent map ids -> continent index used by ContinentZoneRects.
+Map.CONTINENT_MAP_IDS = { [14] = 1, [15] = 2, [467] = 3, [486] = 4 }
+
+--[[ Places a discovery on its continent map, returning 0-1 map coordinates.
+     Starter sub-zones (Valley of Trials, Northshire, ...) are not separate map
+     areas in the reference dataset, so they resolve through their parent zone
+     entrance point instead. Returns nil when the zone cannot be placed. --]]
+function Map:GetContinentPosition(d)
+    local c = tonumber(d.c)
+    local z = tonumber(d.z)
+    if not c or not z then return nil end
+
+    local contData = Map.ContinentZoneRects[c]
+    if not contData then return nil end
+
+    local x = d.xy and tonumber(d.xy.x)
+    local y = d.xy and tonumber(d.xy.y)
+    if not x or not y then return nil end
+
+    local rect = contData.zones[z]
+    if not rect then
+
+        local ZoneList = L:GetModule("ZoneList", true)
+        local rel = ZoneList and ZoneList.ZoneRelationships and ZoneList.ZoneRelationships[z]
+        if not (rel and rel.parentMapID and rel.entrance) then return nil end
+
+        rect = contData.zones[rel.parentMapID]
+        if not rect then return nil end
+        x, y = rel.entrance.x, rel.entrance.y
+    end
+
+    return (rect.x + rect.w * x) / contData.width,
+           (rect.y + rect.h * y) / contData.height
+end
+
 local function getContPosition(c, z, x, y)
     local continentData = Map.WorldMapSize[c]
     if not continentData then return end
@@ -1854,6 +1972,102 @@ local function BuildFilterEasyMenu()
     end
   end
   table.insert(menu, { text = "Usable by", hasArrow = true, notCheckable = true, menuList = usableBySub })
+
+  local Scanner = L:GetModule("Scanner", true)
+  local statDefs = (Scanner and Scanner.STAT_FILTERS) or {}
+  local charFilters = L.db and L.db.char and L.db.char.mapFilters
+
+  local function RefreshFilterMenu()
+    if EasyMenu and FilterButton then
+      HideDropDownMenu(1)
+      EasyMenu(BuildFilterEasyMenu(), FilterMenuHost, FilterButton, 0, 0, "MENU", 2)
+    end
+  end
+
+  if #statDefs > 0 and charFilters then
+    charFilters.statFilters = charFilters.statFilters or {}
+
+    local statsSub = {
+      { text = "Stats", isTitle = true, notCheckable = true },
+      {
+        text = f.statFiltersMatchAll and "Match: |cff00ff00All selected|r" or "Match: |cffffd100Any selected|r",
+        notCheckable = true,
+        func = function()
+          L.db.char.mapFilters.statFiltersMatchAll = not L.db.char.mapFilters.statFiltersMatchAll
+          Map.cacheIsDirty = true
+          Map:Update(); Map:UpdateMinimap()
+          RefreshFilterMenu()
+        end
+      },
+      {
+        text = "Clear All",
+        notCheckable = true,
+        func = function()
+          for k in pairs(L.db.char.mapFilters.statFilters) do L.db.char.mapFilters.statFilters[k] = nil end
+          Map.cacheIsDirty = true
+          Map:Update(); Map:UpdateMinimap()
+
+          -- keepShownOnClick entries own their check texture once drawn, so the
+          -- ticks do not clear on their own. Rebuild the menu to redraw them.
+          RefreshFilterMenu()
+        end
+      },
+    }
+
+    for _, def in ipairs(statDefs) do
+      table.insert(statsSub, {
+        text = def.label,
+        checked = f.statFilters[def.key] and true or false,
+        keepShownOnClick = true,
+        isNotRadio = true,
+        func = function()
+          if L.db.char.mapFilters.statFilters[def.key] then
+            L.db.char.mapFilters.statFilters[def.key] = nil
+          else
+            L.db.char.mapFilters.statFilters[def.key] = true
+          end
+          Map.cacheIsDirty = true
+          Map:Update(); Map:UpdateMinimap()
+        end
+      })
+    end
+
+    table.insert(menu, { text = "Stats", hasArrow = true, notCheckable = true, menuList = statsSub })
+  end
+
+  if charFilters then
+    local LEVEL_STEPS = { 1, 10, 20, 30, 40, 50, 55, 60, 65, 70, 75, 80 }
+
+    local function BuildLevelSub(title, field, currentValue)
+      local sub = { { text = title, isTitle = true, notCheckable = true } }
+      local function apply(value)
+        L.db.char.mapFilters[field] = value
+        Map.cacheIsDirty = true
+        Map:Update(); Map:UpdateMinimap()
+        RefreshFilterMenu()
+      end
+      table.insert(sub, { text = "Any", checked = (currentValue == 0), keepShownOnClick = true,
+        func = function() apply(0) end })
+      for _, lvl in ipairs(LEVEL_STEPS) do
+        table.insert(sub, { text = tostring(lvl), checked = (currentValue == lvl), keepShownOnClick = true,
+          func = function() apply(lvl) end })
+      end
+      return sub
+    end
+
+    local minLvl, maxLvl = f.minReqLevel or 0, f.maxReqLevel or 0
+    table.insert(menu, {
+      text = (minLvl > 0) and ("Min Level: |cffffd100" .. minLvl .. "|r") or "Min Level: Any",
+      hasArrow = true, notCheckable = true,
+      menuList = BuildLevelSub("Minimum Required Level", "minReqLevel", minLvl)
+    })
+    table.insert(menu, {
+      text = (maxLvl > 0) and ("Max Level: |cffffd100" .. maxLvl .. "|r") or "Max Level: Any",
+      hasArrow = true, notCheckable = true,
+      menuList = BuildLevelSub("Maximum Required Level", "maxReqLevel", maxLvl)
+    })
+  end
+
 
   table.insert(menu, { text = "", notCheckable = true, disabled = true })
 
@@ -3386,9 +3600,41 @@ function Map:DrawWorldMapPins()
   
     local discoveries = L:GetDiscoveriesDB()
     local vendors = L:GetVendorsDB()
-    local zoneGUIDs = Core.ZoneIndex[currentMapID]
     local Constants = L:GetModule("Constants", true)
-    
+
+    --[[ Continent view: the zone index is keyed by zone map id, so it holds
+         nothing for a continent map. Gather every zone on this continent
+         instead - but only while a narrowing filter is set, otherwise an
+         unfiltered continent would try to draw the entire database at once. --]]
+    local continentIndex = Map.CONTINENT_MAP_IDS and Map.CONTINENT_MAP_IDS[tonumber(currentMapID)]
+    local isContinentDraw = false
+    local zoneGUIDs
+
+    if continentIndex and L.HasNarrowingMapFilters and L:HasNarrowingMapFilters() then
+        local contData = Map.ContinentZoneRects and Map.ContinentZoneRects[continentIndex]
+        if contData then
+            isContinentDraw = true
+            zoneGUIDs = {}
+            for zoneID in pairs(contData.zones) do
+                local list = Core.ZoneIndex[zoneID]
+                if list then
+                    for i = 1, #list do zoneGUIDs[#zoneGUIDs + 1] = list[i] end
+                end
+            end
+            local ZoneList = L:GetModule("ZoneList", true)
+            if ZoneList and ZoneList.ZoneRelationships then
+                for subID, rel in pairs(ZoneList.ZoneRelationships) do
+                    if tonumber(rel.c) == continentIndex and Core.ZoneIndex[subID] then
+                        local list = Core.ZoneIndex[subID]
+                        for i = 1, #list do zoneGUIDs[#zoneGUIDs + 1] = list[i] end
+                    end
+                end
+            end
+        end
+    elseif not continentIndex then
+        zoneGUIDs = Core.ZoneIndex[currentMapID]
+    end
+
     if zoneGUIDs then
         for _, guid in ipairs(zoneGUIDs) do
             local d = discoveries[guid] or vendors[guid]
@@ -3403,12 +3649,20 @@ function Map:DrawWorldMapPins()
                 elseif tonumber(d.c) == tonumber(currentContinent) then
                     local isVisibleOnThisMap = true
                     local iz = tonumber(d.iz) or 0
-                    if iz > 0 and iz ~= currentMapID then
+                    if iz > 0 and iz ~= currentMapID and not isContinentDraw then
                         isVisibleOnThisMap = false
                     end
-                    
+
+                    local drawX, drawY
+                    if isContinentDraw then
+                        drawX, drawY = self:GetContinentPosition(d)
+                        if not drawX then isVisibleOnThisMap = false end
+                    elseif d.xy then
+                        drawX, drawY = d.xy.x, d.xy.y
+                    end
+
                     if isVisibleOnThisMap and passesFiltersLocal(d, searchTerm) then
-                        if type(d) == "table" and d.xy then
+                        if type(d) == "table" and drawX and drawY then
                             if isB then
                             else            
                                 local pin = self.pins[pinIndex] or self:BuildPin()   
@@ -3459,7 +3713,7 @@ function Map:DrawWorldMapPins()
 
                                 pin:SetAlpha(AlphaForStatus(L:GetDiscoveryStatus(d)))
                                 pin:ClearAllPoints()
-                                pin:SetPoint("CENTER", WorldMapButton, "TOPLEFT", offsetX + d.xy.x * mapWidth, offsetY - d.xy.y * mapHeight)
+                                pin:SetPoint("CENTER", WorldMapButton, "TOPLEFT", offsetX + drawX * mapWidth, offsetY - drawY * mapHeight)
                                 pin:Show()
                                 if d.mid then self._pinsByMid[d.mid] = pin end
                             end
