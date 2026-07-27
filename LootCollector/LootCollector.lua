@@ -207,6 +207,7 @@ local dbDefaults = {
             allowedEquipLoc = {},
             statFilters = {},
             statFiltersMatchAll = false,
+            showContinentPins = true,
             minReqLevel = 0,
             maxReqLevel = 0,
             applyViewerFiltersOnMap = false,
@@ -647,6 +648,7 @@ function LootCollector:GetFilters()
     combined.minRarity = f.minRarity or 0
     combined.allowedEquipLoc = f.allowedEquipLoc or {}
     combined.usableByClasses = f.usableByClasses or {}
+    combined.showContinentPins = f.showContinentPins ~= false
     combined.statFilters = f.statFilters or {}
     combined.statFiltersMatchAll = f.statFiltersMatchAll or false
     combined.minReqLevel = f.minReqLevel or 0

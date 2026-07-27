@@ -14,6 +14,7 @@
 ### Continent Map Pins
 - Discoveries now draw on continent maps, placed by an exact zone-to-continent transform derived from the Astrolabe 3.3.5 dataset and verified against `Map.WorldMapSize`.
 - Pins only appear on a continent while a narrowing filter is set (stats, level range, slots, usable-by or minimum quality) - unfiltered, a continent would try to draw the whole database at once.
+- **Toggle:** Map filter menu > Show > "Continent Map Pins" turns the whole behaviour off. On by default; saved per character.
 - Starter sub-zones (Valley of Trials, Northshire Valley, ...) are not separate map areas in the reference dataset, so they resolve through their parent zone's entrance point.
 
 ## Version Beta-1.0.1r

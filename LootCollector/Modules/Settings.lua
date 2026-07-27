@@ -257,6 +257,7 @@ local function ensureDefaults()
     if c.mapFilters.minRarity == nil then c.mapFilters.minRarity = 0 end
     if c.mapFilters.usableByClasses == nil then c.mapFilters.usableByClasses = {} end
     if c.mapFilters.allowedEquipLoc == nil then c.mapFilters.allowedEquipLoc = {} end
+    if c.mapFilters.showContinentPins == nil then c.mapFilters.showContinentPins = true end
     if c.mapFilters.statFilters == nil then c.mapFilters.statFilters = {} end
     if c.mapFilters.statFiltersMatchAll == nil then c.mapFilters.statFiltersMatchAll = false end
     if c.mapFilters.minReqLevel == nil then c.mapFilters.minReqLevel = 0 end

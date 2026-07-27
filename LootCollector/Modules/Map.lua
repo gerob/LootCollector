@@ -1878,6 +1878,7 @@ local function BuildFilterEasyMenu()
   table.insert(showSub, { text = "Mystic Scrolls", checked = f.showMysticScrolls, keepShownOnClick = true, isNotRadio = true, func = function() L.db.char.mapFilters.showMysticScrolls = not L.db.char.mapFilters.showMysticScrolls; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end })
   table.insert(showSub, { text = "Worldforged Items", checked = f.showWorldforged, keepShownOnClick = true, isNotRadio = true, func = function() L.db.char.mapFilters.showWorldforged = not L.db.char.mapFilters.showWorldforged; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end })
   table.insert(showSub, { text = "Vendors", checked = f.showVendors, keepShownOnClick = true, isNotRadio = true, func = function() L.db.char.mapFilters.showVendors = not L.db.char.mapFilters.showVendors; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end })
+  table.insert(showSub, { text = "Continent Map Pins", checked = f.showContinentPins, keepShownOnClick = true, isNotRadio = true, func = function() L.db.char.mapFilters.showContinentPins = not L.db.char.mapFilters.showContinentPins; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end })
   
   table.insert(showSub, {
       text = "Enhanced WF Tooltip",
@@ -3610,7 +3611,7 @@ function Map:DrawWorldMapPins()
     local isContinentDraw = false
     local zoneGUIDs
 
-    if continentIndex and L.HasNarrowingMapFilters and L:HasNarrowingMapFilters() then
+    if continentIndex and filters.showContinentPins and L.HasNarrowingMapFilters and L:HasNarrowingMapFilters() then
         local contData = Map.ContinentZoneRects and Map.ContinentZoneRects[continentIndex]
         if contData then
             isContinentDraw = true
