@@ -3775,6 +3775,11 @@ function Viewer:CreateWindow()
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT", 0, -2)
         GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
+Version 1.0.2r-beta:
+- Fixed Worldforged tooltip upgrade lines (Dung–T3) when hovering WF IDs.
+- Armor Type filter now includes Shields; Guardian Usable By includes Polearms and Fist Weapons.
+- GitHub release ZIP packages the three addon folders + README for WowUp.
+
 Version Beta-1.0.1r:
 - Merged Search + Deep Filter: Search box + Add commits chips matching name, zone, or tooltip (Deep Search checkbox removed).
 - Added Filter Map: apply Discoveries filters (including search chips) to map/minimap pins and Arrow.

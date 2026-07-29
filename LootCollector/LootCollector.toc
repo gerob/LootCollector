@@ -1,11 +1,11 @@
 ## Interface: 30300
-## Title: |cffe5cc80LootCollector|r |cffff5555[beta.1.0.1r]|r
+## Title: |cffe5cc80LootCollector|r |cffff5555[1.0.2r-beta]|r
 ## Notes: LootCollector is a community-powered addon that helps players discover and share Worldforged and Mystic Scroll locations on Ascension Bronzebeard (CoA compatible). Designed by Skulltrail. |cffff7f00Sponsor:|r |cffffff00@ERitzman|r. |cffffffffContributors:|r |cffffff00Deidre, Rhenyra, Morty, Markosz, Bandit Tech, xan, Stilnight, Xurkon, Netherborne, Liakate|r. |cffffffffAlpha Collectors:|r |cffffff00Morty, Laya, Brokenheart, Mie, Rhen, Aaltrix, Insanestar, Harrydn, Blutact|r.
 ## Author: Skulltrail
 ## Contributors: Deidre, Rhenyra, Morty, Markosz, Bandit Tech, xan, Stilnight, Xurkon, Netherborne, Jollyg
 ## Sponsors: @ERitzman
 ## AlphaTopCollectors: Morty, Laya, Brokenheart, Mie, Rhen, Aaltrix, Insanestar, Harrydn, Blutact
-## Version: beta-1.0.1r
+## Version: 1.0.2r-beta
 ## SavedVariables: LootCollectorDB_Asc
 ## OptionalDeps: Ace3, TomTom, AtlasLoot_Cache
 
