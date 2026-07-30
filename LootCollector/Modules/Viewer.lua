@@ -1002,8 +1002,18 @@ end
 
 -- Refresh map/minimap when Viewer filters change and Filter Map is ON.
 -- force=true rebuilds even when toggling the flag (ON or OFF).
+function Viewer:InvalidateArrowFilterCache()
+    local Arrow = L:GetModule("Arrow", true)
+    if Arrow then
+        Arrow._scanKey = nil
+        Arrow._fmZoneSet = nil
+        Arrow._fmZoneKey = nil
+    end
+end
+
 function Viewer:NotifyMapViewerFiltersChanged(force)
     if not force and not self:IsFilterMapEnabled() then return end
+    self:InvalidateArrowFilterCache()
     local Map = L:GetModule("Map", true)
     if Map then
         Map.cacheIsDirty = true
@@ -2399,6 +2409,9 @@ local function InvalidateViewerFilterCache()
     Cache.filteredResults = {}
     Cache.lastFilterState = nil
     Cache.uniqueValuesValid = false
+    if Viewer.InvalidateArrowFilterCache then
+        Viewer:InvalidateArrowFilterCache()
+    end
 end
 
 local function AdjustDuplicateCount(itemID, delta)

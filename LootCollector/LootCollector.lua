@@ -1749,8 +1749,9 @@ function LootCollector:ExitHibernation()
     
     
     local Arrow = self:GetModule("Arrow", true)
-    if Arrow and Arrow.Show and self.db.profile.mapFilters and self.db.profile.mapFilters.autoTrackNearest then 
-        Arrow:Show() 
+    local autoTrack = self.db.char and self.db.char.mapFilters and self.db.char.mapFilters.autoTrackNearest
+    if Arrow and Arrow.Show and autoTrack then
+        Arrow:Show()
     end
 
     

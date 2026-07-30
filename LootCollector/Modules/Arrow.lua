@@ -14,6 +14,7 @@ Arrow.tomtomUID = nil
 Arrow.enabled = false 
 
 Arrow.sessionSkipList = {}
+Arrow._scanKey = nil
 
 local function isMine(rec)
     local me = UnitName and UnitName("player")
@@ -122,10 +123,16 @@ function Arrow:SkipNearest()
     end
 end
 
+local function IsAutoTrackEnabled()
+    local f = L.GetFilters and L:GetFilters()
+    if f then return f.autoTrackNearest and true or false end
+    return L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.autoTrackNearest and true or false
+end
+
 function Arrow:OnPlayerLootedItem(event, itemID, c, z, x, y)
     L._debug("Arrow", "OnPlayerLootedItem() event received.")
     
-    if not (L.db and L.db.profile and L.db.profile.mapFilters and L.db.profile.mapFilters.autoTrackNearest) then
+    if not IsAutoTrackEnabled() then
         L._debug("Arrow", "-> OnPlayerLootedItem ignored, auto-tracking is disabled.")
         return 
     end
@@ -159,7 +166,7 @@ end
 
 function Arrow:OnPlayerLogin()
     L._debug("Arrow", "OnPlayerLogin() event received.")
-    if L.db and L.db.profile and L.db.profile.mapFilters and L.db.profile.mapFilters.autoTrackNearest then        
+    if IsAutoTrackEnabled() then
         self:Show()
     end
 end
@@ -273,12 +280,84 @@ function Arrow:ClearTomTomWaypoint()
     end 
 end
 
+local function BuildArrowScanKey(continent, zoneID, filterMapOn, viewerHash, filters)
+    return table.concat({
+        tostring(continent),
+        tostring(zoneID),
+        filterMapOn and "1" or "0",
+        tostring(viewerHash or ""),
+        tostring(filters.hideAll),
+        tostring(filters.hideLooted),
+        tostring(filters.hideFaded),
+        tostring(filters.hideStale),
+        tostring(filters.hideUnconfirmed),
+        tostring(filters.hideCollectedME),
+        tostring(filters.hideBags),
+        tostring(filters.hideLearnedTransmog),
+        tostring(filters.minRarity),
+        tostring(filters.showWorldforged),
+        tostring(filters.showMysticScrolls),
+        tostring(filters.showVendors),
+        tostring(filters.autoTrackNearest),
+    }, "|")
+end
+
+-- Zone-scoped GUID set for Filter Map: uses the same Viewer filter predicates
+-- as map pins. Do NOT reuse Viewer.Cache.filteredResults — that list is
+-- tab-scoped (eq/ms/bmv) and can omit pins that still show on the map.
+function Arrow:GetFilterMapZoneGuidSet(zoneID, viewerHash, Viewer)
+    local key = tostring(zoneID) .. "|" .. tostring(viewerHash or "")
+    if self._fmZoneSet and self._fmZoneKey == key then
+        return self._fmZoneSet
+    end
+    local set = {}
+    local Core = L:GetModule("Core", true)
+    local zoneGUIDs = Core and Core.ZoneIndex and Core.ZoneIndex[zoneID]
+    local db = L:GetDiscoveriesDB()
+    local vendors = L:GetVendorsDB()
+    if zoneGUIDs and db then
+        for _, guid in ipairs(zoneGUIDs) do
+            local d = db[guid] or (vendors and vendors[guid])
+            if d and L:DiscoveryPassesFilters(d)
+                and Viewer and Viewer.DiscoveryPassesViewerFilters
+                and Viewer:DiscoveryPassesViewerFilters(d) then
+                set[guid] = true
+            end
+        end
+    end
+    self._fmZoneSet = set
+    self._fmZoneKey = key
+    return set
+end
+
+local function IsArrowTargetStillValid(self, d, currentContinent, currentZoneID, autoTrackEnabled, filterMapOn, viewerGuidSet)
+    if not d or type(d) ~= "table" or not d.g or not d.xy then return false end
+    if self.sessionSkipList[d.g] then return false end
+    if d.onHold and not isMine(d) then return false end
+    if d.c ~= currentContinent or d.z ~= currentZoneID then return false end
+    local targetIz = tonumber(d.iz) or 0
+    if not (targetIz == 0 or targetIz == currentZoneID) then return false end
+    if autoTrackEnabled and L:IsLootedByChar(d.g) then return false end
+    if not L:DiscoveryPassesFilters(d) then return false end
+    if filterMapOn then
+        if viewerGuidSet then
+            if not viewerGuidSet[d.g] then return false end
+        else
+            local Viewer = L:GetModule("Viewer", true)
+            if Viewer and Viewer.DiscoveryPassesViewerFilters and not Viewer:DiscoveryPassesViewerFilters(d) then
+                return false
+            end
+        end
+    end
+    return true
+end
+
 function Arrow:FindBestTarget()
     local db = L:GetDiscoveriesDB()
-    if not db then self.currentTarget=nil; return end
+    if not db then self.currentTarget=nil; self._scanKey = nil; return end
     
     local filters = L:GetFilters()
-    if filters.hideAll then self.currentTarget=nil; return end
+    if filters.hideAll then self.currentTarget=nil; self._scanKey = nil; return end
     
     local px,py=self:GetPlayerPos()
     if not px or not py then 
@@ -288,52 +367,104 @@ function Arrow:FindBestTarget()
     end
 
     local currentContinent, currentZoneID = self:GetPlayerLocation()
+    local autoTrackEnabled = filters.autoTrackNearest and true or false
+    local Viewer = L:GetModule("Viewer", true)
+    local filterMapOn = Viewer and Viewer.IsFilterMapEnabled and Viewer:IsFilterMapEnabled()
+    local viewerHash = nil
+    local viewerGuidSet = nil
+    if filterMapOn and Viewer then
+        if Viewer.GetFilterStateHash then
+            viewerHash = Viewer:GetFilterStateHash()
+        end
+        viewerGuidSet = self:GetFilterMapZoneGuidSet(currentZoneID, viewerHash, Viewer)
+    end
+
+    local scanKey = BuildArrowScanKey(currentContinent, currentZoneID, filterMapOn, viewerHash, filters)
+    if self._scanKey == scanKey and self.currentTarget
+        and IsArrowTargetStillValid(self, self.currentTarget, currentContinent, currentZoneID, autoTrackEnabled, filterMapOn, viewerGuidSet) then
+        return
+    end
+
     local bestTarget, minDist = nil, -1
-    
-    local autoTrackUnlooted = L.db.profile.mapFilters.autoTrackNearest
     local Core = L:GetModule("Core", true)
     local zoneGUIDs = Core and Core.ZoneIndex and Core.ZoneIndex[currentZoneID]
+    local vendors = L:GetVendorsDB()
 
-    local function checkDiscovery(guid, d)
-        if not self.sessionSkipList[guid] then
-            local targetIz = tonumber(d.iz) or 0
-            local isVisibleOnThisMap = (targetIz == 0 or targetIz == currentZoneID)
-            
-            if isVisibleOnThisMap and type(d) == "table" and d.c == currentContinent and d.z == currentZoneID and d.xy and L:DiscoveryPassesFilters(d) then
-                local Viewer = L:GetModule("Viewer", true)
-                if Viewer and Viewer.IsFilterMapEnabled and Viewer:IsFilterMapEnabled()
-                    and Viewer.DiscoveryPassesViewerFilters and not Viewer:DiscoveryPassesViewerFilters(d) then
-                    return
-                end
-                if not (autoTrackUnlooted and L:IsLootedByChar(guid)) then
-                    if d.onHold and not isMine(d) then
-                        
-                    else
-                        local tx,ty = d.xy.x or 0, d.xy.y or 0
-                        local dx,dy = tx-px, ty-py
-                        local dist = dx*dx + dy*dy
-                        if minDist == -1 or dist < minDist then
-                            minDist = dist; bestTarget = d
-                        end
-                    end
+    local function consider(guid, d, skipViewerCheck, skipMapFilterCheck)
+        if not d or self.sessionSkipList[guid] then return end
+        local targetIz = tonumber(d.iz) or 0
+        local isVisibleOnThisMap = (targetIz == 0 or targetIz == currentZoneID)
+        if not (isVisibleOnThisMap and d.c == currentContinent and d.z == currentZoneID and d.xy) then
+            return
+        end
+        if not skipMapFilterCheck and not L:DiscoveryPassesFilters(d) then
+            return
+        end
+        if filterMapOn and not skipViewerCheck then
+            if viewerGuidSet then
+                if not viewerGuidSet[guid] then return end
+            elseif Viewer and Viewer.DiscoveryPassesViewerFilters and not Viewer:DiscoveryPassesViewerFilters(d) then
+                return
+            end
+        end
+        if autoTrackEnabled and L:IsLootedByChar(guid) then return end
+        if d.onHold and not isMine(d) then return end
+        local tx, ty = d.xy.x or 0, d.xy.y or 0
+        local dx, dy = tx - px, ty - py
+        local dist = dx * dx + dy * dy
+        if minDist == -1 or dist < minDist then
+            minDist = dist
+            bestTarget = d
+        end
+    end
+
+    local usedFastPath = false
+
+    -- Filter Map ON: zone GUID set built with DiscoveryPassesViewerFilters
+    -- (same rules as map pins; not the Viewer tab list).
+    if filterMapOn and viewerGuidSet and zoneGUIDs then
+        usedFastPath = true
+        for _, guid in ipairs(zoneGUIDs) do
+            if viewerGuidSet[guid] then
+                local d = db[guid] or (vendors and vendors[guid])
+                if d then consider(guid, d, true, false) end
+            end
+        end
+    end
+
+    -- Filter Map OFF: reuse Map minimap filtered cache when warm (empty is valid).
+    if not usedFastPath and not filterMapOn then
+        local Map = L:GetModule("Map", true)
+        if Map and Map.cachingEnabled and not Map.cacheIsDirty and Map.cachedVisibleDiscoveries then
+            usedFastPath = true
+            for _, d in ipairs(Map.cachedVisibleDiscoveries) do
+                if d and d.g then
+                    consider(d.g, d, true, true)
                 end
             end
         end
     end
 
-    
-    if zoneGUIDs then
-        for _, guid in ipairs(zoneGUIDs) do
-            local d = db[guid]
-            if d then checkDiscovery(guid, d) end
-        end
-    else
-        for guid, d in pairs(db) do
-            checkDiscovery(guid, d)
+    if not usedFastPath then
+        if zoneGUIDs then
+            for _, guid in ipairs(zoneGUIDs) do
+                local d = db[guid] or (vendors and vendors[guid])
+                if d then consider(guid, d, false, false) end
+            end
+        else
+            for guid, d in pairs(db) do
+                consider(guid, d, false, false)
+            end
+            if vendors then
+                for guid, d in pairs(vendors) do
+                    consider(guid, d, false, false)
+                end
+            end
         end
     end
-    
+
     self.currentTarget = bestTarget
+    self._scanKey = scanKey
 end
 
 function Arrow:UpdateArrow(forceUpdate)
@@ -365,11 +496,14 @@ function Arrow:UpdateArrow(forceUpdate)
     if self.manualTarget then
         targetThisUpdate = self.manualTarget
     else
+        if forceUpdate then
+            self._scanKey = nil
+        end
         self:FindBestTarget()
         targetThisUpdate = self.currentTarget
     end
 
-    local autoTrackMode = L.db.profile.mapFilters.autoTrackNearest
+    local autoTrackMode = IsAutoTrackEnabled()
     if autoTrackMode and not self.manualTarget and targetThisUpdate then
         local currentC, currentZ = self:GetPlayerLocation()
         if currentC and currentZ then
