@@ -21,6 +21,59 @@ local TYPE_FILTER_WEAPON = {
 -- GetItemInfo subtype for Neck / Finger / Trinket / Shirt / Tabard (and similar).
 local TYPE_FILTER_MISC = { "Miscellaneous" }
 local TypeFilterMenuHost = CreateFrame("Frame", "LootCollectorViewerTypeFilterMenuHost", UIParent, "UIDropDownMenuTemplate")
+local StatsFilterMenuHost = CreateFrame("Frame", "LootCollectorViewerStatsFilterMenuHost", UIParent, "UIDropDownMenuTemplate")
+
+-- Deep-search chip catalog for Stats EasyMenu (tooltip substring / OR aliases).
+local STAT_FILTER_CATEGORIES = {
+    {
+        name = "Primary",
+        stats = {
+            { label = "Strength", expr = "strength" },
+            { label = "Agility", expr = "agility" },
+            { label = "Intellect", expr = "intellect" },
+            { label = "Spirit", expr = "spirit" },
+            { label = "Stamina", expr = "stamina" },
+        },
+    },
+    {
+        name = "Melee",
+        stats = {
+            { label = "Attack Power", expr = "attack power" },
+            { label = "Hit Rating", expr = "hit rating" },
+            { label = "Critical Strike", expr = "critical strike" },
+            { label = "Haste", expr = "haste" },
+            { label = "Expertise", expr = "expertise" },
+            { label = "Armor Penetration", expr = "armor penetration" },
+        },
+    },
+    {
+        name = "Spell",
+        stats = {
+            { label = "Spell Power", expr = "spell power" },
+            { label = "Hit Rating", expr = "hit rating" },
+            { label = "Critical Strike", expr = "critical strike" },
+            { label = "Haste", expr = "haste" },
+            { label = "MP5 / Mana Regen", expr = "mana every or mp5 or mana regen" },
+            { label = "Spell Penetration", expr = "spell penetration" },
+        },
+    },
+    {
+        name = "Defense",
+        stats = {
+            { label = "Defense Rating", expr = "defense rating" },
+            { label = "Dodge", expr = "dodge" },
+            { label = "Parry", expr = "parry" },
+            { label = "Block", expr = "block" },
+            { label = "Resilience", expr = "resilience" },
+        },
+    },
+    {
+        name = "Misc",
+        stats = {
+            { label = "PvP Power", expr = "pvp power" },
+        },
+    },
+}
 
 local SOURCE_NAMES = {
     ["world_loot"] = "World Drop",
@@ -3347,6 +3400,208 @@ function Viewer:ShowTypeFilterMenu(anchor)
     EasyMenu(self:BuildTypeFilterEasyMenu(), TypeFilterMenuHost, anchor, 0, 0, "MENU", 2)
 end
 
+local function FindDeepSearchChipIndex(expr)
+    if not expr or expr == "" then return nil end
+    local filters = Viewer.deepSearchFilters
+    if not filters then return nil end
+    local lower = string.lower(expr)
+    for i = 1, #filters do
+        if string.lower(filters[i]) == lower then
+            return i
+        end
+    end
+    return nil
+end
+
+function Viewer:HasActiveStatFilterChips()
+    if type(L.db) == "table" and L.db.profile then
+        if type(L.db.profile.deepSearchFilters) ~= "table" then
+            L.db.profile.deepSearchFilters = {}
+        end
+        self.deepSearchFilters = L.db.profile.deepSearchFilters
+    end
+    local filters = self.deepSearchFilters
+    if not filters or #filters == 0 then return false end
+    for _, cat in ipairs(STAT_FILTER_CATEGORIES) do
+        for _, stat in ipairs(cat.stats) do
+            if FindDeepSearchChipIndex(stat.expr) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function Viewer:ToggleStatFilterChip(expr)
+    if not expr or expr == "" then return end
+    if type(L.db) == "table" and L.db.profile then
+        if type(L.db.profile.deepSearchFilters) ~= "table" then
+            L.db.profile.deepSearchFilters = {}
+        end
+        self.deepSearchFilters = L.db.profile.deepSearchFilters
+    else
+        self.deepSearchFilters = self.deepSearchFilters or {}
+    end
+
+    local idx = FindDeepSearchChipIndex(expr)
+    if idx then
+        _tremove(self.deepSearchFilters, idx)
+    else
+        _tinsert(self.deepSearchFilters, expr)
+    end
+
+    self:RebuildDeepCompiled()
+    if self.RefreshDeepFilterPanel then self:RefreshDeepFilterPanel() end
+    self.currentPage = 1
+    Cache.filteredResults = {}
+    Cache.lastFilterState = nil
+    self:RefreshData()
+    self:UpdateClearAllButton()
+    self:UpdateFilterButtonStates()
+    if self.NotifyMapDeepFilterChanged then self:NotifyMapDeepFilterChanged() end
+end
+
+function Viewer:SetStatFilterChipsInList(list, enabled)
+    if type(L.db) == "table" and L.db.profile then
+        if type(L.db.profile.deepSearchFilters) ~= "table" then
+            L.db.profile.deepSearchFilters = {}
+        end
+        self.deepSearchFilters = L.db.profile.deepSearchFilters
+    else
+        self.deepSearchFilters = self.deepSearchFilters or {}
+    end
+
+    for _, stat in ipairs(list) do
+        local idx = FindDeepSearchChipIndex(stat.expr)
+        if enabled then
+            if not idx then _tinsert(self.deepSearchFilters, stat.expr) end
+        else
+            if idx then _tremove(self.deepSearchFilters, idx) end
+        end
+    end
+
+    self:RebuildDeepCompiled()
+    if self.RefreshDeepFilterPanel then self:RefreshDeepFilterPanel() end
+    self.currentPage = 1
+    Cache.filteredResults = {}
+    Cache.lastFilterState = nil
+    self:RefreshData()
+    self:UpdateClearAllButton()
+    self:UpdateFilterButtonStates()
+    if self.NotifyMapDeepFilterChanged then self:NotifyMapDeepFilterChanged() end
+end
+
+function Viewer:BuildStatsFilterEasyMenu()
+    local function rebuildMenu()
+        if EasyMenu and Viewer.statsFilterBtn then
+            HideDropDownMenu(1)
+            EasyMenu(Viewer:BuildStatsFilterEasyMenu(), StatsFilterMenuHost, Viewer.statsFilterBtn, 0, 0, "MENU", 2)
+        end
+    end
+
+    local function buildStatSubmenu(title, list)
+        local sub = {
+            { text = title, isTitle = true, notCheckable = true },
+            {
+                text = "Select All",
+                notCheckable = true,
+                func = function()
+                    Viewer:SetStatFilterChipsInList(list, true)
+                    rebuildMenu()
+                end,
+            },
+            {
+                text = "Clear All",
+                notCheckable = true,
+                func = function()
+                    Viewer:SetStatFilterChipsInList(list, false)
+                    rebuildMenu()
+                end,
+            },
+        }
+        for _, stat in ipairs(list) do
+            _tinsert(sub, {
+                text = stat.label,
+                checked = FindDeepSearchChipIndex(stat.expr) ~= nil,
+                keepShownOnClick = true,
+                isNotRadio = true,
+                func = function()
+                    Viewer:ToggleStatFilterChip(stat.expr)
+                    rebuildMenu()
+                end,
+            })
+        end
+        return sub
+    end
+
+    local menu = {
+        {
+            text = "Clear Stats Filters",
+            notCheckable = true,
+            func = function()
+                if type(L.db) == "table" and L.db.profile then
+                    if type(L.db.profile.deepSearchFilters) ~= "table" then
+                        L.db.profile.deepSearchFilters = {}
+                    end
+                    Viewer.deepSearchFilters = L.db.profile.deepSearchFilters
+                else
+                    Viewer.deepSearchFilters = Viewer.deepSearchFilters or {}
+                end
+                for _, cat in ipairs(STAT_FILTER_CATEGORIES) do
+                    for _, stat in ipairs(cat.stats) do
+                        local idx = FindDeepSearchChipIndex(stat.expr)
+                        while idx do
+                            _tremove(Viewer.deepSearchFilters, idx)
+                            idx = FindDeepSearchChipIndex(stat.expr)
+                        end
+                    end
+                end
+                Viewer:RebuildDeepCompiled()
+                if Viewer.RefreshDeepFilterPanel then Viewer:RefreshDeepFilterPanel() end
+                Viewer.currentPage = 1
+                Cache.filteredResults = {}
+                Cache.lastFilterState = nil
+                Viewer:RefreshData()
+                Viewer:UpdateClearAllButton()
+                Viewer:UpdateFilterButtonStates()
+                if Viewer.NotifyMapDeepFilterChanged then Viewer:NotifyMapDeepFilterChanged() end
+            end,
+        },
+    }
+
+    for _, cat in ipairs(STAT_FILTER_CATEGORIES) do
+        _tinsert(menu, {
+            text = cat.name,
+            hasArrow = true,
+            notCheckable = true,
+            menuList = buildStatSubmenu(cat.name, cat.stats),
+        })
+    end
+    return menu
+end
+
+function Viewer:ShowStatsFilterMenu(anchor)
+    if not EasyMenu or not anchor then return end
+
+    if type(L.db) == "table" and L.db.profile then
+        if type(L.db.profile.deepSearchFilters) ~= "table" then
+            L.db.profile.deepSearchFilters = {}
+        end
+        self.deepSearchFilters = L.db.profile.deepSearchFilters
+    else
+        self.deepSearchFilters = self.deepSearchFilters or {}
+    end
+
+    local dropdownList = _G["DropDownList1"]
+    if Viewer.currentFilterAnchor == anchor and dropdownList and dropdownList:IsShown() then
+        HideDropDownMenu(1)
+        Viewer.currentFilterAnchor = nil
+        return
+    end
+    Viewer.currentFilterAnchor = anchor
+    EasyMenu(self:BuildStatsFilterEasyMenu(), StatsFilterMenuHost, anchor, 0, 0, "MENU", 2)
+end
+
 function Viewer:UpdateFilterButtonStates()
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -3377,6 +3632,15 @@ function Viewer:UpdateFilterButtonStates()
         setButtonTextColor(self.qualityFilterBtn, 1, 1, 1) 
     end
     self.qualityFilterBtn:SetText("Quality")
+
+    if self.statsFilterBtn then
+        if self:HasActiveStatFilterChips() then
+            setButtonTextColor(self.statsFilterBtn, 1, 0.8, 0.2)
+        else
+            setButtonTextColor(self.statsFilterBtn, 1, 1, 1)
+        end
+        self.statsFilterBtn:SetText("Stats")
+    end
 
     if self.vendorTypeFilterBtn then
         local typeActive = size(self.columnFilters.vendorType) > 0
@@ -3511,6 +3775,7 @@ function Viewer:UpdateFilterButtonStates()
     if self.vendorTypeFilterBtn then self.vendorTypeFilterBtn:SetShown(showVendorType) end
     if self.sourceFilterBtn then self.sourceFilterBtn:SetShown(showNormalFilters) end
     if self.qualityFilterBtn then self.qualityFilterBtn:SetShown(showNormalFilters) end
+    if self.statsFilterBtn then self.statsFilterBtn:SetShown(showNormalFilters) end
     if self.favoritesFilterBtn then self.favoritesFilterBtn:SetShown(showNormalFilters) end
     if self.typeFilterBtn then self.typeFilterBtn:SetShown(showItemType) end
     if self.slotsFilterBtn then self.slotsFilterBtn:SetShown(showSlots) end
@@ -3541,6 +3806,7 @@ function Viewer:UpdateFilterButtonStates()
         local dropdownBtns = {
             self.sourceFilterBtn,
             self.qualityFilterBtn,
+            self.statsFilterBtn,
             self.vendorTypeFilterBtn,
             self.typeFilterBtn,
             self.slotsFilterBtn,
@@ -5028,7 +5294,13 @@ beta-0.8.6r:
     end)
     qualityFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local typeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 42, qualityFilterBtn, "RIGHT", 3)
+    local statsFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Stats", 45, qualityFilterBtn, "RIGHT", 3)
+    statsFilterBtn:SetScript("OnClick", function(self, button)
+        Viewer:ShowStatsFilterMenu(self)
+    end)
+    statsFilterBtn:RegisterForClicks("LeftButtonUp")
+
+    local typeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 42, statsFilterBtn, "RIGHT", 3)
     typeFilterBtn:SetScript("OnClick", function(self, button)
         Viewer:ShowTypeFilterMenu(self)
     end)
@@ -5153,6 +5425,7 @@ beta-0.8.6r:
     
     self.sourceFilterBtn = sourceFilterBtn
     self.qualityFilterBtn = qualityFilterBtn
+    self.statsFilterBtn = statsFilterBtn
     self.typeFilterBtn = typeFilterBtn
     self.vendorTypeFilterBtn = vendorTypeFilterBtn
     self.slotsFilterBtn = slotsFilterBtn
@@ -5648,6 +5921,7 @@ beta-0.8.6r:
     self.filtersLabel = filtersLabel
     self.sourceFilterBtn = sourceFilterBtn
     self.qualityFilterBtn = qualityFilterBtn
+    self.statsFilterBtn = statsFilterBtn
     self.favoritesFilterBtn = favoritesFilterBtn
     self.lootedFilterBtn = lootedFilterBtn
     self.nameHeader = nameHeader
@@ -5705,7 +5979,7 @@ beta-0.8.6r:
     
     self.interactiveElements = {
         equipmentBtn, mysticBtn, bmvBtn,
-        searchBox, sourceFilterBtn, qualityFilterBtn, typeFilterBtn, lootedFilterBtn, duplicatesFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn,
+        searchBox, sourceFilterBtn, qualityFilterBtn, statsFilterBtn, typeFilterBtn, lootedFilterBtn, duplicatesFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn,
         nameHeader, levelHeader, slotHeader, typeHeader, classHeader, zoneHeader,  foundByHeader,
         vendorNameHeader, vendorPriceHeader, vendorZoneHeader, vendorContinentHeader, vendorTypeHeader,
         clearAllBtn, prevBtn, nextBtn, items25Btn, items50Btn, items100Btn, items500Btn, itemsAllBtn,
