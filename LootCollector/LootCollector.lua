@@ -255,6 +255,7 @@ local dbDefaults = {
         y = 0,
         scale = 1.0,
         },
+        filterPresets = {},
         lastVersionToastAt = 0,
         ignoreZones = {},
         decay = { fadeAfterDays  = 30, staleAfterDays = 90, },

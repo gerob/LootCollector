@@ -396,6 +396,22 @@ local function copy(t)
     return out
 end
 
+local function deepCopy(t)
+    if type(t) ~= "table" then return t end
+    local out = {}
+    for k, v in _next, t do
+        if type(v) == "table" then
+            out[k] = deepCopy(v)
+        else
+            out[k] = v
+        end
+    end
+    return out
+end
+
+local MAX_FILTER_PRESETS = 10
+local PresetsFilterMenuHost = CreateFrame("Frame", "LootCollectorViewerPresetsFilterMenuHost", UIParent, "UIDropDownMenuTemplate")
+
 local function createTimer(delay, callback)
     local timer = C_Timer.After(delay, callback)
     _tinsert(activeTimers, timer)
@@ -3682,6 +3698,236 @@ function Viewer:ShowStatsFilterMenu(anchor)
     EasyMenu(self:BuildStatsFilterEasyMenu(), StatsFilterMenuHost, anchor, 0, 0, "MENU", 2)
 end
 
+function Viewer:EnsureFilterPresetsTable()
+    if type(L.db) ~= "table" or not L.db.profile then
+        return {}
+    end
+    if type(L.db.profile.filterPresets) ~= "table" then
+        L.db.profile.filterPresets = {}
+    end
+    return L.db.profile.filterPresets
+end
+
+function Viewer:CountFilterPresets()
+    local presets = self:EnsureFilterPresetsTable()
+    local n = 0
+    for _ in pairs(presets) do n = n + 1 end
+    return n
+end
+
+function Viewer:GetSortedFilterPresetNames()
+    local presets = self:EnsureFilterPresetsTable()
+    local names = {}
+    for name in pairs(presets) do
+        _tinsert(names, name)
+    end
+    _tsort(names)
+    return names
+end
+
+function Viewer:CaptureFilterPresetSnapshot()
+    self:EnsureDeepFiltersLoaded()
+    local chips = {}
+    if self.deepSearchFilters then
+        for i = 1, #self.deepSearchFilters do
+            chips[i] = self.deepSearchFilters[i]
+        end
+    end
+    return {
+        currentFilter = self.currentFilter or "eq",
+        columnFilters = deepCopy(self.columnFilters),
+        deepSearchFilters = chips,
+        lootedFilterState = self.lootedFilterState,
+        favoritesFilterState = self.favoritesFilterState,
+        collectedMEFilterState = self.collectedMEFilterState,
+        lastSeenSortState = self.lastSeenSortState or "off",
+        minReqLevel = self.minReqLevel,
+        maxReqLevel = self.maxReqLevel,
+    }
+end
+
+function Viewer:SaveFilterPreset(name)
+    name = strtrim(tostring(name or ""))
+    if name == "" then
+        print("|cffff0000LootCollector:|r Preset name cannot be empty.")
+        return false
+    end
+    local presets = self:EnsureFilterPresetsTable()
+    if not presets[name] and self:CountFilterPresets() >= MAX_FILTER_PRESETS then
+        print(string.format("|cffff0000LootCollector:|r Maximum of %d filter presets reached. Delete one first.", MAX_FILTER_PRESETS))
+        return false
+    end
+    presets[name] = self:CaptureFilterPresetSnapshot()
+    print(string.format("|cff00ff00LootCollector:|r Saved filter preset '%s'.", name))
+    return true
+end
+
+function Viewer:DeleteFilterPreset(name)
+    local presets = self:EnsureFilterPresetsTable()
+    if not presets[name] then return false end
+    presets[name] = nil
+    print(string.format("|cff00ff00LootCollector:|r Deleted filter preset '%s'.", name))
+    return true
+end
+
+function Viewer:ApplyFilterPreset(name)
+    local presets = self:EnsureFilterPresetsTable()
+    local snap = presets[name]
+    if type(snap) ~= "table" then
+        print(string.format("|cffff0000LootCollector:|r Unknown filter preset '%s'.", tostring(name)))
+        return false
+    end
+
+    self:EnsureDeepFiltersLoaded()
+
+    if type(snap.columnFilters) == "table" then
+        self.columnFilters = deepCopy(snap.columnFilters)
+        -- Ensure nested tables exist after older/partial snaps.
+        self.columnFilters.eq = self.columnFilters.eq or { slot = {}, type = {}, class = {} }
+        self.columnFilters.eq.slot = self.columnFilters.eq.slot or {}
+        self.columnFilters.eq.type = self.columnFilters.eq.type or {}
+        self.columnFilters.eq.class = self.columnFilters.eq.class or {}
+        self.columnFilters.ms = self.columnFilters.ms or { class = {} }
+        self.columnFilters.ms.class = self.columnFilters.ms.class or {}
+        self.columnFilters.zone = self.columnFilters.zone or {}
+        self.columnFilters.source = self.columnFilters.source or {}
+        self.columnFilters.quality = self.columnFilters.quality or {}
+        self.columnFilters.looted = self.columnFilters.looted or {}
+        self.columnFilters.vendorType = self.columnFilters.vendorType or {}
+        if self.columnFilters.duplicates == nil then self.columnFilters.duplicates = false end
+    end
+
+    wipe(self.deepSearchFilters)
+    if type(snap.deepSearchFilters) == "table" then
+        for i = 1, #snap.deepSearchFilters do
+            _tinsert(self.deepSearchFilters, snap.deepSearchFilters[i])
+        end
+    end
+    self:RebuildDeepCompiled()
+    if self.RefreshDeepFilterPanel then self:RefreshDeepFilterPanel() end
+
+    self.lootedFilterState = snap.lootedFilterState
+    self.favoritesFilterState = snap.favoritesFilterState
+    self.collectedMEFilterState = snap.collectedMEFilterState
+    self.lastSeenSortState = snap.lastSeenSortState or "off"
+    self.minReqLevel = snap.minReqLevel
+    self.maxReqLevel = snap.maxReqLevel
+    if self.minReqLevelBox then
+        self.minReqLevelBox:SetText(self.minReqLevel and tostring(self.minReqLevel) or "")
+    end
+    if self.maxReqLevelBox then
+        self.maxReqLevelBox:SetText(self.maxReqLevel and tostring(self.maxReqLevel) or "")
+    end
+
+    local tab = snap.currentFilter or "eq"
+    local CoreMod = L:GetModule("Core", true)
+    local isCoA = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
+    if isCoA and tab == "ms" then tab = "eq" end
+    self.currentFilter = tab
+    self.currentPage = 1
+    if tab == "bmv" then
+        self.sortColumn = "vendorType"
+        self.sortAscending = true
+    else
+        self.sortColumn = "name"
+        self.sortAscending = true
+    end
+    self:SetSelectedRow(nil)
+    if self.vendorInventoryFrame then
+        self.vendorInventoryFrame:Hide()
+        self.selectedVendorGuid = nil
+    end
+
+    InvalidateViewerFilterCache()
+    Cache.uniqueValuesContext = {}
+
+    if self.UpdateFilterButtons then self:UpdateFilterButtons() end
+    if self.UpdateSortHeaders then self:UpdateSortHeaders() end
+    if self.window and self.window:IsShown() then
+        self:RefreshData()
+    end
+    if self.UpdateClearAllButton then self:UpdateClearAllButton() end
+    if self.UpdateFilterButtonStates then self:UpdateFilterButtonStates() end
+    self:NotifyMapViewerFiltersChanged(true)
+
+    print(string.format("|cff00ff00LootCollector:|r Loaded filter preset '%s'.", name))
+    return true
+end
+
+function Viewer:BuildPresetsFilterEasyMenu()
+    local names = self:GetSortedFilterPresetNames()
+    local count = #names
+    local menu = {
+        {
+            text = "Save Current As...",
+            notCheckable = true,
+            func = function()
+                -- SaveFilterPreset allows overwrite of an existing name even at the cap.
+                StaticPopup_Show("LOOTCOLLECTOR_VIEWER_SAVE_PRESET")
+            end,
+        },
+    }
+
+    if count == 0 then
+        _tinsert(menu, {
+            text = "No saved presets",
+            notCheckable = true,
+            disabled = true,
+        })
+        return menu
+    end
+
+    local loadList = {
+        { text = "Load Preset", isTitle = true, notCheckable = true },
+    }
+    local deleteList = {
+        { text = "Delete Preset", isTitle = true, notCheckable = true },
+    }
+    for _, name in ipairs(names) do
+        _tinsert(loadList, {
+            text = name,
+            notCheckable = true,
+            func = function()
+                Viewer:ApplyFilterPreset(name)
+            end,
+        })
+        _tinsert(deleteList, {
+            text = name,
+            notCheckable = true,
+            func = function()
+                StaticPopup_Show("LOOTCOLLECTOR_VIEWER_DELETE_PRESET", name, nil, { name = name })
+            end,
+        })
+    end
+
+    _tinsert(menu, {
+        text = "Load",
+        hasArrow = true,
+        notCheckable = true,
+        menuList = loadList,
+    })
+    _tinsert(menu, {
+        text = "Delete",
+        hasArrow = true,
+        notCheckable = true,
+        menuList = deleteList,
+    })
+    return menu
+end
+
+function Viewer:ShowPresetsFilterMenu(anchor)
+    if not EasyMenu or not anchor then return end
+
+    local dropdownList = _G["DropDownList1"]
+    if Viewer.currentFilterAnchor == anchor and dropdownList and dropdownList:IsShown() then
+        HideDropDownMenu(1)
+        Viewer.currentFilterAnchor = nil
+        return
+    end
+    Viewer.currentFilterAnchor = anchor
+    EasyMenu(self:BuildPresetsFilterEasyMenu(), PresetsFilterMenuHost, anchor, 0, 0, "MENU", 2)
+end
+
 function Viewer:UpdateFilterButtonStates()
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -3864,6 +4110,11 @@ function Viewer:UpdateFilterButtonStates()
     if self.collectedMEFilterBtn then self.collectedMEFilterBtn:SetShown(showNormalFilters and not hideEnchantFilter) end
     if self.lsFilterBtn then self.lsFilterBtn:SetShown(showNormalFilters) end
     if self.duplicatesFilterBtn then self.duplicatesFilterBtn:SetShown(showDuplicates) end
+    if self.presetsFilterBtn then
+        setButtonTextColor(self.presetsFilterBtn, 1, 1, 1)
+        self.presetsFilterBtn:SetText("Presets")
+        self.presetsFilterBtn:SetShown(true)
+    end
 
     if self.undiscoveredFilterBtn then
         local current = L.db.profile.viewer.undiscoveredFilter or "TOP"
@@ -3894,6 +4145,7 @@ function Viewer:UpdateFilterButtonStates()
             self.favoritesFilterBtn,
             self.collectedMEFilterBtn,
             self.duplicatesFilterBtn,
+            self.presetsFilterBtn,
         }
 
         for _, btn in ipairs(dropdownBtns) do
@@ -5471,6 +5723,12 @@ beta-0.8.6r:
     end)
     duplicatesFilterBtn:RegisterForClicks("LeftButtonUp")
 
+    local presetsFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Presets", 58, duplicatesFilterBtn, "RIGHT", 3)
+    presetsFilterBtn:SetScript("OnClick", function(self, button)
+        Viewer:ShowPresetsFilterMenu(self)
+    end)
+    presetsFilterBtn:RegisterForClicks("LeftButtonUp")
+
     local lootedFilterBtn = CreateFlatFilterBtn(quickFiltersFrame, "Looted", 75, quickFiltersFrame, "LEFT", 0)
     lootedFilterBtn:SetScript("OnClick", function(self, button)
         if Viewer.lootedFilterState == nil then Viewer.lootedFilterState = true      
@@ -5530,6 +5788,7 @@ beta-0.8.6r:
     self.lootedFilterBtn = lootedFilterBtn
     self.collectedMEFilterBtn = collectedMEFilterBtn
     self.duplicatesFilterBtn = duplicatesFilterBtn
+    self.presetsFilterBtn = presetsFilterBtn
     self.lsFilterBtn = lsFilterBtn
     self.undiscoveredFilterBtn = undiscoveredFilterBtn
     self.quickFiltersFrame = quickFiltersFrame
@@ -6066,7 +6325,8 @@ beta-0.8.6r:
     self.items500Btn = items500Btn
     self.itemsAllBtn = itemsAllBtn
     self.paginationFrame = paginationFrame
-    self.duplicatesFilterBtn = duplicatesFilterBtn 
+    self.duplicatesFilterBtn = duplicatesFilterBtn
+    self.presetsFilterBtn = presetsFilterBtn
     self.vendorTypeFilterBtn = vendorTypeFilterBtn
     self.typeFilterBtn = typeFilterBtn
     self.slotsFilterBtn = slotsFilterBtn
@@ -6075,7 +6335,7 @@ beta-0.8.6r:
     
     self.interactiveElements = {
         equipmentBtn, mysticBtn, bmvBtn,
-        searchBox, sourceFilterBtn, qualityFilterBtn, statsFilterBtn, typeFilterBtn, lootedFilterBtn, duplicatesFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn,
+        searchBox, sourceFilterBtn, qualityFilterBtn, statsFilterBtn, typeFilterBtn, lootedFilterBtn, duplicatesFilterBtn, presetsFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn,
         nameHeader, levelHeader, slotHeader, typeHeader, classHeader, zoneHeader,  foundByHeader,
         vendorNameHeader, vendorPriceHeader, vendorZoneHeader, vendorContinentHeader, vendorTypeHeader,
         clearAllBtn, prevBtn, nextBtn, items25Btn, items50Btn, items100Btn, items500Btn, itemsAllBtn,
@@ -8357,6 +8617,53 @@ end
 function Viewer:Toggle()
     if self.window and self.window:IsShown() then self:Hide() else self:Show() end
 end
+
+StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_SAVE_PRESET"] = {
+    text = "Save current Discoveries filters as preset:\n(Max " .. MAX_FILTER_PRESETS .. "; same name overwrites)",
+    button1 = "Save",
+    button2 = "Cancel",
+    hasEditBox = true,
+    editBoxWidth = 220,
+    OnShow = function(self)
+        local editBox = _G[self:GetName() .. "EditBox"]
+        if editBox then
+            editBox:SetText("")
+            editBox:SetFocus()
+        end
+    end,
+    OnAccept = function(self)
+        local editBox = _G[self:GetName() .. "EditBox"]
+        local name = editBox and editBox:GetText() or ""
+        Viewer:SaveFilterPreset(name)
+    end,
+    EditBoxOnEnterPressed = function(self)
+        local parent = self:GetParent()
+        local name = self:GetText() or ""
+        Viewer:SaveFilterPreset(name)
+        parent:Hide()
+    end,
+    EditBoxOnEscapePressed = function(self)
+        self:GetParent():Hide()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_DELETE_PRESET"] = {
+    text = "Delete filter preset '%s'?",
+    button1 = "Yes, Delete",
+    button2 = "No, Cancel",
+    OnAccept = function(self, data)
+        if data and data.name then
+            Viewer:DeleteFilterPreset(data.name)
+        end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    showAlert = true,
+}
 
 StaticPopupDialogs["LOOTCOLLECTOR_DISCORD_BUG_REPORT"] = {
     text = "Join our Discord to give feedback or report issues in #lootcollector:\n\nPress Ctrl+C to copy the link below.",
