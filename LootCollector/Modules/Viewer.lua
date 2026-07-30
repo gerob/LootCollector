@@ -2924,7 +2924,8 @@ end
 
 function Viewer:GetMainScrollHeight()
     if not self.window then return 450 end
-    local base = self.window:GetHeight() - 200
+    -- Chrome: title + tabs + filter row + search + headers + pagination (~232)
+    local base = self.window:GetHeight() - 232
     if self.currentFilter == "bmv" and not self.inlineVendorView then
         return base * (self.splitRatio or 0.64)
     end
@@ -2944,7 +2945,7 @@ function Viewer:UpdateLayout()
     if self.currentFilter == "bmv" and not self.inlineVendorView then
         self:EnsureVendorInventoryPanel()
         if self.vendorInventoryFrame then
-            local invHeight = (height - 200) * (1 - self.splitRatio) - 10
+            local invHeight = (height - 232) * (1 - self.splitRatio) - 10
             self.vendorInventoryFrame:SetSize(width - 60, invHeight)
             self.vendorInventoryFrame:Show()
             self:UpdateVendorInventoryScroll()
@@ -3411,9 +3412,9 @@ function Viewer:UpdateFilterButtonStates()
         self.undiscoveredFilterBtn:SetShown(isEq)
     end
 
-    local lastBtn = self.filtersLabel
-    if lastBtn then
-        local activeBtns = {
+    local lastDropdown = self.filtersLabel
+    if lastDropdown then
+        local dropdownBtns = {
             self.sourceFilterBtn,
             self.qualityFilterBtn,
             self.vendorTypeFilterBtn,
@@ -3421,19 +3422,36 @@ function Viewer:UpdateFilterButtonStates()
             self.slotsFilterBtn,
             self.usableByFilterBtn,
             self.favoritesFilterBtn,
-            self.lootedFilterBtn,
             self.collectedMEFilterBtn,
-            self.lsFilterBtn,          
             self.duplicatesFilterBtn,
-            self.undiscoveredFilterBtn
         }
 
-        for _, btn in ipairs(activeBtns) do
+        for _, btn in ipairs(dropdownBtns) do
             if btn and btn:IsShown() then
                 btn:ClearAllPoints()
-                local spacing = (lastBtn == self.filtersLabel) and 5 or 3
-                btn:SetPoint("LEFT", lastBtn, "RIGHT", spacing, 0)
-                lastBtn = btn
+                local spacing = (lastDropdown == self.filtersLabel) and 5 or 3
+                btn:SetPoint("LEFT", lastDropdown, "RIGHT", spacing, 0)
+                lastDropdown = btn
+            end
+        end
+    end
+
+    local lastQuick = nil
+    if self.quickFiltersFrame then
+        local quickBtns = {
+            self.lootedFilterBtn,
+            self.lsFilterBtn,
+            self.undiscoveredFilterBtn,
+        }
+        for _, btn in ipairs(quickBtns) do
+            if btn and btn:IsShown() then
+                btn:ClearAllPoints()
+                if lastQuick then
+                    btn:SetPoint("LEFT", lastQuick, "RIGHT", 3, 0)
+                else
+                    btn:SetPoint("LEFT", self.quickFiltersFrame, "LEFT", 0, 0)
+                end
+                lastQuick = btn
             end
         end
     end
@@ -4195,6 +4213,7 @@ beta-0.8.6r:
     local searchLabel = window:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
     searchLabel:SetPoint("TOPLEFT", equipmentBtn, "BOTTOMLEFT", 0, -10)
     searchLabel:SetText("Search: ")
+    self.searchLabel = searchLabel
 
     local searchBox = CreateFrame("EditBox", nil, window)
     searchBox:SetSize(180, 18)
@@ -4795,21 +4814,30 @@ beta-0.8.6r:
         end)
     end)
 
+    -- Top strip (tab row): Looted / Date / Undiscovered
+    local quickFiltersFrame = CreateFrame("Frame", "LootCollectorQuickFiltersFrame", window, "BackdropTemplate")
+    quickFiltersFrame:SetSize(340, 24)
+    quickFiltersFrame:SetFrameStrata(FRAME_STRATA)
+    quickFiltersFrame:SetFrameLevel(FRAME_LEVEL + 1)
+    quickFiltersFrame:SetPoint("LEFT", bmvBtn, "RIGHT", 20, 0)
+    quickFiltersFrame:SetBackdrop(nil)
+
+    -- Second row: dropdown filters (Source, Quality, Type, …)
     local additionalFiltersFrame = CreateFrame("Frame", "LootCollectorAdditionalFiltersFrame", window, "BackdropTemplate")
-    additionalFiltersFrame:SetSize(700, 24) 
+    additionalFiltersFrame:SetSize(700, 24)
     additionalFiltersFrame:SetFrameStrata(FRAME_STRATA)
     additionalFiltersFrame:SetFrameLevel(FRAME_LEVEL + 1)
-    additionalFiltersFrame:SetPoint("LEFT", bmvBtn, "RIGHT", 20, 0)
+    additionalFiltersFrame:SetPoint("TOPLEFT", equipmentBtn, "BOTTOMLEFT", 0, -8)
     additionalFiltersFrame:SetBackdrop(nil)
 
     local filtersLabel = additionalFiltersFrame:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
-    filtersLabel:SetPoint("LEFT", 10, 0)
+    filtersLabel:SetPoint("LEFT", 0, 0)
     filtersLabel:SetText("Filters:")
 
-    local function CreateFlatFilterBtn(parent, label, width, anchorFrame, anchorPoint)
+    local function CreateFlatFilterBtn(parent, label, width, anchorFrame, anchorPoint, xOffset)
         local btn = CreateFrame("Button", nil, parent)
         btn:SetSize(width, BUTTON_HEIGHT)
-        btn:SetPoint("LEFT", anchorFrame, anchorPoint or "RIGHT", anchorFrame == filtersLabel and 5 or 3, 0)
+        btn:SetPoint("LEFT", anchorFrame, anchorPoint or "RIGHT", xOffset or 3, 0)
         btn:SetFrameStrata(FRAME_STRATA)
         btn:SetFrameLevel(FRAME_LEVEL + 1)
         btn.bg = btn:CreateTexture(nil, "BACKGROUND")
@@ -4845,48 +4873,48 @@ beta-0.8.6r:
         return btn
     end
 
-    local sourceFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Source", 55, filtersLabel, "RIGHT")
+    local sourceFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Source", 55, filtersLabel, "RIGHT", 5)
     sourceFilterBtn:SetScript("OnClick", function(self, button)
         local values = GetUniqueValues("source")
         Viewer:ShowColumnFilterDropdown("source", self, values)
     end)
     sourceFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local qualityFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Quality", 55, sourceFilterBtn, "RIGHT")
+    local qualityFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Quality", 55, sourceFilterBtn, "RIGHT", 3)
     qualityFilterBtn:SetScript("OnClick", function(self, button)
         local values = GetUniqueValues("quality")
         Viewer:ShowColumnFilterDropdown("quality", self, values)
     end)
     qualityFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local typeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 42, qualityFilterBtn, "RIGHT")
+    local typeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 42, qualityFilterBtn, "RIGHT", 3)
     typeFilterBtn:SetScript("OnClick", function(self, button)
         Viewer:ShowTypeFilterMenu(self)
     end)
     typeFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local vendorTypeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 55, typeFilterBtn, "RIGHT")
+    local vendorTypeFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Type", 55, typeFilterBtn, "RIGHT", 3)
     vendorTypeFilterBtn:SetScript("OnClick", function(self, button)
         local values = GetUniqueValues("vendorType")
         Viewer:ShowColumnFilterDropdown("vendorType", self, values)
     end)
     vendorTypeFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local slotsFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Slots", 42, vendorTypeFilterBtn, "RIGHT")
+    local slotsFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Slots", 42, vendorTypeFilterBtn, "RIGHT", 3)
     slotsFilterBtn:SetScript("OnClick", function(self, button)
         local values = GetUniqueValues("slot")
         Viewer:ShowColumnFilterDropdown("slot", self, values)
     end)
     slotsFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local usableByFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Usable By", 65, slotsFilterBtn, "RIGHT")
+    local usableByFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Usable By", 65, slotsFilterBtn, "RIGHT", 3)
     usableByFilterBtn:SetScript("OnClick", function(self, button)
         local values = GetUniqueValues("class")
         Viewer:ShowColumnFilterDropdown("class", self, values)
     end)
     usableByFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local favoritesFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Favorites", 75, usableByFilterBtn, "RIGHT")
+    local favoritesFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Favorites", 75, usableByFilterBtn, "RIGHT", 3)
     favoritesFilterBtn:SetScript("OnClick", function(self, button)
         if Viewer.favoritesFilterState == nil then Viewer.favoritesFilterState = true else Viewer.favoritesFilterState = nil end
         Viewer.currentPage = 1
@@ -4898,21 +4926,7 @@ beta-0.8.6r:
     end)
     favoritesFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local lootedFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Looted", 75, favoritesFilterBtn, "RIGHT")
-    lootedFilterBtn:SetScript("OnClick", function(self, button)
-        if Viewer.lootedFilterState == nil then Viewer.lootedFilterState = true      
-        elseif Viewer.lootedFilterState == true then Viewer.lootedFilterState = false     
-        else Viewer.lootedFilterState = nil end
-        Viewer.currentPage = 1
-        Cache.filteredResults = {}
-        Cache.lastFilterState = nil
-        Viewer:RefreshData()
-        Viewer:UpdateClearAllButton()
-        Viewer:UpdateFilterButtonStates()
-    end)
-    lootedFilterBtn:RegisterForClicks("LeftButtonUp")
-
-    local collectedMEFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Enchant", 82, lootedFilterBtn, "RIGHT")
+    local collectedMEFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Enchant", 82, favoritesFilterBtn, "RIGHT", 3)
     collectedMEFilterBtn:SetScript("OnEnter", function(self) 
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Filter by which Mystic Enchants have been collected.")
@@ -4936,7 +4950,33 @@ beta-0.8.6r:
     end)
     collectedMEFilterBtn:RegisterForClicks("LeftButtonUp")
 
-    local lsFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Date: Off", 75, collectedMEFilterBtn, "RIGHT")
+    local duplicatesFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Duplicates", 75, collectedMEFilterBtn, "RIGHT", 3)
+    duplicatesFilterBtn:SetScript("OnClick", function(self, button)
+        Viewer.columnFilters.duplicates = not Viewer.columnFilters.duplicates
+        Viewer.currentPage = 1
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+        Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
+        Viewer:UpdateFilterButtonStates()
+    end)
+    duplicatesFilterBtn:RegisterForClicks("LeftButtonUp")
+
+    local lootedFilterBtn = CreateFlatFilterBtn(quickFiltersFrame, "Looted", 75, quickFiltersFrame, "LEFT", 0)
+    lootedFilterBtn:SetScript("OnClick", function(self, button)
+        if Viewer.lootedFilterState == nil then Viewer.lootedFilterState = true      
+        elseif Viewer.lootedFilterState == true then Viewer.lootedFilterState = false     
+        else Viewer.lootedFilterState = nil end
+        Viewer.currentPage = 1
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+        Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
+        Viewer:UpdateFilterButtonStates()
+    end)
+    lootedFilterBtn:RegisterForClicks("LeftButtonUp")
+
+    local lsFilterBtn = CreateFlatFilterBtn(quickFiltersFrame, "Date: Off", 75, lootedFilterBtn, "RIGHT", 3)
     lsFilterBtn:SetScript("OnClick", function(self, button)
         if Viewer.lastSeenSortState == "off" or not Viewer.lastSeenSortState then Viewer.lastSeenSortState = "new"
         elseif Viewer.lastSeenSortState == "new" then Viewer.lastSeenSortState = "old"
@@ -4949,20 +4989,8 @@ beta-0.8.6r:
         Viewer:UpdateFilterButtonStates()
     end)
     lsFilterBtn:RegisterForClicks("LeftButtonUp")
-
-    local duplicatesFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Duplicates", 75, lsFilterBtn, "RIGHT")
-    duplicatesFilterBtn:SetScript("OnClick", function(self, button)
-        Viewer.columnFilters.duplicates = not Viewer.columnFilters.duplicates
-        Viewer.currentPage = 1
-        Cache.filteredResults = {}
-        Cache.lastFilterState = nil
-        Viewer:RefreshData()
-        Viewer:UpdateClearAllButton()
-        Viewer:UpdateFilterButtonStates()
-    end)
-    duplicatesFilterBtn:RegisterForClicks("LeftButtonUp")
     
-    local undiscoveredFilterBtn = CreateFlatFilterBtn(additionalFiltersFrame, "Undiscovered: Top", 170, duplicatesFilterBtn, "RIGHT")
+    local undiscoveredFilterBtn = CreateFlatFilterBtn(quickFiltersFrame, "Undiscovered: Top", 170, lsFilterBtn, "RIGHT", 3)
     undiscoveredFilterBtn:SetScript("OnClick", function(self, button)
         local current = L.db.profile.viewer.undiscoveredFilter or "TOP"
         local nextState
@@ -4994,6 +5022,13 @@ beta-0.8.6r:
     self.duplicatesFilterBtn = duplicatesFilterBtn
     self.lsFilterBtn = lsFilterBtn
     self.undiscoveredFilterBtn = undiscoveredFilterBtn
+    self.quickFiltersFrame = quickFiltersFrame
+
+    -- Search row sits below the dropdown filter row
+    if self.searchLabel then
+        self.searchLabel:ClearAllPoints()
+        self.searchLabel:SetPoint("TOPLEFT", additionalFiltersFrame, "BOTTOMLEFT", 0, -8)
+    end
 
     local headerFrame = CreateFrame("Frame", nil, window)
     headerFrame:SetSize(WINDOW_WIDTH - 40, HEADER_HEIGHT)
@@ -5450,7 +5485,7 @@ beta-0.8.6r:
     end)
 
     local scrollFrame = CreateFrame("ScrollFrame", "LootCollectorViewerScrollFrame", window, "FauxScrollFrameTemplate")
-    scrollFrame:SetSize(WINDOW_WIDTH - 60, WINDOW_HEIGHT - 200) 
+    scrollFrame:SetSize(WINDOW_WIDTH - 60, WINDOW_HEIGHT - 232) 
     scrollFrame:SetPoint("TOPLEFT", headerFrame, "BOTTOMLEFT", 0, -5)
     scrollFrame:SetFrameLevel(FRAME_LEVEL + 1)
     scrollFrame:SetFrameStrata(FRAME_STRATA)
