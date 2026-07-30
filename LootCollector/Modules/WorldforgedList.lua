@@ -1840,50 +1840,35 @@ L.WorldforgedList = {
     4050653,
 }
 
--- Pre-warm: request item data from the server in small batches so items
--- are cached by the time the Viewer opens.  Each GetItemInfo(id) call on
--- an unknown item tells the client to fetch it; the data arrives async.
+-- Pre-warm base Worldforged IDs in small GetItemInfo batches.
+-- Deferred until first Viewer:Show (L.StartWorldforgedListWarm) to avoid
+-- login storms. Phase-upgrade IDs are warmed separately by
+-- Viewer:PrewarmActivePhaseUpgrades (cancellable via Viewer._warmGen).
 local BATCH = 50
 local list = L.WorldforgedList
 local idx = 1
-local phaseList = nil
-local phaseIdx = 1
+local warmStarted = false
 
 local function WarmBatch()
+    if idx > #list then return end
+    local top = idx + BATCH - 1
+    if top > #list then top = #list end
+    for i = idx, top do
+        GetItemInfo(list[i])
+    end
+    idx = top + 1
     if idx <= #list then
-        local top = idx + BATCH - 1
-        if top > #list then top = #list end
-        for i = idx, top do
-            GetItemInfo(list[i])
-        end
-        idx = top + 1
         C_Timer.After(0.1, WarmBatch)
-    else
-        local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
-        if selectedPhase > 0 and not phaseList then
-            phaseList = {}
-            local added = {}
-            for _, baseID in ipairs(list) do
-                local upgradeID = L:GetWorldforgedPhaseItemID(baseID, selectedPhase)
-                if upgradeID and upgradeID ~= baseID and not added[upgradeID] then
-                    table.insert(phaseList, upgradeID)
-                    added[upgradeID] = true
-                end
-            end
-        end
-
-        if phaseList and phaseIdx <= #phaseList then
-            local top = phaseIdx + BATCH - 1
-            if top > #phaseList then top = #phaseList end
-            for i = phaseIdx, top do
-                GetItemInfo(phaseList[i])
-            end
-            phaseIdx = top + 1
-            C_Timer.After(0.1, WarmBatch)
-        end
     end
 end
-C_Timer.After(3, WarmBatch)  -- start 3s after login to avoid load-screen pressure
+
+-- One-shot session start from Viewer:Show. Safe to call repeatedly.
+function L.StartWorldforgedListWarm()
+    if warmStarted then return end
+    if not list or #list == 0 then return end
+    warmStarted = true
+    C_Timer.After(0.1, WarmBatch)
+end
 
 L.WorldforgedSet = {}
 if L.WorldforgedList then

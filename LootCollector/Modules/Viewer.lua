@@ -4290,9 +4290,12 @@ end
 
 function Viewer:WarmItemIDs(idList)
     if not idList or #idList == 0 then return end
+    self._warmGen = (self._warmGen or 0) + 1
+    local gen = self._warmGen
     local BATCH = 50
     local idx = 1
     local function run()
+        if Viewer._warmGen ~= gen then return end
         local top = idx + BATCH - 1
         if top > #idList then top = #idList end
         for i = idx, top do
@@ -4786,6 +4789,9 @@ beta-0.8.6r:
                     Cache.lastFilterState = nil
                     Viewer:UpdateWorldforgedTabLabel()
                     Viewer:PruneStaleUpgradeCacheQueue(phaseID)
+                    -- Bump warm gen so any prior WarmItemIDs / WorldforgedList
+                    -- phase timers stop before the new phase warm starts.
+                    Viewer._warmGen = (Viewer._warmGen or 0) + 1
                     Viewer:PrewarmActivePhaseUpgrades()
                     Viewer:RefreshData()
                     local Map = L:GetModule("Map", true)
@@ -8539,15 +8545,8 @@ function Viewer:OnInitialize()
         end
     end)
 
-    C_Timer.After(12, function()
-        local useAsync = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.asyncLoading
-        if useAsync == nil then useAsync = true end
-
-
-        if useAsync and Viewer.PrewarmCache then
-            Viewer:PrewarmCache()
-        end
-    end)
+    -- Discovery-cache prewarm is deferred to Viewer:Show (avoids login hitch
+    -- from building ~1.8k WF rows before the window is needed).
     
     if pTime then L:ProfileStop("Viewer:OnInitialize", pTime) end 
 end
@@ -8565,6 +8564,15 @@ function Viewer:Show()
     
     local t0 = time()
     VDebug("Show: start, currentFilter=" .. tostring(self.currentFilter) .. ", cacheBuilt=" .. tostring(Cache.discoveriesBuilt) .. ", building=" .. tostring(Cache.discoveriesBuilding))
+
+    -- First open: start Worldforged GetItemInfo warm (gated off login).
+    if L.StartWorldforgedListWarm then
+        L.StartWorldforgedListWarm()
+    end
+    -- Phase upgrades (if selected) use the cancellable Viewer warm path.
+    if self.PrewarmActivePhaseUpgrades then
+        self:PrewarmActivePhaseUpgrades()
+    end
 
     local Core = L:GetModule("Core", true)
     local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
