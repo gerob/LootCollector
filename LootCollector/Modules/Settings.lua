@@ -816,6 +816,22 @@ local function buildOptions()
 							end
 						end,
 					},
+					enhancedWFTooltip = {
+						type = "toggle",
+						name = "Enhanced WF Tooltip",
+						desc = "When enabled, Worldforged item tooltips show Dung–T3 upgrade lines (same option as Map → Show and /lcwf).",
+						order = 1.6,
+						get = function()
+							return L.db.profile.enhancedWFTooltip and true or false
+						end,
+						set = function(_, v)
+							L.db.profile.enhancedWFTooltip = v and true or false
+							local Tooltip = L:GetModule("Tooltip", true)
+							if Tooltip and Tooltip.ApplySetting then
+								Tooltip:ApplySetting()
+							end
+						end,
+					},
 					rowFont = {
 						type = "select",
 						name = "List Font (Rows)",
