@@ -86,6 +86,11 @@ Viewer.collectedMEFilterState = nil
 Viewer.hasUncachedData = false
 Viewer.lastSeenSortState = "off"
 
+-- Dev troubleshooting: pending-update ring buffer (session-only; off by default)
+Viewer._pendingTraceEnabled = false
+Viewer._pendingTrace = {}
+Viewer._pendingTraceMax = 32
+
 local time = time or os.time
 
 local WINDOW_WIDTH = 1150
@@ -173,9 +178,8 @@ Viewer.vendorInventoryLines = nil
 Viewer.selectedVendorGuid   = nil      
 
 local function VDebug(msg)
-    
     if LootCollector.db and LootCollector.db.profile and LootCollector.db.profile.vdebugMode then
-        L._debug("Viewer-Debug", msg)
+        print("|cffffff00[LC-Viewer]|r " .. tostring(msg))
     end
 end
 
@@ -542,6 +546,79 @@ local function GetLocalizedZoneName(discovery)
 
     Cache.zoneNames[cacheKey] = localizedZoneName
     return localizedZoneName
+end
+
+local function PendingTraceRecord(action, guid, discoveryData)
+    if not Viewer._pendingTraceEnabled then return end
+    local buf = Viewer._pendingTrace
+    if not buf then
+        Viewer._pendingTrace = {}
+        buf = Viewer._pendingTrace
+    end
+
+    local entry = { action = tostring(action or "?") }
+    if action == "bulk" and (not guid or guid == "") then
+        entry.detail = "(no detail)"
+    else
+        if guid and guid ~= "" then
+            local g = tostring(guid)
+            if #g > 36 then g = string.sub(g, 1, 33) .. "..." end
+            entry.guid = g
+        end
+        if discoveryData and type(discoveryData) == "table" then
+            if discoveryData.il and discoveryData.il ~= "" then
+                entry.item = discoveryData.il
+            elseif discoveryData.i then
+                local name = GetItemInfo(discoveryData.i)
+                entry.item = name or ("item:" .. tostring(discoveryData.i))
+            elseif discoveryData.vendorName then
+                entry.item = discoveryData.vendorName
+            end
+            if discoveryData.fp and discoveryData.fp ~= "" then
+                entry.fp = tostring(discoveryData.fp)
+            end
+            local zoneName = GetLocalizedZoneName(discoveryData)
+            if zoneName and zoneName ~= "" and zoneName ~= "Unknown Zone" then
+                entry.zone = zoneName
+            elseif discoveryData.z then
+                entry.zone = "z=" .. tostring(discoveryData.z)
+            end
+        end
+    end
+
+    buf[#buf + 1] = entry
+    local maxN = Viewer._pendingTraceMax or 32
+    while #buf > maxN do
+        _tremove(buf, 1)
+    end
+end
+
+function Viewer:DumpPendingTrace(clearAfter)
+    local buf = self._pendingTrace or {}
+    local n = #buf
+    if n == 0 then
+        print("|cff88aaff[LC-Pending]|r (empty)" ..
+            (self._pendingTraceEnabled and " — recording on" or " — recording off"))
+        return
+    end
+    print(string.format("|cff88aaff[LC-Pending]|r %d event(s)%s:",
+        n, self._pendingTraceEnabled and " (recording on)" or ""))
+    for i = 1, n do
+        local e = buf[i]
+        local parts = { tostring(i) .. ".", e.action or "?" }
+        if e.detail then
+            parts[#parts + 1] = e.detail
+        else
+            if e.item then parts[#parts + 1] = e.item end
+            if e.zone then parts[#parts + 1] = e.zone end
+            if e.fp then parts[#parts + 1] = "fp=" .. e.fp end
+            if e.guid then parts[#parts + 1] = "guid=" .. e.guid end
+        end
+        print(_tconcat(parts, " | "))
+    end
+    if clearAfter then
+        wipe(self._pendingTrace)
+    end
 end
 
 -- Viewer list row: name / zone / tooltip / Type / Slot (vendors use vendor name).
@@ -2089,17 +2166,28 @@ function Viewer:UpdateAllDiscoveriesCacheSync(onCompleteCallback)
 
     local wfClassic = L.WorldforgedList
     if wfClassic then
+        -- Match GetUndiscoveredCount: one placeholder per base ID, keyed by base.
+        local countedBases = {}
         for _, itemID in ipairs(wfClassic) do
-            if itemID and not discoveredItemIDs[itemID] then
-                local fakeDiscovery = {
-                    i = itemID,
-                    c = 0,
-                    z = 0,
-                    iz = 0,
-                    q = 2,
-                    isUndiscovered = true
-                }
-                table.insert(self._cacheBuildQueue, { guid = "undiscovered-" .. itemID, d = fakeDiscovery, isVendor = false, isUndiscovered = true })
+            if itemID then
+                local baseID = L:GetBaseItemID(itemID)
+                if baseID and not discoveredItemIDs[baseID] and not countedBases[baseID] then
+                    countedBases[baseID] = true
+                    local fakeDiscovery = {
+                        i = baseID,
+                        c = 0,
+                        z = 0,
+                        iz = 0,
+                        q = 2,
+                        isUndiscovered = true
+                    }
+                    table.insert(self._cacheBuildQueue, {
+                        guid = "undiscovered-" .. tostring(baseID),
+                        d = fakeDiscovery,
+                        isVendor = false,
+                        isUndiscovered = true,
+                    })
+                end
             end
         end
     end
@@ -2283,7 +2371,8 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                         if db and db[guid] then
                             db[guid] = nil
                             L.DataHasChanged = true
-                            L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", guid, nil)
+                            -- Silent purge during rebuild: do not SendMessage (would
+                            -- re-light Refresh after the rebuild finishes).
                         end
                         skipItem = true
                     elseif L.StarterDBItemZones and L.StarterDBItemZones[discovery.i] and not L.StarterDBItemZones[discovery.i][discovery.z] then
@@ -2291,7 +2380,6 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                         if db and db[guid] then
                             db[guid] = nil
                             L.DataHasChanged = true
-                            L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", guid, nil)
                         end
                         skipItem = true
                     else
@@ -2302,7 +2390,6 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
                                 if db and db[guid] then
                                     db[guid] = nil
                                     L.DataHasChanged = true
-                                    L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", guid, nil)
                                 end
                                 skipItem = true
                             end
@@ -2432,6 +2519,23 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
 
         wipe(self._cacheBuildQueue)
         self._cacheQueueCursor = nil
+
+        -- Rebuild side-effects (purges, GET_ITEM_INFO, delayed Comm "bulk")
+        -- must not leave Refresh lit. Hold pending bumps briefly after finish.
+        self.pendingUpdatesCount = 0
+        self._suppressPendingBumps = true
+        if self._suppressPendingTimer and C_Timer.CancelTimer then
+            C_Timer.CancelTimer(self._suppressPendingTimer)
+            self._suppressPendingTimer = nil
+        end
+        self._suppressPendingTimer = C_Timer.After(1.5, function()
+            Viewer._suppressPendingTimer = nil
+            Viewer._suppressPendingBumps = false
+            VDebug("pending-bump suppress ended")
+        end)
+        if self.UpdateRefreshButton then
+            self:UpdateRefreshButton()
+        end
 
         -- The build queues item lookups; make sure the (self-cancelling)
         -- cache pump is running to drain them.
@@ -3062,8 +3166,17 @@ function Viewer:UpdateClearAllButton()
 end
 
 function Viewer:GetUndiscoveredCount()
+    local CoreMod = L:GetModule("Core", true)
+
+    -- While the discovery cache is rebuilding, keep the last stable badge
+    -- value so Refresh does not flash the higher fallback WorldforgedList count.
+    if Cache.discoveriesBuilding and self._lastUndiscoveredCount ~= nil then
+        VDebug("GetUndiscoveredCount: hold last=" .. tostring(self._lastUndiscoveredCount) .. " (building)")
+        return self._lastUndiscoveredCount
+    end
+
     if Cache.discoveriesBuilt and Cache.discoveries then
-        local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
+        local isCoA = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
         local count = 0
         for i = 1, #Cache.discoveries do
             local data = Cache.discoveries[i]
@@ -3074,7 +3187,14 @@ function Viewer:GetUndiscoveredCount()
                 end
             end
         end
+        self._lastUndiscoveredCount = count
+        VDebug("GetUndiscoveredCount: cache path=" .. tostring(count))
         return count
+    end
+
+    if self._lastUndiscoveredCount ~= nil then
+        VDebug("GetUndiscoveredCount: hold last=" .. tostring(self._lastUndiscoveredCount) .. " (cache not built)")
+        return self._lastUndiscoveredCount
     end
 
     local discoveries = L:GetDiscoveriesDB()
@@ -3088,7 +3208,7 @@ function Viewer:GetUndiscoveredCount()
         end
     end
     
-    local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
+    local isCoA = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
     local countedBases = {}
     local count = 0
     local wfClassic = L.WorldforgedList
@@ -3100,6 +3220,8 @@ function Viewer:GetUndiscoveredCount()
                     local skip = false
                     if isCoA then
                         local name, _, _, _, _, _, _, _, eqLoc = GetItemInfo(baseID)
+                        -- Only skip known relics; unknown equipLoc matches cache
+                        -- (cache skips only when equipLoc == INVTYPE_RELIC).
                         if eqLoc == "INVTYPE_RELIC" then
                             skip = true
                         end
@@ -3112,6 +3234,8 @@ function Viewer:GetUndiscoveredCount()
             end
         end
     end
+    self._lastUndiscoveredCount = count
+    VDebug("GetUndiscoveredCount: fallback path=" .. tostring(count))
     return count
 end
 
@@ -4199,14 +4323,31 @@ beta-0.8.6r:
     refreshDataBtn.label:SetText("Refresh")
     refreshDataBtn.label:SetJustifyH("CENTER")
     
-    refreshDataBtn:SetScript("OnEnter", function(self) self.bgInner:SetVertexColor(0.25, 0.35, 0.50, 1) end)
-    refreshDataBtn:SetScript("OnLeave", function(self) self.bgInner:SetVertexColor(0.20, 0.20, 0.26, 0.90) end)
+    refreshDataBtn:SetScript("OnEnter", function(self)
+        if (Viewer.pendingUpdatesCount or 0) > 0 then
+            self.bgInner:SetVertexColor(0.08, 0.30, 0.14, 1)
+        else
+            self.bgInner:SetVertexColor(0.25, 0.35, 0.50, 1)
+        end
+    end)
+    refreshDataBtn:SetScript("OnLeave", function(self)
+        if (Viewer.pendingUpdatesCount or 0) > 0 then
+            self.bgInner:SetVertexColor(0.05, 0.22, 0.10, 1)
+        else
+            self.bgInner:SetVertexColor(0.06, 0.06, 0.10, 0.90)
+        end
+    end)
     refreshDataBtn:SetScript("OnMouseDown", function(self) self.label:SetPoint("TOPLEFT", 1, -2) end)
     refreshDataBtn:SetScript("OnMouseUp", function(self) self.label:SetPoint("TOPLEFT", 0, 0) end)
     refreshDataBtn:SetScript("OnClick", function()
+        if Viewer._pendingTrace and #Viewer._pendingTrace > 0 then
+            Viewer:DumpPendingTrace(true)
+        end
         Viewer.pendingUpdatesCount = 0
+        Viewer._suppressPendingBumps = true
         Viewer:UpdateRefreshButton()
         Cache.discoveriesBuilt = false
+        VDebug("Refresh clicked: pending cleared, rebuild starting")
         Viewer:RefreshData()
     end)
     
@@ -7613,6 +7754,16 @@ function Viewer:OnInitialize()
             Cache.discoveriesBuilt = false
             return
         end
+
+        -- Rebuild already refreshes the grid; do not bump Refresh (New) for
+        -- purge/remove messages emitted mid-build, or for delayed Comm "bulk"
+        -- timers that fire right after a user-initiated Refresh.
+        if Cache.discoveriesBuilding or Viewer._suppressPendingBumps then
+            VDebug("DiscoveriesUpdated ignored (action=" .. tostring(action) ..
+                ", building=" .. tostring(Cache.discoveriesBuilding) ..
+                ", suppress=" .. tostring(Viewer._suppressPendingBumps) .. ")")
+            return
+        end
         
         local updated = false
         if action == "add" and guid and discoveryData then
@@ -7656,6 +7807,9 @@ function Viewer:OnInitialize()
         
         if updated then
             self.pendingUpdatesCount = (self.pendingUpdatesCount or 0) + 1
+            PendingTraceRecord(action, guid, discoveryData)
+            VDebug("Refresh (New): pending=" .. tostring(self.pendingUpdatesCount) ..
+                " action=" .. tostring(action))
             self:UpdateRefreshButton()
         end
     end)
@@ -7867,7 +8021,8 @@ StaticPopupDialogs["LOOTCOLLECTOR_VIEWER_BLOCK_AND_PURGE_PLAYER"] = {
 SLASH_LootCollectorVIEWER1 = "/lcviewer"
 SLASH_LootCollectorVIEWER2 = "/lcv"
 SlashCmdList["LootCollectorVIEWER"] = function(msg)
-    local cmd = string.lower(msg or "")
+    local raw = strtrim(msg or "")
+    local cmd = string.lower(raw)
     if cmd == "" then
         Viewer:Toggle()
     elseif cmd == "clear" then
@@ -7881,11 +8036,25 @@ SlashCmdList["LootCollectorVIEWER"] = function(msg)
                 Viewer:RefreshData()
             end
         end)
+    elseif cmd == "pending" or cmd == "pending dump" then
+        Viewer:DumpPendingTrace(false)
+    elseif cmd == "pending on" then
+        Viewer._pendingTraceEnabled = true
+        Viewer._pendingTrace = Viewer._pendingTrace or {}
+        print("|cff88aaff[LC-Pending]|r recording ON (ring of " ..
+            tostring(Viewer._pendingTraceMax or 32) .. "). Use /lcviewer pending to dump.")
+    elseif cmd == "pending off" then
+        Viewer._pendingTraceEnabled = false
+        if Viewer._pendingTrace then wipe(Viewer._pendingTrace) end
+        print("|cff88aaff[LC-Pending]|r recording OFF (buffer cleared).")
     else
         print("LootCollector Viewer commands:")
         print("/lcviewer - Toggles viewer window")
         print("/lcviewer clear - Clears all caches")
         print("/lcviewer rebuild - Rebuilds all caches")
+        print("/lcviewer pending on - Record pending Refresh events (dev)")
+        print("/lcviewer pending off - Stop recording and clear buffer")
+        print("/lcviewer pending - Dump recorded pending events")
     end
 end
 
