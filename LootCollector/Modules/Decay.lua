@@ -111,7 +111,12 @@ function Decay:ProcessNextChunk()
         self._scanKey = k
     end
 
+    local Core = L:GetModule("Core", true)
     for _, guid in ipairs(guidsToRemove) do
+        local d = db[guid]
+        if Core and d and Core.UnindexDiscovery then
+            Core:UnindexDiscovery(guid, d)
+        end
         db[guid] = nil
         self._scanRemovedCount = self._scanRemovedCount + 1
     end

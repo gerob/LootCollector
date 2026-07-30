@@ -2182,6 +2182,20 @@ function Viewer:ShowColumnFilterDropdown(column, anchor, values)
     end
 end
 
+-- Silent DB purge during Viewer rebuild: keep ZoneIndex/mid-index in sync
+-- without SendMessage (would re-light Refresh after rebuild).
+local function SilentPurgeDiscovery(guid)
+    local db = L:GetDiscoveriesDB()
+    if not (db and guid and db[guid]) then return end
+    local d = db[guid]
+    local Core = L:GetModule("Core", true)
+    if Core and Core.UnindexDiscovery then
+        Core:UnindexDiscovery(guid, d)
+    end
+    db[guid] = nil
+    L.DataHasChanged = true
+end
+
 -- Fill a Viewer cache row from a discovery/vendor record.
 -- opts: isVendor, isUndiscovered, allowDBPurge (rebuild-time silent purge)
 -- Returns true if the row was filled and should be kept.
@@ -2312,34 +2326,16 @@ local function FillDiscoveryRow(row, guid, discovery, opts)
         local dx = discovery.xy and discovery.xy.x or 0
         local dy = discovery.xy and discovery.xy.y or 0
         if dx == 0 and dy == 0 then
-            if allowDBPurge then
-                local db = L:GetDiscoveriesDB()
-                if db and db[guid] then
-                    db[guid] = nil
-                    L.DataHasChanged = true
-                end
-            end
+            if allowDBPurge then SilentPurgeDiscovery(guid) end
             return false
         elseif L.StarterDBItemZones and L.StarterDBItemZones[discovery.i] and not L.StarterDBItemZones[discovery.i][discovery.z] then
-            if allowDBPurge then
-                local db = L:GetDiscoveriesDB()
-                if db and db[guid] then
-                    db[guid] = nil
-                    L.DataHasChanged = true
-                end
-            end
+            if allowDBPurge then SilentPurgeDiscovery(guid) end
             return false
         else
             local Constants = L:GetModule("Constants", true)
             if Constants and Constants.IsLocationValidForItem then
                 if not Constants:IsLocationValidForItem(discovery.z, 0, false) then
-                    if allowDBPurge then
-                        local db = L:GetDiscoveriesDB()
-                        if db and db[guid] then
-                            db[guid] = nil
-                            L.DataHasChanged = true
-                        end
-                    end
+                    if allowDBPurge then SilentPurgeDiscovery(guid) end
                     return false
                 end
             end

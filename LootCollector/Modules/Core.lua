@@ -4287,23 +4287,25 @@ function Core:ReportDiscoveryAsGone(guid, reason, bypassAFK)
     self:RemoveDiscoveryByGuid(guid, string.format("Discovery %s reported as gone and removed.", rec.il or guid))
 end
 
+function Core:UnindexDiscovery(guid, rec)
+    if not guid or type(rec) ~= "table" then return end
+    if rec.z then
+        self:RemoveFromZoneIndex(guid, rec.z)
+    end
+    if self._lookupIndicesBuilt and rec.mid and self._midIndex then
+        self._midIndex[rec.mid] = nil
+    end
+    self._dbDiscoveriesCount = math.max(0, (self._dbDiscoveriesCount or 1) - 1)
+end
+
 function Core:RemoveDiscoveryByGuid(guid, reason)
     local discoveries = L:GetDiscoveriesDB()
     if not guid or not discoveries then return end
 
     if discoveries[guid] then
         local rec = discoveries[guid]
-        
-        if rec and rec.z then
-            self:RemoveFromZoneIndex(guid, rec.z)
-        end
-        
-        if self._lookupIndicesBuilt then
-            if rec.mid then self._midIndex[rec.mid] = nil end
-        end
-        
+        self:UnindexDiscovery(guid, rec)
         discoveries[guid] = nil
-        self._dbDiscoveriesCount = math.max(0, (self._dbDiscoveriesCount or 1) - 1)
         
         print(string.format("|cff00ff00LootCollector:|r %s", reason or ("Discovery " .. guid .. " removed.")))
         
@@ -4375,13 +4377,8 @@ function Core:RemoveDiscovery(guid)
 
     if discoveries[guid] then
         local rec = discoveries[guid]
-        
-        if self._lookupIndicesBuilt then
-            if rec.mid then self._midIndex[rec.mid] = nil end
-        end
-        
+        self:UnindexDiscovery(guid, rec)
         discoveries[guid] = nil
-        self._dbDiscoveriesCount = math.max(0, (self._dbDiscoveriesCount or 1) - 1)
         
         print(string.format("|cff00ff00LootCollector:|r Discovery %s removed.", guid))
         
