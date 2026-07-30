@@ -502,6 +502,7 @@ end
 
 local Cache = {
     discoveries = {},
+    discoveriesByGuid = {},
     discoveriesBuilt = false,
     discoveriesBuilding = false,
     itemInfo = {},
@@ -2155,6 +2156,318 @@ function Viewer:ShowColumnFilterDropdown(column, anchor, values)
     end
 end
 
+-- Fill a Viewer cache row from a discovery/vendor record.
+-- opts: isVendor, isUndiscovered, allowDBPurge (rebuild-time silent purge)
+-- Returns true if the row was filled and should be kept.
+local function FillDiscoveryRow(row, guid, discovery, opts)
+    opts = opts or {}
+    local isVendor = opts.isVendor
+    local isUndiscovered = opts.isUndiscovered
+    local allowDBPurge = opts.allowDBPurge
+    local Core = L:GetModule("Core", true)
+
+    if isVendor then
+        wipe(row)
+        row.guid       = guid
+        row.discovery  = discovery
+        row.isVendor   = true
+        row.vendorType = discovery.vendorType
+        row.vendorName = discovery.vendorName
+        row.isMystic   = false
+        row.itemName   = discovery.vendorName
+        row.zoneNameStr = GetLocalizedZoneName(discovery)
+        row.sortQuality = 7
+        row.sortName    = discovery.vendorName or ""
+        row.sortClass   = ""
+        local vType = discovery.vendorType
+        if not vType and discovery.g then
+            if discovery.g:find("MS-", 1, true) then vType = "MS"
+            else vType = "BM" end
+        end
+        row.sortType = vType or "BM"
+        row.sortSlot = ""
+        return true
+    end
+
+    local itemLink = discovery.il
+    local itemID = discovery.i
+    local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+    if selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
+        local upgradedID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
+        if upgradedID and upgradedID ~= itemID then
+            itemID = upgradedID
+            itemLink = nil
+        end
+    end
+
+    local itemName = nil
+    if (not itemLink or itemLink == "") and itemID then
+        local name, link = GetItemInfo(itemID)
+        if link then itemLink = link end
+    end
+    if itemLink and itemLink ~= "" then
+        itemName = itemLink:match("%[(.+)%]")
+    end
+    if (not itemName or itemName == "") and itemID then
+        itemName = GetItemInfo(itemID)
+    end
+    if not itemName or itemName == "" then
+        if itemID then
+            itemName = "Unknown Item (" .. tostring(itemID) .. ")"
+        else
+            itemName = "Unknown Item"
+        end
+        Viewer.hasUncachedData = true
+    end
+
+    if isUndiscovered then
+        local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
+        if isCoA then
+            local _, _, _, _, _, _, _, _, eqLoc = GetItemInfo(discovery.i)
+            if eqLoc == "INVTYPE_RELIC" then
+                return false
+            end
+        end
+    end
+
+    local Scanner = L:GetModule("Scanner", true)
+    local itemData = {}
+    if Scanner then
+        local ok, res = pcall(Scanner.GetItemData, Scanner, discovery.i, itemLink)
+        if ok and res then itemData = res end
+    end
+
+    local isMystic = IsMysticScroll(itemName)
+    local isWorldforged = itemData.isWF or false
+    if isUndiscovered then
+        isWorldforged = true
+    elseif not isWorldforged then
+        local baseLink = discovery.il
+        if (not baseLink or baseLink == "") and discovery.i then
+            baseLink = select(2, GetItemInfo(discovery.i))
+        end
+        if baseLink and baseLink ~= "" then
+            isWorldforged = IsWorldforged(baseLink)
+        end
+    end
+
+    local characterClass = ""
+    local classToken = itemData.classToken
+    if classToken then
+        characterClass = _G.LOCALIZED_CLASS_NAMES_MALE[classToken] or _G.LOCALIZED_CLASS_NAMES_FEMALE[classToken] or classToken
+        local Constants = L:GetModule("Constants", true)
+        if Constants and Constants.CLASS_ABBREVIATIONS[classToken] then
+            local correctAbbr = Constants.CLASS_ABBREVIATIONS[classToken]
+            if discovery.cl ~= correctAbbr then
+                discovery.cl = correctAbbr
+                L.DataHasChanged = true
+            end
+        end
+    end
+
+    local name, _, _, itemLevelVal, minLevel, itemTypeVal, itemSubTypeVal, _, equipLocVal = GetItemInfoSafe(itemLink, itemID)
+    if (not name) and discovery.i and itemID ~= discovery.i then
+        local bName, _, _, bIlvl, bMinLvl, bType, bSubType, _, bEquip = GetItemInfo(discovery.i)
+        if bName then
+            itemLevelVal   = itemLevelVal or bIlvl
+            minLevel       = minLevel or bMinLvl
+            itemTypeVal    = itemTypeVal or bType
+            itemSubTypeVal = itemSubTypeVal or bSubType
+            equipLocVal    = equipLocVal or bEquip
+            if not itemName or itemName == "" or _strfind(itemName, "Unknown Item", 1, true) then
+                itemName = bName
+            end
+        end
+    end
+
+    local finalMinLevel = itemData.reqLevel or minLevel or 0
+
+    if not isUndiscovered then
+        local dx = discovery.xy and discovery.xy.x or 0
+        local dy = discovery.xy and discovery.xy.y or 0
+        if dx == 0 and dy == 0 then
+            if allowDBPurge then
+                local db = L:GetDiscoveriesDB()
+                if db and db[guid] then
+                    db[guid] = nil
+                    L.DataHasChanged = true
+                end
+            end
+            return false
+        elseif L.StarterDBItemZones and L.StarterDBItemZones[discovery.i] and not L.StarterDBItemZones[discovery.i][discovery.z] then
+            if allowDBPurge then
+                local db = L:GetDiscoveriesDB()
+                if db and db[guid] then
+                    db[guid] = nil
+                    L.DataHasChanged = true
+                end
+            end
+            return false
+        else
+            local Constants = L:GetModule("Constants", true)
+            if Constants and Constants.IsLocationValidForItem then
+                if not Constants:IsLocationValidForItem(discovery.z, 0, false) then
+                    if allowDBPurge then
+                        local db = L:GetDiscoveriesDB()
+                        if db and db[guid] then
+                            db[guid] = nil
+                            L.DataHasChanged = true
+                        end
+                    end
+                    return false
+                end
+            end
+        end
+    end
+
+    local it, ist = discovery.it, discovery.ist
+    if not it or not ist or it == 0 or ist == 0 then
+        it, ist = GetItemTypeIDs(itemTypeVal, itemSubTypeVal)
+    end
+    if not itemTypeVal and not isMystic then
+        Viewer.hasUncachedData = true
+    end
+
+    wipe(row)
+    row.guid          = guid
+    row.discovery     = discovery
+    row.displayItemID = itemID
+    row.itemName      = itemName
+    row.isMystic      = isMystic
+    local isNew = isUndiscovered or false
+    if not isNew and discovery.i and L.db and L.db.global and L.db.global.newWorldforgedItems then
+        isNew = L.db.global.newWorldforgedItems[discovery.i] or false
+    end
+    row.isNew = isNew
+    row.isWorldforged = isNew and true or isWorldforged
+    row.isUndiscovered = isUndiscovered or false
+    row.itemType      = itemTypeVal
+    row.itemSubType   = itemSubTypeVal
+    row.it            = it
+    row.ist           = ist
+    row.equipLoc      = equipLocVal
+    row.characterClass= characterClass
+    row.itemLevel     = itemLevelVal
+    row.minLevel      = finalMinLevel
+    row.cl            = discovery.cl
+    row.isVendor      = false
+    row.tooltipText   = itemData.fullText or ""
+    row.zoneNameStr   = isUndiscovered and "Undiscovered" or GetLocalizedZoneName(discovery)
+    row.sortQuality   = isUndiscovered and (select(3, GetItemInfo(discovery.i)) or 2) or (tonumber(discovery.q) or 1)
+    row.sortName      = itemName or ""
+    row.sortClass     = characterClass or ""
+    row.sortType      = itemSubTypeVal or ""
+    row.sortSlot      = equipLocVal and _G[equipLocVal] or ""
+
+    if Core and itemID and not Core:IsItemCached(itemID) then
+        Core:QueueItemForCaching(itemID)
+    end
+    if Core and discovery.i and discovery.i ~= itemID and not Core:IsItemCached(discovery.i) then
+        Core:QueueItemForCaching(discovery.i)
+    end
+
+    return true
+end
+
+local function RebuildDiscoveriesByGuid()
+    wipe(Cache.discoveriesByGuid)
+    for i = 1, #Cache.discoveries do
+        local r = Cache.discoveries[i]
+        if r and r.guid then
+            Cache.discoveriesByGuid[r.guid] = i
+        end
+    end
+end
+
+local function InvalidateViewerFilterCache()
+    Cache.filteredResults = {}
+    Cache.lastFilterState = nil
+    Cache.uniqueValuesValid = false
+end
+
+local function AdjustDuplicateCount(itemID, delta)
+    if not itemID then return end
+    local n = (Cache.duplicateItems[itemID] or 0) + delta
+    if n <= 0 then
+        Cache.duplicateItems[itemID] = nil
+    else
+        Cache.duplicateItems[itemID] = n
+    end
+end
+
+local function RemoveCacheRowAtIndex(index)
+    local n = #Cache.discoveries
+    local row = Cache.discoveries[index]
+    if not row or index < 1 or index > n then return nil end
+
+    local removedGuid = row.guid
+    local removedBase = nil
+    if row.discovery and row.discovery.i and not row.isVendor then
+        AdjustDuplicateCount(row.discovery.i, -1)
+        if not row.isUndiscovered then
+            removedBase = L:GetBaseItemID(row.discovery.i)
+        end
+    end
+
+    if removedGuid then
+        Cache.discoveriesByGuid[removedGuid] = nil
+    end
+
+    if index < n then
+        local last = Cache.discoveries[n]
+        Cache.discoveries[index] = last
+        Cache.discoveries[n] = nil
+        if last and last.guid then
+            Cache.discoveriesByGuid[last.guid] = index
+        end
+    else
+        Cache.discoveries[n] = nil
+    end
+
+    return removedBase
+end
+
+local function EnsureUndiscoveredPlaceholder(baseID)
+    if not baseID then return end
+    local undGuid = "undiscovered-" .. tostring(baseID)
+    if Cache.discoveriesByGuid[undGuid] then return end
+
+    for i = 1, #Cache.discoveries do
+        local r = Cache.discoveries[i]
+        if r and r.discovery and r.discovery.i and not r.isUndiscovered and not r.isVendor then
+            if L:GetBaseItemID(r.discovery.i) == baseID then
+                return
+            end
+        end
+    end
+
+    local wfClassic = L.WorldforgedList
+    if not wfClassic then return end
+    local inList = false
+    for _, itemID in ipairs(wfClassic) do
+        if itemID and L:GetBaseItemID(itemID) == baseID then
+            inList = true
+            break
+        end
+    end
+    if not inList then return end
+
+    local fakeDiscovery = {
+        i = baseID,
+        c = 0,
+        z = 0,
+        iz = 0,
+        q = 2,
+        isUndiscovered = true,
+    }
+    local row = {}
+    if FillDiscoveryRow(row, undGuid, fakeDiscovery, { isUndiscovered = true, allowDBPurge = false }) then
+        local idx = #Cache.discoveries + 1
+        Cache.discoveries[idx] = row
+        Cache.discoveriesByGuid[undGuid] = idx
+    end
+end
+
 function Viewer:UpdateAllDiscoveriesCache(onCompleteCallback)
     -- FIXED: this entry point used to fill a local scanQueue that
     -- ProcessCacheBuildChunk never read (it consumes self._cacheBuildQueue),
@@ -2194,7 +2507,8 @@ function Viewer:UpdateAllDiscoveriesCacheSync(onCompleteCallback)
     Cache.discoveriesBuilding = true
     self.hasUncachedData = false
     Cache.uniqueValuesValid   = false
-    Cache.duplicateItems      = {} 
+    Cache.duplicateItems      = {}
+    wipe(Cache.discoveriesByGuid)
 
     if self.window and self.window:IsShown() then
         self:UpdatePagination()
@@ -2273,280 +2587,36 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
     local queue = self._cacheBuildQueue
     local total = #queue
     local processedThisFrame = 0
-    
-    local Core = L:GetModule("Core", true)
-    
-    
-    
     local queueCursor = self._cacheQueueCursor or 1
     
     while queueCursor <= total do
         local entry = queue[queueCursor]
         local guid = entry.guid
         local discovery = entry.d
-        local isVendor = entry.isVendor
-        
+
         local row = Cache.discoveries[outIndex]
         if not row then
             row = {}
             Cache.discoveries[outIndex] = row
         end
 
-        local itemSuccessfullyLoaded = false
+        local itemSuccessfullyLoaded = FillDiscoveryRow(row, guid, discovery, {
+            isVendor = entry.isVendor,
+            isUndiscovered = entry.isUndiscovered,
+            allowDBPurge = true,
+        })
 
-        if not isVendor then
-            local itemLink = discovery.il
-            local itemID = discovery.i
-            local skipItem = false
-            local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
-            if selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
-                local upgradedID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
-                if upgradedID and upgradedID ~= itemID then
-                    itemID = upgradedID
-                    itemLink = nil
-                end
-            end
-            local itemName = nil
-            
-            if (not itemLink or itemLink == "") and itemID then
-                 local name, link = GetItemInfo(itemID)
-                 if link then itemLink = link end
-            end
-            
-            if itemLink and itemLink ~= "" then
-                itemName = itemLink:match("%[(.+)%]")
-            end
-                
-            if (not itemName or itemName == "") and itemID then 
-                itemName = GetItemInfo(itemID) 
-            end
-            
-            if not skipItem and (not itemName or itemName == "") then
-                if itemID then
-                    itemName = "Unknown Item (" .. tostring(itemID) .. ")"
-                else
-                    itemName = "Unknown Item"
-                end
-                self.hasUncachedData = true
-            end
-            
-            -- On CoA realm, filter out Relics/Idols/Totems/Librams for undiscovered items
-            if not skipItem and entry.isUndiscovered then
-                local isCoA = Core and Core.IsConfirmedCoARealm and Core:IsConfirmedCoARealm()
-                if isCoA then
-                    local _, _, _, _, _, _, _, _, eqLoc = GetItemInfo(discovery.i)
-                    if eqLoc == "INVTYPE_RELIC" then
-                        skipItem = true
-                    end
-                end
-            end
-                
-            if not skipItem and itemName and itemName ~= "" then
-                local Scanner = L:GetModule("Scanner", true)
-                local itemData = {}
-                if Scanner then
-                    local ok, res = pcall(Scanner.GetItemData, Scanner, discovery.i, itemLink)
-                    if ok and res then
-                        itemData = res
-                    end
-                end
-
-                local isMystic = IsMysticScroll(itemName)
-                local isWorldforged = itemData.isWF or false
-
-                if entry.isUndiscovered then
-                    -- Rows synthesized from the curated WorldforgedList are
-                    -- Worldforged by definition. Never veto them via tooltip
-                    -- heuristics: with an upgrade phase active, itemLink holds
-                    -- the UPGRADED variant, whose tooltip may lack the tag in
-                    -- the scanned window or may not be cached yet. That veto
-                    -- was what silently removed new/undiscovered Worldforged
-                    -- items whenever a phase was selected.
-                    isWorldforged = true
-                elseif not isWorldforged then
-                    -- Judge Worldforged status from the BASE item only; the
-                    -- phase-upgraded variant's tooltip is not authoritative.
-                    local baseLink = discovery.il
-                    if (not baseLink or baseLink == "") and discovery.i then
-                        baseLink = select(2, GetItemInfo(discovery.i))
-                    end
-                    if baseLink and baseLink ~= "" then
-                        isWorldforged = IsWorldforged(baseLink)
-                    end
-                end
-                
-             if not skipItem then
-                local characterClass = ""
-                local classToken = itemData.classToken
-                if classToken then
-                    characterClass = _G.LOCALIZED_CLASS_NAMES_MALE[classToken] or _G.LOCALIZED_CLASS_NAMES_FEMALE[classToken] or classToken
-                    
-                    
-                    local Constants = L:GetModule("Constants", true)
-                    if Constants and Constants.CLASS_ABBREVIATIONS[classToken] then
-                        local correctAbbr = Constants.CLASS_ABBREVIATIONS[classToken]
-                        if discovery.cl ~= correctAbbr then
-                            discovery.cl = correctAbbr
-                            L.DataHasChanged = true
-                        end
-                    end
-                end
-
-                local name, _, _, itemLevelVal, minLevel, itemTypeVal, itemSubTypeVal, _, equipLocVal = GetItemInfoSafe(itemLink, itemID)
-
-                -- Phase-upgrade data still in flight: borrow the base item's
-                -- static metadata (name/slot/type/levels are shared across
-                -- upgrade tiers) so the row stays readable, searchable and
-                -- filterable instead of rendering as "Unknown Item" with
-                -- empty columns. The row heals to upgraded data on arrival
-                -- via GET_ITEM_INFO_RECEIVED (matched by displayItemID).
-                if (not name) and discovery.i and itemID ~= discovery.i then
-                    local bName, _, _, bIlvl, bMinLvl, bType, bSubType, _, bEquip = GetItemInfo(discovery.i)
-                    if bName then
-                        itemLevelVal   = itemLevelVal or bIlvl
-                        minLevel       = minLevel or bMinLvl
-                        itemTypeVal    = itemTypeVal or bType
-                        itemSubTypeVal = itemSubTypeVal or bSubType
-                        equipLocVal    = equipLocVal or bEquip
-                        if not itemName or itemName == "" or _strfind(itemName, "Unknown Item", 1, true) then
-                            itemName = bName
-                        end
-                    end
-                end
-
-                local finalMinLevel = itemData.reqLevel or minLevel or 0
-                
-                if not entry.isUndiscovered then
-                    local dx = discovery.xy and discovery.xy.x or 0
-                    local dy = discovery.xy and discovery.xy.y or 0
-                    if dx == 0 and dy == 0 then
-                        local db = L:GetDiscoveriesDB()
-                        if db and db[guid] then
-                            db[guid] = nil
-                            L.DataHasChanged = true
-                            -- Silent purge during rebuild: do not SendMessage (would
-                            -- re-light Refresh after the rebuild finishes).
-                        end
-                        skipItem = true
-                    elseif L.StarterDBItemZones and L.StarterDBItemZones[discovery.i] and not L.StarterDBItemZones[discovery.i][discovery.z] then
-                        local db = L:GetDiscoveriesDB()
-                        if db and db[guid] then
-                            db[guid] = nil
-                            L.DataHasChanged = true
-                        end
-                        skipItem = true
-                    else
-                        local Constants = L:GetModule("Constants", true)
-                        if Constants and Constants.IsLocationValidForItem then
-                            if not Constants:IsLocationValidForItem(discovery.z, 0, isVendor) then
-                                local db = L:GetDiscoveriesDB()
-                                if db and db[guid] then
-                                    db[guid] = nil
-                                    L.DataHasChanged = true
-                                end
-                                skipItem = true
-                            end
-                        end
-                    end
-                end
-                
-                if not skipItem then
-                    local it, ist = discovery.it, discovery.ist
-                    if not it or not ist or it == 0 or ist == 0 then
-                        it, ist = GetItemTypeIDs(itemTypeVal, itemSubTypeVal)
-                    end
-                    
-                    if not itemTypeVal and not isMystic then
-                        self.hasUncachedData = true
-                    end
-
-                row.guid          = guid
-                row.discovery     = discovery
-                row.displayItemID = itemID
-                row.itemName      = itemName
-                row.isMystic      = isMystic
-                local isNew = entry.isUndiscovered or false
-                if not isNew and discovery.i and L.db and L.db.global and L.db.global.newWorldforgedItems then
-                    isNew = L.db.global.newWorldforgedItems[discovery.i] or false
-                end
-                row.isNew = isNew
-                row.isWorldforged = isNew and true or isWorldforged
-                row.isUndiscovered = entry.isUndiscovered or false
-                row.itemType      = itemTypeVal
-                row.itemSubType   = itemSubTypeVal
-                row.it            = it
-                row.ist           = ist
-                row.equipLoc      = equipLocVal
-                row.characterClass= characterClass
-                row.itemLevel     = itemLevelVal
-                row.minLevel      = finalMinLevel
-                row.cl            = discovery.cl
-                row.isVendor      = false
-                row.tooltipText   = itemData.fullText or ""
-                
-                row.zoneNameStr   = entry.isUndiscovered and "Undiscovered" or GetLocalizedZoneName(discovery)
-                row.sortQuality   = entry.isUndiscovered and (select(3, GetItemInfo(discovery.i)) or 2) or (tonumber(discovery.q) or 1)
-                row.sortName      = itemName or ""
-                row.sortClass     = characterClass or ""
-                row.sortType      = itemSubTypeVal or ""
-                row.sortSlot      = equipLocVal and _G[equipLocVal] or ""
-
-                if Core and itemID and not Core:IsItemCached(itemID) then
-                    Core:QueueItemForCaching(itemID)
-                end
-                -- Also warm the BASE item when displaying an upgraded phase
-                -- variant: the metadata fallback, sort quality and the
-                -- undiscovered rows' tooltips all read the base item.
-                if Core and discovery.i and discovery.i ~= itemID and not Core:IsItemCached(discovery.i) then
-                    Core:QueueItemForCaching(discovery.i)
-                end
-
-                if discovery.i then
-                    Cache.duplicateItems[discovery.i] = (Cache.duplicateItems[discovery.i] or 0) + 1
-                end
-                
-                itemSuccessfullyLoaded = true
-                end
-                end
-            end
-        else
-            row.guid       = guid
-            row.discovery  = discovery
-            row.isVendor   = true
-            row.vendorType = discovery.vendorType
-            row.vendorName = discovery.vendorName
-            row.isMystic   = false
-            row.itemName   = discovery.vendorName 
-
-            
-            row.zoneNameStr   = GetLocalizedZoneName(discovery)
-            row.sortQuality   = 7
-            row.sortName      = discovery.vendorName or ""
-            row.sortClass     = ""
-            
-            
-            
-            local vType = discovery.vendorType
-            if not vType and discovery.g then
-                if discovery.g:find("MS-", 1, true) then vType = "MS"
-                else vType = "BM" end
-            end
-            row.sortType      = vType or "BM"
-            
-            row.sortSlot      = ""
-            
-            itemSuccessfullyLoaded = true
+        if itemSuccessfullyLoaded and discovery.i and not entry.isVendor then
+            AdjustDuplicateCount(discovery.i, 1)
         end
 
         queueCursor = queueCursor + 1
         processedThisFrame = processedThisFrame + 1
-        
-        
-        
+
         if itemSuccessfullyLoaded then
             outIndex = outIndex + 1
         end
-        
+
         if debugprofilestop() - startMs >= budget then
             break
         end
@@ -2566,12 +2636,22 @@ function Viewer:ProcessCacheBuildChunk(budgetOverride)
         for i = outIndex, #Cache.discoveries do
             Cache.discoveries[i] = nil
         end
-        
+
+        RebuildDiscoveriesByGuid()
+
         Cache.discoveriesBuilt = true
         Cache.discoveriesBuilding = false
 
         wipe(self._cacheBuildQueue)
         self._cacheQueueCursor = nil
+
+        -- Sync count so HasDataChanged does not force another full rebuild.
+        do
+            local n = 0
+            local db = L:GetDiscoveriesDB()
+            if db then for _ in pairs(db) do n = n + 1 end end
+            Cache.lastDiscoveryCount = n
+        end
 
         -- Rebuild side-effects (purges, GET_ITEM_INFO, delayed Comm "bulk")
         -- must not leave Refresh lit. Hold pending bumps briefly after finish.
@@ -4612,9 +4692,25 @@ beta-0.8.6r:
         Viewer.pendingUpdatesCount = 0
         Viewer._suppressPendingBumps = true
         Viewer:UpdateRefreshButton()
-        Cache.discoveriesBuilt = false
-        VDebug("Refresh clicked: pending cleared, rebuild starting")
-        Viewer:RefreshData()
+        if Viewer._suppressPendingTimer and C_Timer.CancelTimer then
+            C_Timer.CancelTimer(Viewer._suppressPendingTimer)
+            Viewer._suppressPendingTimer = nil
+        end
+        Viewer._suppressPendingTimer = C_Timer.After(1.5, function()
+            Viewer._suppressPendingTimer = nil
+            Viewer._suppressPendingBumps = false
+            VDebug("pending-bump suppress ended (Refresh click)")
+        end)
+
+        if Cache.discoveriesBuilt and not Cache.discoveriesBuilding then
+            InvalidateViewerFilterCache()
+            VDebug("Refresh clicked: cheap refilter (cache already built)")
+            Viewer:RefreshData()
+        else
+            Cache.discoveriesBuilt = false
+            VDebug("Refresh clicked: pending cleared, full rebuild starting")
+            Viewer:RefreshData()
+        end
     end)
     
     local searchLabel = window:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
@@ -7718,13 +7814,72 @@ function Viewer:OnDisable()
 end
 
 function Viewer:AddDiscoveryToCache(guid, discovery)
-    
-    
+    if not guid or type(discovery) ~= "table" then return false end
+    if not Cache.discoveriesBuilt or Cache.discoveriesBuilding then return false end
+
+    local isVendor = (discovery.vendorType ~= nil) or (discovery.vendorName ~= nil)
+    local row = {}
+    if not FillDiscoveryRow(row, guid, discovery, {
+        isVendor = isVendor,
+        isUndiscovered = false,
+        allowDBPurge = false,
+    }) then
+        return false
+    end
+
+    Cache.discoveriesByGuid = Cache.discoveriesByGuid or {}
+    local existingIdx = Cache.discoveriesByGuid[guid]
+    if existingIdx and Cache.discoveries[existingIdx] then
+        local old = Cache.discoveries[existingIdx]
+        if old.discovery and old.discovery.i and not old.isUndiscovered and not old.isVendor then
+            AdjustDuplicateCount(old.discovery.i, -1)
+        end
+        Cache.discoveries[existingIdx] = row
+        Cache.discoveriesByGuid[guid] = existingIdx
+    else
+        local idx = #Cache.discoveries + 1
+        Cache.discoveries[idx] = row
+        Cache.discoveriesByGuid[guid] = idx
+        if not isVendor then
+            Cache.lastDiscoveryCount = (Cache.lastDiscoveryCount or 0) + 1
+        end
+    end
+
+    if not isVendor and discovery.i then
+        AdjustDuplicateCount(discovery.i, 1)
+        local baseID = L:GetBaseItemID(discovery.i)
+        local undGuid = "undiscovered-" .. tostring(baseID)
+        local undIdx = Cache.discoveriesByGuid[undGuid]
+        if undIdx then
+            RemoveCacheRowAtIndex(undIdx)
+        end
+    end
+
+    InvalidateViewerFilterCache()
     return true
 end
 
 function Viewer:RemoveDiscoveryFromCache(guid)
-    
+    if not guid then return false end
+    if not Cache.discoveriesBuilt or Cache.discoveriesBuilding then return false end
+
+    Cache.discoveriesByGuid = Cache.discoveriesByGuid or {}
+    local idx = Cache.discoveriesByGuid[guid]
+    if not idx or not Cache.discoveries[idx] then
+        return false
+    end
+
+    local row = Cache.discoveries[idx]
+    local wasVendor = row.isVendor
+    local removedBase = RemoveCacheRowAtIndex(idx)
+    if not wasVendor then
+        Cache.lastDiscoveryCount = math.max(0, (Cache.lastDiscoveryCount or 1) - 1)
+        if removedBase then
+            EnsureUndiscoveredPlaceholder(removedBase)
+        end
+    end
+
+    InvalidateViewerFilterCache()
     return true
 end
 
@@ -8059,11 +8214,13 @@ function Viewer:OnInitialize()
         elseif action == "clear" then
             Cache.discoveriesBuilt = false
             Cache.discoveries = {}
+            wipe(Cache.discoveriesByGuid)
             Cache.filteredResults = {}
             Cache.lastFilterState = nil
             Cache.uniqueValuesValid = false
             Cache.uniqueValuesContext = {}
             Cache.duplicateItems = {}
+            Cache.lastDiscoveryCount = 0
             
             self.pendingUpdatesCount = 0
             self:UpdateRefreshButton()
@@ -8071,9 +8228,7 @@ function Viewer:OnInitialize()
             return
         else
             if Cache.discoveriesBuilt and not Cache.discoveriesBuilding then
-                Cache.filteredResults = {}
-                Cache.lastFilterState = nil
-                Cache.uniqueValuesValid = false
+                InvalidateViewerFilterCache()
                 Cache.uniqueValuesContext = {}
                 updated = true
             end
