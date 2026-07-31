@@ -182,6 +182,101 @@ local BATCH_SIZE_COMBAT = 2
 local RAW_PROCESS_BUDGET_MS = 3
 Comm._processTimer = 0
 
+-- Head-index FIFO helpers (Lua 5.1 `#` is unsafe with holes; track __h + __n).
+local function HQ_Reset(q)
+    if not q then return end
+    wipe(q)
+    q.__h = 1
+    q.__n = 0
+end
+
+local function HQ_Len(q)
+    return (q and q.__n) or 0
+end
+
+local function HQ_Compact(q)
+    if not q then return end
+    local h = q.__h or 1
+    local n = q.__n or 0
+    if n == 0 then
+        q.__h = 1
+        return
+    end
+    if h == 1 then return end
+    for i = 1, n do
+        q[i] = q[h + i - 1]
+    end
+    for i = n + 1, h + n - 1 do
+        q[i] = nil
+    end
+    q.__h = 1
+end
+
+local function HQ_Peek(q)
+    if not q or (q.__n or 0) == 0 then return nil end
+    return q[q.__h or 1]
+end
+
+local function HQ_Push(q, v)
+    local h = q.__h or 1
+    local n = q.__n or 0
+    if not q.__h then q.__h = 1 end
+    q[h + n] = v
+    q.__n = n + 1
+end
+
+local function HQ_Pop(q)
+    local n = q.__n or 0
+    if n == 0 then return nil end
+    local h = q.__h or 1
+    local v = q[h]
+    q[h] = nil
+    n = n - 1
+    q.__n = n
+    if n == 0 then
+        q.__h = 1
+    else
+        h = h + 1
+        q.__h = h
+        if h > 32 then
+            HQ_Compact(q)
+        end
+    end
+    return v
+end
+
+local function HQ_PushFront(q, v)
+    local h = q.__h or 1
+    local n = q.__n or 0
+    if h > 1 then
+        h = h - 1
+        q.__h = h
+        q[h] = v
+        q.__n = n + 1
+    else
+        for i = n, 1, -1 do
+            q[i + 1] = q[i]
+        end
+        q[1] = v
+        q.__h = 1
+        q.__n = n + 1
+    end
+end
+
+local function HQ_DropFront(q, k)
+    k = tonumber(k) or 0
+    for _ = 1, k do
+        if HQ_Len(q) == 0 then break end
+        HQ_Pop(q)
+    end
+end
+
+HQ_Reset(Comm._rateLimitQueue)
+HQ_Reset(Comm._incomingMessageQueue)
+HQ_Reset(Comm.rawBuffer)
+Comm._outgoingSyncQueue = Comm._outgoingSyncQueue or {}
+HQ_Reset(Comm._outgoingSyncQueue)
+
     
 local function trackInvalidSender(sender, reason, payload)
     if not (L.db and L.db.profile) then return end
@@ -426,14 +521,14 @@ local function now() return time() end
 function Comm:HaltForLogout()
     Comm.isLoggingOut = true
 
-if Comm._multipartSpool then wipe(Comm._multipartSpool) end
-    if Comm._rateLimitQueue then wipe(Comm._rateLimitQueue) end
+    if Comm._multipartSpool then wipe(Comm._multipartSpool) end
+    if Comm._rateLimitQueue then HQ_Reset(Comm._rateLimitQueue) end
     if Comm._delayQueue then wipe(Comm._delayQueue) end
-    if Comm._incomingMessageQueue then wipe(Comm._incomingMessageQueue) end
-    if Comm.rawBuffer then wipe(Comm.rawBuffer) end
+    if Comm._incomingMessageQueue then HQ_Reset(Comm._incomingMessageQueue) end
+    if Comm.rawBuffer then HQ_Reset(Comm.rawBuffer) end
     if Comm._pausedIncoming then wipe(Comm._pausedIncoming) end
     if Comm._incomingTimestamps then wipe(Comm._incomingTimestamps) end
-    if Comm._outgoingSyncQueue then wipe(Comm._outgoingSyncQueue) end
+    if Comm._outgoingSyncQueue then HQ_Reset(Comm._outgoingSyncQueue) end
 end
 
 local function roundN(v, n)
@@ -731,7 +826,15 @@ function Comm:GetCurrentSharingInterval()
 end
 
 function Comm:GetOutgoingQueueSize()
-    return self._outgoingSyncQueue and #self._outgoingSyncQueue or 0
+    return HQ_Len(self._outgoingSyncQueue)
+end
+
+function Comm:GetIncomingQueueSize()
+    return HQ_Len(self._incomingMessageQueue)
+end
+
+function Comm:GetRateLimitQueueSize()
+    return HQ_Len(self._rateLimitQueue)
 end
 
 function Comm:EnqueueOutgoingSync(wire)
@@ -742,6 +845,7 @@ function Comm:EnqueueOutgoingSync(wire)
 
     if not self._outgoingSyncQueue then
         self._outgoingSyncQueue = {}
+        HQ_Reset(self._outgoingSyncQueue)
     end
     
     local op = wire and wire.op
@@ -750,12 +854,16 @@ function Comm:EnqueueOutgoingSync(wire)
     end
     
     local maxQueueSize = 10
-    if #self._outgoingSyncQueue >= maxQueueSize then
+    local q = self._outgoingSyncQueue
+    if HQ_Len(q) >= maxQueueSize then
         if op == "DISC" then
             local replaced = false
-            for idx, entry in ipairs(self._outgoingSyncQueue) do
-                if entry.op == "CONF" then
-                    self._outgoingSyncQueue[idx] = wire
+            local h = q.__h or 1
+            local n = q.__n or 0
+            for i = h, h + n - 1 do
+                local entry = q[i]
+                if entry and entry.op == "CONF" then
+                    q[i] = wire
                     replaced = true
                     break
                 end
@@ -767,7 +875,7 @@ function Comm:EnqueueOutgoingSync(wire)
             return
         end
     else
-        table.insert(self._outgoingSyncQueue, wire)
+        HQ_Push(q, wire)
     end
 end
 
@@ -1214,29 +1322,38 @@ local function _enqueueChannelWire(wire, forceBypassAFK)
     local samplePrefix = string.format(prefixBase, "M1")
     local maxChunkSize = (Comm.maxChatBytes or 250) - string.len(samplePrefix)
 
-    local insertPos = bypassAFK and 1 or (#Comm._rateLimitQueue + 1)
-
+    local entries = {}
     if string.len(encoded) + string.len(string.format("LC1:%s:%s:", op, mid)) <= (Comm.maxChatBytes or 250) then
         local rawStr = string.format("LC1:%s:%s:%s", op, mid, encoded)
-        table.insert(Comm._rateLimitQueue, insertPos, { tinserted = now(), rawStr = rawStr, bypassAFK = bypassAFK })
+        entries[1] = { tinserted = now(), rawStr = rawStr, bypassAFK = bypassAFK }
     else
         local pos = 1
         local textlen = string.len(encoded)
 
         local chunk = string.sub(encoded, pos, pos + maxChunkSize - 1)
-        table.insert(Comm._rateLimitQueue, insertPos, { tinserted = now(), rawStr = string.format(prefixBase, "M1") .. chunk, bypassAFK = bypassAFK })
-        insertPos = insertPos + 1
+        entries[#entries + 1] = { tinserted = now(), rawStr = string.format(prefixBase, "M1") .. chunk, bypassAFK = bypassAFK }
         pos = pos + maxChunkSize
 
         while pos + maxChunkSize <= textlen do
             chunk = string.sub(encoded, pos, pos + maxChunkSize - 1)
-            table.insert(Comm._rateLimitQueue, insertPos, { tinserted = now(), rawStr = string.format(prefixBase, "M2") .. chunk, bypassAFK = bypassAFK })
-            insertPos = insertPos + 1
+            entries[#entries + 1] = { tinserted = now(), rawStr = string.format(prefixBase, "M2") .. chunk, bypassAFK = bypassAFK }
             pos = pos + maxChunkSize
         end
 
         chunk = string.sub(encoded, pos)
-        table.insert(Comm._rateLimitQueue, insertPos, { tinserted = now(), rawStr = string.format(prefixBase, "M3") .. chunk, bypassAFK = bypassAFK })
+        entries[#entries + 1] = { tinserted = now(), rawStr = string.format(prefixBase, "M3") .. chunk, bypassAFK = bypassAFK }
+    end
+
+    local q = Comm._rateLimitQueue
+    if bypassAFK then
+        -- PushFront reverses; insert last-first so front order stays M1..M3.
+        for i = #entries, 1, -1 do
+            HQ_PushFront(q, entries[i])
+        end
+    else
+        for i = 1, #entries do
+            HQ_Push(q, entries[i])
+        end
     end
     
     if pTime then L:ProfileStop("Comm:_enqueueChannelWire", pTime) end 
@@ -1628,7 +1745,7 @@ function Comm:processIncomingQueue()
         if pTime then L:ProfileStop("Comm:processIncomingQueue", pTime) end
         return 
     end
-    if not self._incomingMessageQueue or #self._incomingMessageQueue == 0 then 
+    if not self._incomingMessageQueue or HQ_Len(self._incomingMessageQueue) == 0 then 
         if pTime then L:ProfileStop("Comm:processIncomingQueue", pTime) end
         return 
     end
@@ -1643,8 +1760,8 @@ function Comm:processIncomingQueue()
     
     local processedCount = 0
 
-    while processedCount < currentBatchSize and #self._incomingMessageQueue > 0 do
-        local entry = table.remove(self._incomingMessageQueue, 1)
+    while processedCount < currentBatchSize and HQ_Len(self._incomingMessageQueue) > 0 do
+        local entry = HQ_Pop(self._incomingMessageQueue)
         if entry and entry.data and entry.options then
             
             local ok, err = pcall(function()
@@ -1695,18 +1812,16 @@ function Comm:OnUpdate(elapsed)
     end
     
     if elapsed > 0.5 then
-        local bufferSize = #Comm.rawBuffer
+        local bufferSize = HQ_Len(Comm.rawBuffer)
         local dynamicDuration = 1.0 + (bufferSize / 6 * 0.5)
         Comm._lagRecoveryTimer = math.min(7.0, dynamicDuration)
     elseif Comm._lagRecoveryTimer > 0 then
         Comm._lagRecoveryTimer = Comm._lagRecoveryTimer - elapsed
     end
     
-    local bufferSize = #Comm.rawBuffer
+    local bufferSize = HQ_Len(Comm.rawBuffer)
     if bufferSize >= RAW_BUFFER_CAP then
-        for i = 1, math.floor(RAW_BUFFER_CAP * 0.2) do
-            table.remove(Comm.rawBuffer, 1)
-        end
+        HQ_DropFront(Comm.rawBuffer, math.floor(RAW_BUFFER_CAP * 0.2))
     end
     
     elapsed = math.min(elapsed, 0.1)
@@ -1766,13 +1881,13 @@ function Comm:OnUpdate(elapsed)
         end
     end
 
-    if self._outgoingSyncQueue and #self._outgoingSyncQueue > 0 then
+    if self._outgoingSyncQueue and HQ_Len(self._outgoingSyncQueue) > 0 then
         local tnow = now()
         self._lastChannelBroadcastTime = self._lastChannelBroadcastTime or 0
         local interval = self:GetCurrentSharingInterval() or 1200
         
         if (tnow - self._lastChannelBroadcastTime) >= interval then
-            local wire = table.remove(self._outgoingSyncQueue, 1)
+            local wire = HQ_Pop(self._outgoingSyncQueue)
             if wire then
                 _enqueueChannelWire(wire)
                 self._lastChannelBroadcastTime = tnow
@@ -1782,23 +1897,23 @@ function Comm:OnUpdate(elapsed)
     
     local isAFK = UnitIsAFK("player")
     
-    if self._rateLimitQueue and #self._rateLimitQueue > 0 then
-        local nextEntry = self._rateLimitQueue[1]
+    if self._rateLimitQueue and HQ_Len(self._rateLimitQueue) > 0 then
+        local nextEntry = HQ_Peek(self._rateLimitQueue)
         
-        if not isAFK or nextEntry.bypassAFK then
+        if nextEntry and (not isAFK or nextEntry.bypassAFK) then
             if _bucketTake() then
-                local entry = table.remove(self._rateLimitQueue, 1)
+                local entry = HQ_Pop(self._rateLimitQueue)
                 if entry and entry.rawStr then
                     local sent = _sendRawToNetwork(entry.rawStr)
                     if not sent then
-                        table.insert(self._rateLimitQueue, 1, entry) 
+                        HQ_PushFront(self._rateLimitQueue, entry)
                     end
                 end
             end
         end
     end
     
-    if #Comm.rawBuffer > 0 then
+    if HQ_Len(Comm.rawBuffer) > 0 then
         local tnow = time()
         if not self._lastCachePrune or (tnow - self._lastCachePrune) >= 2 then
             pruneCaches()
@@ -2183,10 +2298,10 @@ local function _onChatMsgChannel(_, _, msg, sender, _, _, _, _, _, _, channelNam
         return 
     end
     
-    if #Comm.rawBuffer >= RAW_BUFFER_CAP then
-        table.remove(Comm.rawBuffer, 1)
+    if HQ_Len(Comm.rawBuffer) >= RAW_BUFFER_CAP then
+        HQ_Pop(Comm.rawBuffer)
     end
-    table.insert(Comm.rawBuffer, { type="CHAT", msg=msg, sender=sender, channel=channelName })
+    HQ_Push(Comm.rawBuffer, { type="CHAT", msg=msg, sender=sender, channel=channelName })
     
     if pTime then L:ProfileStop("Comm:_onChatMsgChannel", pTime) end 
 end
@@ -2218,11 +2333,11 @@ function Comm:OnCommReceived(prefix, message, distribution, sender)
         if pTime then L:ProfileStop("Comm:OnCommReceived", pTime) end
         return 
     end        
-    if #Comm.rawBuffer >= RAW_BUFFER_CAP then
-        table.remove(Comm.rawBuffer, 1)
+    if HQ_Len(Comm.rawBuffer) >= RAW_BUFFER_CAP then
+        HQ_Pop(Comm.rawBuffer)
     end
     
-    table.insert(Comm.rawBuffer, { type="ACE", msg=message, dist=distribution, sender=sender })
+    HQ_Push(Comm.rawBuffer, { type="ACE", msg=message, dist=distribution, sender=sender })
     
     if pTime then L:ProfileStop("Comm:OnCommReceived", pTime) end 
 end
@@ -2235,12 +2350,12 @@ function Comm:_ProcessRawBuffer()
     local budget = InCombatLockdown() and 1.0 or RAW_PROCESS_BUDGET_MS
 
     local processed = 0
-    while #Comm.rawBuffer > 0 and processed < safetyLimit do
-        local entry = table.remove(Comm.rawBuffer, 1)
+    while HQ_Len(Comm.rawBuffer) > 0 and processed < safetyLimit do
+        local entry = HQ_Pop(Comm.rawBuffer)
         
-        if entry.type == "CHAT" then
+        if entry and entry.type == "CHAT" then
             self:_ProcessChatMsg(entry.msg, entry.sender, entry.channel)
-        elseif entry.type == "ACE" then
+        elseif entry and entry.type == "ACE" then
             self:_ProcessAceMsg(entry.msg, entry.dist, entry.sender)
         end
         
@@ -2963,7 +3078,10 @@ function Comm:RouteIncoming(tbl, via, sender)
         end
     end
     
-    self._incomingMessageQueue = self._incomingMessageQueue or {}
+    if not self._incomingMessageQueue then
+        self._incomingMessageQueue = {}
+        HQ_Reset(self._incomingMessageQueue)
+    end
     self.queuedMids = self.queuedMids or {}
 
     if norm.mid and self.queuedMids[norm.mid] then
@@ -2976,7 +3094,7 @@ function Comm:RouteIncoming(tbl, via, sender)
         self.queuedMids[norm.mid] = true
     end
     
-    table.insert(self._incomingMessageQueue, {
+    HQ_Push(self._incomingMessageQueue, {
         data = norm,
         options = { isNetwork = true, op = tbl.op }
     })
@@ -3055,11 +3173,11 @@ function Comm:StopBackgroundProcessing()
         self._tickerFrame:SetScript("OnUpdate", nil)
     end
     self:LeavePublicChannel()
-    if self._rateLimitQueue then wipe(self._rateLimitQueue) end
+    if self._rateLimitQueue then HQ_Reset(self._rateLimitQueue) end
     if self._delayQueue then wipe(self._delayQueue) end
-    if self._incomingMessageQueue then wipe(self._incomingMessageQueue) end
-    if self.rawBuffer then wipe(self.rawBuffer) end
-    if self._outgoingSyncQueue then wipe(self._outgoingSyncQueue) end
+    if self._incomingMessageQueue then HQ_Reset(self._incomingMessageQueue) end
+    if self.rawBuffer then HQ_Reset(self.rawBuffer) end
+    if self._outgoingSyncQueue then HQ_Reset(self._outgoingSyncQueue) end
     if self._incomingTimestamps then wipe(self._incomingTimestamps) end
 end
 
@@ -3074,17 +3192,20 @@ function Comm:OnEnable()
 end
 
 function Comm:ClearCaches()
-if self._multipartSpool then wipe(self._multipartSpool) end
+    if self._multipartSpool then wipe(self._multipartSpool) end
     wipe(self._seen)
-    self._rateLimitQueue = {}
+    if not self._rateLimitQueue then self._rateLimitQueue = {} end
+    HQ_Reset(self._rateLimitQueue)
     self._delayQueue = {}
-    self._incomingMessageQueue = {}
+    if not self._incomingMessageQueue then self._incomingMessageQueue = {} end
+    HQ_Reset(self._incomingMessageQueue)
     if self.queuedMids then wipe(self.queuedMids) end
     wipe(self.ingressSeen)
     self._bucketTokens = self.RATE_LIMIT_COUNT
     self._bucketLastFill = now()    
     if self._incomingTimestamps then wipe(self._incomingTimestamps) end
-    self._outgoingSyncQueue = {}
+    if not self._outgoingSyncQueue then self._outgoingSyncQueue = {} end
+    HQ_Reset(self._outgoingSyncQueue)
 end
 
 return Comm

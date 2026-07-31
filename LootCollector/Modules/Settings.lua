@@ -1058,13 +1058,17 @@ local function buildOptions()
 								end
 
 								if Comm and Comm._rateLimitQueue then
-									clearedBroadcasts = clearedBroadcasts + #Comm._rateLimitQueue
+									clearedBroadcasts = clearedBroadcasts + (Comm.GetRateLimitQueueSize and Comm:GetRateLimitQueueSize() or 0)
 									wipe(Comm._rateLimitQueue)
+									Comm._rateLimitQueue.__h = 1
+									Comm._rateLimitQueue.__n = 0
 								end
 
 								if Comm and Comm._outgoingSyncQueue then
-									clearedBroadcasts = clearedBroadcasts + #Comm._outgoingSyncQueue
+									clearedBroadcasts = clearedBroadcasts + (Comm.GetOutgoingQueueSize and Comm:GetOutgoingQueueSize() or 0)
 									wipe(Comm._outgoingSyncQueue)
+									Comm._outgoingSyncQueue.__h = 1
+									Comm._outgoingSyncQueue.__n = 0
 								end
 
 								local clearedToasts = 0

@@ -2076,8 +2076,8 @@ function ImportExport:ExportDebugData(reportTitle, reportDesc)
         lootCount = cLoot,
         tombCount = cTomb,
         cacheQueue = (L.db and L.db.global and L.db.global.cacheQueue) and #L.db.global.cacheQueue or 0,
-        incQueue = (Comm and Comm._incomingMessageQueue) and #Comm._incomingMessageQueue or 0,
-        rateQueue = (Comm and Comm._rateLimitQueue) and #Comm._rateLimitQueue or 0,
+        incQueue = (Comm and Comm.GetIncomingQueueSize) and Comm:GetIncomingQueueSize() or 0,
+        rateQueue = (Comm and Comm.GetRateLimitQueueSize) and Comm:GetRateLimitQueueSize() or 0,
     }
     
     

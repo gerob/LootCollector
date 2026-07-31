@@ -91,8 +91,8 @@ local function CreateMinimapButton()
                         st.colorHex, st.label, st.mpm
                     ), 0.6, 0.8, 1)
                 end
-                if Comm._outgoingSyncQueue and #Comm._outgoingSyncQueue > 0 then
-                    GameTooltip:AddLine(string.format("Outgoing shares queued: %d", #Comm._outgoingSyncQueue), 1, 0.8, 0.5)
+                if Comm.GetOutgoingQueueSize and Comm:GetOutgoingQueueSize() > 0 then
+                    GameTooltip:AddLine(string.format("Outgoing shares queued: %d", Comm:GetOutgoingQueueSize()), 1, 0.8, 0.5)
                 end
             end
         end
