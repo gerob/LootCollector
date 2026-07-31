@@ -957,7 +957,13 @@ function LootCollector:PreInitializeMigration()
     end
 
     local rawDB = _G.LootCollectorDB_Asc
-    local currentSchema = rawDB._schemaVersion or 0
+    -- Canonical key is _schemaVersion. Promote legacy schemaVersion once, then drop it
+    -- so AceDB init cannot leave only the bare key and force a re-migrate next login.
+    if rawDB._schemaVersion == nil and rawDB.schemaVersion ~= nil then
+        rawDB._schemaVersion = tonumber(rawDB.schemaVersion) or 0
+    end
+    rawDB.schemaVersion = nil
+    local currentSchema = tonumber(rawDB._schemaVersion) or 0
 
     if currentSchema >= 8 then
         self.LEGACY_MODE_ACTIVE = false 
@@ -1251,6 +1257,7 @@ function LootCollector:PreInitializeMigration()
         end
         
         rawDB._schemaVersion = 7
+        rawDB.schemaVersion = nil
         currentSchema = 7
         print(string.format("|cff00ff00LootCollector:|r V7 Upgrade complete! Personal: %d discoveries, %d vendors. Looted: %d records.", discoveriesConverted, vendorsConverted, lootedConverted))
         StaticPopup_Show("LOOTCOLLECTOR_MIGRATION_RELOAD")
@@ -1410,6 +1417,7 @@ function LootCollector:PreInitializeMigration()
         end
         
         rawDB._schemaVersion = 8
+        rawDB.schemaVersion = nil
         currentSchema = 8
         print(string.format("|cff00ff00LootCollector:|r V8 Upgrade complete! %d Discoveries, %d Vendors, %d Looted records migrated.", discoveriesConverted, vendorsConverted, lootedConverted))
         if amnestyGranted > 0 then
@@ -1510,9 +1518,13 @@ function LootCollector:OnInitialize()
     self.db = LibStub("AceDB-3.0"):New("LootCollectorDB_Asc", dbDefaults, true)
 
     if _G.LootCollectorDB_Asc then
-        _G.LootCollectorDB_Asc.schemaVersion = _G.LootCollectorDB_Asc.schemaVersion or 8
-        if _G.LootCollectorDB_Asc.schemaVersion < 8 then
-            _G.LootCollectorDB_Asc.schemaVersion = 8
+        local rawDB = _G.LootCollectorDB_Asc
+        if rawDB._schemaVersion == nil and rawDB.schemaVersion ~= nil then
+            rawDB._schemaVersion = tonumber(rawDB.schemaVersion) or 0
+        end
+        rawDB.schemaVersion = nil
+        if (tonumber(rawDB._schemaVersion) or 0) < 8 then
+            rawDB._schemaVersion = 8
         end
     end
 

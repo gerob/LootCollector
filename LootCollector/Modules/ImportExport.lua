@@ -187,6 +187,7 @@ local function longKeyRecordFromShort(d)
 		mergeCount = d.mc,
 		foundBy_player = d.fp,
 		originator = d.o,
+		av = d.av,
 		source = d.src,
 		class = d.cl,
 		itemType = d.it,
@@ -506,6 +507,7 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
                     mc = d.mergeCount,
                     fp = d.foundBy_player,
                     o = d.originator,
+                    av = d.av,
                     src = d.source,
                     cl = d.class,
                     it = d.itemType or 0,
@@ -606,6 +608,7 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
                     s = d.status,
                     fp = d.foundBy_player,
                     o = d.originator,
+                    av = d.av,
                     dt = d.discoveryType or 0,
                     vendorType = vType,
                     vendorName = d.vendorName,
@@ -756,7 +759,8 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
     end
 
     if _G.LootCollectorDB_Asc then
-        _G.LootCollectorDB_Asc._schemaVersion = 8 
+        _G.LootCollectorDB_Asc._schemaVersion = 8
+        _G.LootCollectorDB_Asc.schemaVersion = nil
     end
     
     

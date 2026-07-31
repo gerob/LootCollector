@@ -1396,6 +1396,9 @@ function Map:ShowDiscoveryTooltip(discoveryOrPin, anchorFrame)
     if not (L.db and L.db.profile and L.db.profile.hidePlayerNames) then
         tooltip:AddLine(string.format("Found by %s", d.fp or "Unknown"), 0.6, 0.8, 1, true)
     end
+    if d.av and d.av ~= "" then
+        tooltip:AddDoubleLine("Reporter addon", tostring(d.av), 0.8, 0.8, 0.8, 0.7, 0.9, 0.7)
+    end
     
     local ts = tonumber(d.t0) or time()
     tooltip:AddDoubleLine("Date", date("%Y-%m-%d %H:%M", ts), 0.8, 0.8, 0.8, 1, 1, 1)

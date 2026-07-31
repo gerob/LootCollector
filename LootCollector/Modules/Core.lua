@@ -3112,6 +3112,7 @@ function Core:HandleLocalLoot(discovery)
             t0 = t0, ls = t0, s = Constants.STATUS.UNCONFIRMED, st = t0, cl = cl,
             q = quality or 0, dt = dt, it = it, ist = ist,
             src = src_numeric,
+            av = L.Version or discovery.av,
             fp_votes = { [finderName] = { score = 1, t0 = t0 } },
             s_flag = s_flag,		
         }
@@ -3564,6 +3565,7 @@ function Core:_ProcessVendorDiscovery(d, options, op, t0)
             vendorType = vendorType,
             vendorName = d.vendorName or d.fp,
             vendorItems = vendorItems,
+            av = d.av or L.Version,
         }
 
         bm_db[guid] = newRecord
@@ -3581,6 +3583,9 @@ function Core:_ProcessVendorDiscovery(d, options, op, t0)
     else
         existing.ls = math.max(tonumber(existing.ls) or 0, t0)
         existing.vendorName = d.vendorName or existing.vendorName
+        if d.av and (not existing.av or existing.av == "") then
+            existing.av = d.av
+        end
         
         if #vendorItems > 0 then
             existing.vendorItems = vendorItems
@@ -3765,6 +3770,7 @@ function Core:_ProcessItemDiscovery(d, options, op, t0)
             ist = tonumber(itemSubTypeID) or 0,
             mid = storedMid, 
             adc = tonumber(d.adc) or 0,
+            av = d.av or L.Version,
             fp_votes = { [finderName] = { score = (isAU and 1000 or 1), t0 = t0 } },
             s_flag = s_flag,		
         }
@@ -3884,6 +3890,11 @@ function Core:_ProcessItemDiscovery(d, options, op, t0)
         if rec.src == nil and src_numeric ~= nil then 
             rec.src = src_numeric
             changed = true 
+        end
+
+        if d.av and (not rec.av or rec.av == "") then
+            rec.av = d.av
+            changed = true
         end
 
         if changed then
@@ -5185,6 +5196,7 @@ function Core:DiagnoseItemCoords(itemID)
         local ls = tonumber(d.ls) or 0
         local t0 = tonumber(d.t0) or 0
         local fp = tostring(d.fp or d.o or "?")
+        local av = tostring(d.av or "-")
         local dt = tostring(d.dt or "?")
         local s = tostring(d.s or "?")
         local storedID = tonumber(d.i) or 0
@@ -5205,8 +5217,8 @@ function Core:DiagnoseItemCoords(itemID)
             c, z, zoneName, iz, x, y, x * 100, y * 100
         ))
         print(string.format(
-            "      dt=%s s=%s mc=%d fp=%s t0=%d ls=%d",
-            dt, s, mc, fp, t0, ls
+            "      dt=%s s=%s mc=%d fp=%s av=%s t0=%d ls=%d",
+            dt, s, mc, fp, av, t0, ls
         ))
         print(string.format(
             "      flags: |cffffff00%s|r",
