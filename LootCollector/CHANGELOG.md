@@ -1,3 +1,29 @@
+## Version 1.0.3r-beta
+
+### Discoveries Viewer
+- **Two-row filter bar:** Looted, Date, Undiscovered, and Clear stay on the tab row; Source, Quality, Type, Slots, Usable By, Favorites, Enchant, and related controls sit on a second row.
+- **Stats filter:** EasyMenu grouped by Primary / Melee / Spell / Defense / Misc — picking a stat adds or removes a search chip (plain phrases like `armor penetration`).
+- **Filter Presets:** Save, load, and delete up to 10 named filter setups (including confirmation before delete).
+- **Faster Refresh:** Live discoveries update an incremental cache; Refresh mainly refilters instead of rebuilding the whole list when possible.
+- **Sync status:** Small `Sync:` label beside Refresh shows Quiet / Active / Busy / Congested / Extreme, or Suspended when auto-pause kicks in. Refresh green still means “new data waiting,” not channel traffic.
+
+### Sharing & channel status
+- **Minimap tooltip** uses the same Quiet→Extreme / Suspended labels as Settings for public channel traffic.
+- **Reporter addon version (`av`)** is stored on discoveries when created or updated, shown on Alt-tooltips and `/lcdiag`, and kept through import/export.
+
+### Map & Arrow
+- **Arrow + Filter Map:** Auto-track uses the same filter rules as map pins (zone scan), so Filter Map no longer leaves TomTom without a target when the Viewer list is empty or on another tab.
+- **Enhanced WF Tooltip** toggle also lives under Settings → Viewer Setup (same option as the map menu and `/lcwf`).
+
+### Housekeeping
+- **Decay / silent purges** remove discoveries from the zone index properly so maps and counts stay consistent.
+- **Database schema version** uses a single canonical `_schemaVersion` key (legacy duplicate key is healed away).
+- **GitHub release notes:** workflow can attach notes via `body_path` when tagging.
+
+### Performance
+- **Deferred Worldforged list warm:** Base ID caching waits until Discoveries opens (no login warm storm); phase changes still warm as needed and cancel stale work.
+- **Public channel queues** dequeue from the front without shifting the whole list each message — smoother under Busy/Extreme traffic.
+
 ## Version 1.0.2r-beta
 
 ### Release packaging

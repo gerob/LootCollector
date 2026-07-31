@@ -4557,6 +4557,13 @@ function Viewer:CreateWindow()
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT", 0, -2)
         GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
+Version 1.0.3r-beta:
+- Two-row Discoveries filters; Stats filter chips; filter Presets (save/load/delete).
+- Sync status on Viewer + minimap (Quiet/Busy/Suspended); Enhanced WF Tooltip in Settings.
+- Faster Refresh after live sync; less login hitch from Worldforged list warming.
+- Arrow respects Filter Map; Decay cleans zone indexes; stores reporter addon version (av).
+- Smoother public-channel queues under heavy traffic.
+
 Version 1.0.2r-beta:
 - Fixed Worldforged tooltip upgrade lines (Dung–T3) when hovering WF IDs.
 - Armor Type filter now includes Shields; Guardian Usable By includes Polearms and Fist Weapons.
