@@ -1154,44 +1154,30 @@ local function buildOptions()
 						type = "description",
 						name = function()
 							local Comm = L:GetModule("Comm", true)
-							if not Comm or not L.db or not L.db.profile or not L.db.profile.sharing or not L.db.profile.sharing.publicChannelEnabled or not L.db.profile.sharing.enabled then
+							if not Comm or not Comm.GetPublicChannelCongestionStatus then
 								return "Public Channel Sync is currently inactive."
 							end
-							local mpm = Comm._cachedTrafficRate or Comm:GetCurrentChannelTrafficRate() or 0
+							local st = Comm:GetPublicChannelCongestionStatus()
+							if not st.active then
+								return "Public Channel Sync is currently inactive."
+							end
 							local intervalSec = Comm._cachedSharingInterval or Comm:GetCurrentSharingInterval() or 1200
 							local queueSize = Comm:GetOutgoingQueueSize() or 0
-							
-							if Comm._publicChannelAutoPaused then
-								local remainingTime = math.max(0, (Comm._autoPauseRejoinTime or 0) - time())
+
+							if st.suspended then
 								return string.format(
 									"|cff888888Status:|r |cffff0000Suspended (High Traffic)|r\n" ..
 									"|cff888888Traffic Rate:|r |cffffffff%d|r msgs/min\n" ..
 									"|cff888888Resuming in:|r |cffffffff%d|r seconds",
-									mpm, remainingTime
+									st.mpm, st.remaining or 0
 								)
 							end
-							
-							local statusColor = "00ff00"
-							local congestionText = "Quiet"
-							if mpm > 12000 then
-								statusColor = "ff3333"
-								congestionText = "Extreme"
-							elseif mpm > 8000 then
-								statusColor = "ffa500"
-								congestionText = "Congested"
-							elseif mpm > 4000 then
-								statusColor = "ffff00"
-								congestionText = "Busy"
-							elseif mpm > 1000 then
-								statusColor = "88ff88"
-								congestionText = "Active"
-							end
-							
+
 							return string.format(
 								"|cff888888Status:|r |cff%s%s|r (|cffffffff%d|r msgs/min)\n" ..
 								"|cff888888Sharing Delay:|r |cffffffff%.1f|r minutes\n" ..
 								"|cff888888Pending Queue:|r |cffffffff%d|r/10 items",
-								statusColor, congestionText, mpm, intervalSec / 60, queueSize
+								st.colorHex, st.label, st.mpm, intervalSec / 60, queueSize
 							)
 						end,
 						order = 10.7,

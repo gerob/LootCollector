@@ -4211,6 +4211,36 @@ function Viewer:UpdateRefreshButton()
         btn:Disable()
         if btn.bgInner then btn.bgInner:SetVertexColor(0.06, 0.06, 0.10, 0.90) end
     end
+    if self.UpdateSyncStatus then self:UpdateSyncStatus() end
+end
+
+function Viewer:UpdateSyncStatus()
+    if not self.syncStatusText then return end
+    local Comm = L:GetModule("Comm", true)
+    if not Comm or not Comm.GetPublicChannelCongestionStatus then
+        self.syncStatusText:SetText("")
+        return
+    end
+    local st = Comm:GetPublicChannelCongestionStatus()
+    if not st.active then
+        self.syncStatusText:SetText("|cff888888Sync: Off|r")
+        return
+    end
+    if st.suspended then
+        self.syncStatusText:SetText(string.format(
+            "|cffff0000Sync: Suspended|r |cff888888(%ds)|r",
+            st.remaining or 0
+        ))
+        return
+    end
+    if st.label == "Quiet" or st.label == "Active" then
+        self.syncStatusText:SetText(string.format("|cff%sSync: %s|r", st.colorHex, st.label))
+    else
+        self.syncStatusText:SetText(string.format(
+            "|cff%sSync: %s|r |cff888888(%d/min)|r",
+            st.colorHex, st.label, st.mpm
+        ))
+    end
 end
 
 function Viewer:UpdateReloadHint()
@@ -5280,6 +5310,13 @@ beta-0.8.6r:
     refreshDataBtn:ClearAllPoints()
     refreshDataBtn:SetPoint("LEFT", filterMapBtn, "RIGHT", 12, 0)
     refreshDataBtn:SetSize(110, BUTTON_HEIGHT)
+
+    local syncStatusText = window:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    syncStatusText:SetPoint("LEFT", refreshDataBtn, "RIGHT", 10, 0)
+    syncStatusText:SetJustifyH("LEFT")
+    syncStatusText:SetText("")
+    self.syncStatusText = syncStatusText
+    self:UpdateSyncStatus()
     
     local bugBtn = CreateFrame("Button", nil, window)
     bugBtn:SetSize(24, 24)

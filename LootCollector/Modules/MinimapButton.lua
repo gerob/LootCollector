@@ -78,14 +78,18 @@ local function CreateMinimapButton()
             GameTooltip:AddLine("Public channel sync: |cffff5555off|r", 0.9, 0.6, 0.6)
         else
             local Comm = L:GetModule("Comm", true)
-            if Comm then
-                local rate = Comm._trafficLastRate
-                if rate then
-                    GameTooltip:AddLine(string.format("LC channel: ~%d msgs/min", rate), 0.6, 0.8, 1)
-                elseif (Comm._trafficCount or 0) > 0 then
-                    GameTooltip:AddLine(string.format("LC channel: %d msgs this minute so far", Comm._trafficCount), 0.6, 0.8, 1)
+            if Comm and Comm.GetPublicChannelCongestionStatus then
+                local st = Comm:GetPublicChannelCongestionStatus()
+                if st.suspended then
+                    GameTooltip:AddLine(string.format(
+                        "LC channel: |cffff0000Suspended|r (~%d msgs/min, resume in %ds)",
+                        st.mpm, st.remaining or 0
+                    ), 1, 0.5, 0.5)
                 else
-                    GameTooltip:AddLine("LC channel: quiet", 0.6, 0.8, 1)
+                    GameTooltip:AddLine(string.format(
+                        "LC channel: |cff%s%s|r (~%d msgs/min)",
+                        st.colorHex, st.label, st.mpm
+                    ), 0.6, 0.8, 1)
                 end
                 if Comm._outgoingSyncQueue and #Comm._outgoingSyncQueue > 0 then
                     GameTooltip:AddLine(string.format("Outgoing shares queued: %d", #Comm._outgoingSyncQueue), 1, 0.8, 0.5)

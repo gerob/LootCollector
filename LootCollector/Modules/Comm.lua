@@ -652,6 +652,62 @@ function Comm:GetCurrentChannelTrafficRate()
     return #timestamps
 end
 
+-- Shared congestion label for Settings / minimap / Viewer Sync status.
+-- Thresholds match the Settings publicChannelStatus description.
+function Comm:GetPublicChannelCongestionStatus()
+    local p = L and L.db and L.db.profile
+    local sharing = p and p.sharing
+    local active = sharing and sharing.enabled and sharing.publicChannelEnabled and true or false
+    if not active then
+        return {
+            active = false,
+            suspended = false,
+            label = "Off",
+            colorHex = "888888",
+            mpm = 0,
+            remaining = nil,
+        }
+    end
+
+    local mpm = self._cachedTrafficRate
+    if mpm == nil then
+        mpm = self:GetCurrentChannelTrafficRate() or 0
+    end
+    mpm = tonumber(mpm) or 0
+
+    if self._publicChannelAutoPaused then
+        local remaining = math.max(0, (self._autoPauseRejoinTime or 0) - now())
+        return {
+            active = true,
+            suspended = true,
+            label = "Suspended",
+            colorHex = "ff0000",
+            mpm = mpm,
+            remaining = remaining,
+        }
+    end
+
+    local label, colorHex = "Quiet", "00ff00"
+    if mpm > 12000 then
+        label, colorHex = "Extreme", "ff3333"
+    elseif mpm > 8000 then
+        label, colorHex = "Congested", "ffa500"
+    elseif mpm > 4000 then
+        label, colorHex = "Busy", "ffff00"
+    elseif mpm > 1000 then
+        label, colorHex = "Active", "88ff88"
+    end
+
+    return {
+        active = true,
+        suspended = false,
+        label = label,
+        colorHex = colorHex,
+        mpm = mpm,
+        remaining = nil,
+    }
+end
+
 function Comm:CalculateSharingInterval(mpm)
     local baseInterval = 120    -- 2 minutes
     local maxInterval = 3600    -- 60 minutes
@@ -1687,6 +1743,11 @@ function Comm:OnUpdate(elapsed)
             self:LeavePublicChannel()
             print("|cffff0000[LootCollector Shield]|r Public channel sync automatically suspended. Traffic rate of " .. mpm .. " msgs/min exceeds your threshold (" .. threshold .. " msgs/min). Protecting client FPS...")
         end
+
+        local Viewer = L:GetModule("Viewer", true)
+        if Viewer and Viewer.window and Viewer.window:IsShown() and Viewer.UpdateSyncStatus then
+            Viewer:UpdateSyncStatus()
+        end
     end
 
     if self._publicChannelAutoPaused then
@@ -1698,6 +1759,10 @@ function Comm:OnUpdate(elapsed)
             self._cachedTrafficRate = 0
             self:EnsureChannelJoined()
             print("|cff00ff00[LootCollector Shield]|r Public channel sync resumed. Re-evaluating channel traffic...")
+            local Viewer = L:GetModule("Viewer", true)
+            if Viewer and Viewer.window and Viewer.window:IsShown() and Viewer.UpdateSyncStatus then
+                Viewer:UpdateSyncStatus()
+            end
         end
     end
 
