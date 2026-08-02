@@ -267,7 +267,8 @@ local dbDefaults = {
         discoveries = {},
     },
     char = { 
-        looted = {}, 
+        looted = {},
+        lootedBackup = {},
         hidden = {},
         favorites = {},
         paused = false,      
@@ -673,8 +674,167 @@ function LootCollector:GetDiscoveryStatus(d)
 end
 
 function LootCollector:IsLootedByChar(guid)
-    if not (self.db and self.db.char and self.db.char.looted) then return false end
+    if not guid or not (self.db and self.db.char and self.db.char.looted) then return false end
     return self.db.char.looted[guid] and true or false
+end
+
+local function _earlierTs(a, b)
+    a, b = tonumber(a), tonumber(b)
+    if a and b then return (a < b) and a or b end
+    return a or b
+end
+
+function LootCollector:MarkLooted(guid, timestamp)
+    if not guid or not (self.db and self.db.char) then return end
+    local ts = tonumber(timestamp) or time()
+    self.db.char.looted = self.db.char.looted or {}
+    self.db.char.lootedBackup = self.db.char.lootedBackup or {}
+    self.db.char.looted[guid] = ts
+    local bak = self.db.char.lootedBackup[guid]
+    self.db.char.lootedBackup[guid] = bak and _earlierTs(bak, ts) or ts
+end
+
+function LootCollector:UnmarkLooted(guid)
+    if not guid or not (self.db and self.db.char and self.db.char.looted) then return end
+    self.db.char.looted[guid] = nil
+end
+
+function LootCollector:RemapLootedGuid(oldGuid, newGuid)
+    if not oldGuid or not newGuid or oldGuid == newGuid then return end
+    if not (self.db and self.db.char) then return end
+    self.db.char.looted = self.db.char.looted or {}
+    self.db.char.lootedBackup = self.db.char.lootedBackup or {}
+
+    local liveTs = self.db.char.looted[oldGuid]
+    if liveTs ~= nil then
+        local existing = self.db.char.looted[newGuid]
+        self.db.char.looted[newGuid] = existing and _earlierTs(existing, liveTs) or liveTs
+        self.db.char.looted[oldGuid] = nil
+    end
+
+    local bakTs = self.db.char.lootedBackup[oldGuid]
+    if bakTs ~= nil then
+        local existing = self.db.char.lootedBackup[newGuid]
+        self.db.char.lootedBackup[newGuid] = existing and _earlierTs(existing, bakTs) or bakTs
+        self.db.char.lootedBackup[oldGuid] = nil
+    end
+end
+
+local function _parseLootedGuidFields(guid)
+    if type(guid) ~= "string" then return nil end
+    -- V8: c-z-iz-i-x-y
+    local c, z, iz, i, x, y = guid:match("^(%d+)%-(%d+)%-(%d+)%-(%d+)%-([%d%.]+)%-([%d%.]+)$")
+    if c then
+        return tonumber(c), tonumber(z), tonumber(iz), tonumber(i), tonumber(x), tonumber(y)
+    end
+    -- V7 legacy: c-z-i-x-y
+    c, z, i, x, y = guid:match("^(%d+)%-(%d+)%-(%d+)%-([%d%.]+)%-([%d%.]+)$")
+    if c then
+        return tonumber(c), tonumber(z), 0, tonumber(i), tonumber(x), tonumber(y)
+    end
+    return nil
+end
+
+-- Merge lootedBackup into live looted; rematch orphan GUIDs to current discoveries.
+-- Returns exactRestored, rematched, stillOrphan.
+function LootCollector:HealLootedFromBackup()
+    if not (self.db and self.db.char) then return 0, 0, 0 end
+    self.db.char.looted = self.db.char.looted or {}
+    self.db.char.lootedBackup = self.db.char.lootedBackup or {}
+
+    for guid, ts in pairs(self.db.char.looted) do
+        if self.db.char.lootedBackup[guid] == nil then
+            self.db.char.lootedBackup[guid] = ts
+        end
+    end
+
+    local discoveries = self.GetDiscoveriesDB and self:GetDiscoveriesDB() or nil
+    if not discoveries then return 0, 0, 0 end
+
+    local byKey = {}
+    for _, d in pairs(discoveries) do
+        if d and d.i and d.z ~= nil then
+            local c = tonumber(d.c) or 0
+            local z = tonumber(d.z) or 0
+            local iz = tonumber(d.iz) or 0
+            local i = tonumber(d.i) or 0
+            local key = c .. "-" .. z .. "-" .. iz .. "-" .. i
+            byKey[key] = byKey[key] or {}
+            table.insert(byKey[key], d)
+        end
+    end
+
+    local exactRestored, rematched, stillOrphan = 0, 0, 0
+    local backupSnapshot = {}
+    for guid, ts in pairs(self.db.char.lootedBackup) do
+        backupSnapshot[guid] = ts
+    end
+
+    for guid, ts in pairs(backupSnapshot) do
+        ts = tonumber(ts) or time()
+        if discoveries[guid] then
+            if not self.db.char.looted[guid] then
+                self.db.char.looted[guid] = ts
+                exactRestored = exactRestored + 1
+            end
+        else
+            local c, z, iz, i, x, y = _parseLootedGuidFields(guid)
+            local matched = nil
+            if c and i then
+                local key = c .. "-" .. z .. "-" .. iz .. "-" .. i
+                local candidates = byKey[key]
+                if candidates and #candidates == 1 then
+                    matched = candidates[1]
+                elseif candidates and #candidates > 1 then
+                    local best, bestDist = nil, nil
+                    for _, d in ipairs(candidates) do
+                        local dx = (d.xy and d.xy.x) or 0
+                        local dy = (d.xy and d.xy.y) or 0
+                        local dist
+                        if self.ComputeDistance then
+                            dist = self:ComputeDistance(c, z, x or 0, y or 0, d.c, d.z, dx, dy)
+                        else
+                            dist = math.abs((x or 0) - dx) + math.abs((y or 0) - dy)
+                        end
+                        if dist and (not bestDist or dist < bestDist) then
+                            best, bestDist = d, dist
+                        end
+                    end
+                    if best and (not bestDist or bestDist <= 80) then
+                        matched = best
+                    end
+                end
+            end
+
+            if matched and matched.g then
+                local newGuid = matched.g
+                if not self.db.char.looted[newGuid] then
+                    self.db.char.looted[newGuid] = ts
+                    rematched = rematched + 1
+                end
+                if newGuid ~= guid then
+                    local existing = self.db.char.lootedBackup[newGuid]
+                    self.db.char.lootedBackup[newGuid] = existing and _earlierTs(existing, ts) or ts
+                    self.db.char.lootedBackup[guid] = nil
+                end
+            else
+                stillOrphan = stillOrphan + 1
+            end
+        end
+    end
+
+    return exactRestored, rematched, stillOrphan
+end
+
+function LootCollector:SeedLootedBackupFromLive()
+    if not (self.db and self.db.char) then return end
+    self.db.char.looted = self.db.char.looted or {}
+    self.db.char.lootedBackup = self.db.char.lootedBackup or {}
+    for guid, ts in pairs(self.db.char.looted) do
+        if self.db.char.lootedBackup[guid] == nil then
+            self.db.char.lootedBackup[guid] = ts
+        end
+    end
 end
 
 -- Favorites storage: shared (profile) by default; optional per-character (char).
@@ -1556,9 +1716,11 @@ function LootCollector:OnInitialize()
 
     self.db.char        = self.db.char or {}
     self.db.char.looted = self.db.char.looted or {}
+    self.db.char.lootedBackup = self.db.char.lootedBackup or {}
     self.db.char.hidden = self.db.char.hidden or {}
     self.db.char.favorites = self.db.char.favorites or {}
     self.db.char.mapFilters = self.db.char.mapFilters or {}
+    self:SeedLootedBackupFromLive()
     if self.db.profile.perCharacterFavorites == nil then
         self.db.profile.perCharacterFavorites = false
     end

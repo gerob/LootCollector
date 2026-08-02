@@ -8012,14 +8012,19 @@ end
 function Viewer:ToggleLootedState(guid, discoveryData)
     if not guid or not (L.db and L.db.char) then return false end
 
-    L.db.char.looted = L.db.char.looted or {}
     local isCurrentlyLooted = self:IsLootedByChar(guid)
 
     if isCurrentlyLooted then
-        L.db.char.looted[guid] = nil
+        if L.UnmarkLooted then L:UnmarkLooted(guid) else
+            L.db.char.looted = L.db.char.looted or {}
+            L.db.char.looted[guid] = nil
+        end
         print(string.format("|cff00ff00LootCollector:|r Marked '%s' as unlooted.", discoveryData.itemName or "Unknown Item"))
     else
-        L.db.char.looted[guid] = time()
+        if L.MarkLooted then L:MarkLooted(guid) else
+            L.db.char.looted = L.db.char.looted or {}
+            L.db.char.looted[guid] = time()
+        end
         print(string.format("|cff00ff00LootCollector:|r Marked '%s' as looted.", discoveryData.itemName or "Unknown Item"))
     end
 

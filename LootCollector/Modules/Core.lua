@@ -1081,19 +1081,13 @@ function Core:FixIncorrectInstanceContinentIDs()
 
     local lootedFixedCount = 0
     if L.db and L.db.char and L.db.char.looted then
-        local newLooted = {}
-        local charFixed = false
-        for guid, timestamp in pairs(L.db.char.looted) do
-            if guidRemap[guid] then
-                newLooted[guidRemap[guid]] = timestamp
+        for guid, _ in pairs(guidRemap) do
+            if L.db.char.looted[guid] and guidRemap[guid] then
+                if L.RemapLootedGuid then
+                    L:RemapLootedGuid(guid, guidRemap[guid])
+                end
                 lootedFixedCount = lootedFixedCount + 1
-                charFixed = true
-            else
-                newLooted[guid] = timestamp
             end
-        end
-        if charFixed then
-            L.db.char.looted = newLooted
         end
     end
     
@@ -1229,29 +1223,40 @@ function Core:RemapLootedHistoryV6()
         end
     end
 
-    local newLooted = {}
     local remappedCount = 0
+    local liveSnap = {}
     for oldGuid, timestamp in pairs(L.db.char.looted) do
-        local c, z, i = oldGuid:match("^(%d+)%-(%d+)%-(%d+)%-")
-        c, z, i = tonumber(c), tonumber(z), tonumber(i)
+        liveSnap[oldGuid] = timestamp
+    end
+    for oldGuid, timestamp in pairs(liveSnap) do
+        -- V8: c-z-iz-i-... ; V7: c-z-i-...
+        local c, z, iz, i = oldGuid:match("^(%d+)%-(%d+)%-(%d+)%-(%d+)%-")
+        if i then
+            c, z, i = tonumber(c), tonumber(z), tonumber(i)
+        else
+            c, z, i = oldGuid:match("^(%d+)%-(%d+)%-(%d+)%-")
+            c, z, i = tonumber(c), tonumber(z), tonumber(i)
+        end
         
         local newGuid = c and z and i and wfLookup[c] and wfLookup[c][z] and wfLookup[c][z][i]
         
         if newGuid and newGuid ~= oldGuid then
-            newLooted[newGuid] = timestamp
+            if L.RemapLootedGuid then
+                L:RemapLootedGuid(oldGuid, newGuid)
+            else
+                L.db.char.looted[newGuid] = timestamp
+                L.db.char.looted[oldGuid] = nil
+            end
             remappedCount = remappedCount + 1
-        else
-            newLooted[oldGuid] = timestamp
         end
     end
-    
-    L.db.char.looted = newLooted
     
     if remappedCount > 0 then
         print(string.format("|cff00ff00LootCollector:|r Automatically updated %d looted records to match the new database format.", remappedCount))
     end
 
     L.db.char.looted_remapped_v6 = true
+    if L.SeedLootedBackupFromLive then L:SeedLootedBackupFromLive() end
 end
 
 function Core:DeduplicateItems(mysticScrollsKeepOldest)
@@ -1299,7 +1304,11 @@ function Core:DeduplicateItems(mysticScrollsKeepOldest)
                     local d = group[i]
                     
                     if L.db and L.db.char and L.db.char.looted and L.db.char.looted[d.g] then
-                        L.db.char.looted[anchor.g] = L.db.char.looted[d.g]
+                        if L.RemapLootedGuid then
+                            L:RemapLootedGuid(d.g, anchor.g)
+                        else
+                            L.db.char.looted[anchor.g] = L.db.char.looted[d.g]
+                        end
                     end
                     
                     anchor.mc = (anchor.mc or 1) + (d.mc or 1)
@@ -1350,7 +1359,11 @@ function Core:DeduplicateItems(mysticScrollsKeepOldest)
                             isDuplicate = true
                             
                             if L.db and L.db.char and L.db.char.looted and L.db.char.looted[d.g] then
-                                L.db.char.looted[anchor.g] = L.db.char.looted[d.g]
+                                if L.RemapLootedGuid then
+                                    L:RemapLootedGuid(d.g, anchor.g)
+                                else
+                                    L.db.char.looted[anchor.g] = L.db.char.looted[d.g]
+                                end
                             end
                             anchor.mc = (anchor.mc or 1) + (d.mc or 1)
                             
@@ -1778,10 +1791,11 @@ function Core:ConvertLegacyInstanceData()
                     d.z = modernMapID
                     d.iz = modernMapID
                     
-                    local newGuid = L:GenerateGUID(d.c, d.z, d.i, d.xy.x, d.xy.y)
+                    local newGuid = L:GenerateGUID(d.c, d.z, d.iz or 0, d.i, d.xy.x, d.xy.y)
                     d.g = newGuid
                     
                     discoveries[newGuid] = d
+                    if L.RemapLootedGuid then L:RemapLootedGuid(oldGuid, newGuid) end
                     convertedCount = convertedCount + 1
                     L._debug("Core-LegacyConvert", string.format("Converted '%s' (Old GUID: %s) to modern mapID %d. New GUID: %s", legacyInstanceName, oldGuid, modernMapID, newGuid))
                 else
@@ -1872,10 +1886,11 @@ function Core:FixInvalidContinentIDs()
                 
                 d.c = zInfo.continentID
                 
-                local newGuid = L:GenerateGUID(d.c, d.z, d.i, d.xy.x, d.xy.y)
+                local newGuid = L:GenerateGUID(d.c, d.z, d.iz or 0, d.i, d.xy.x, d.xy.y)
                 d.g = newGuid
                 
                 discoveries[newGuid] = d
+                if L.RemapLootedGuid then L:RemapLootedGuid(oldGuid, newGuid) end
                 fixedCount = fixedCount + 1
                 
                 L._debug("Core-Fix", string.format("Fixed c=-1 -> c=%d for zone %d. Old GUID: %s -> New GUID: %s", d.c, d.z, oldGuid, newGuid))
@@ -1952,6 +1967,7 @@ function Core:FixMismappedZones()
             else
                 discoveries[newGuid] = d
             end
+            if L.RemapLootedGuid then L:RemapLootedGuid(remap.guid, newGuid) end
             remappedCount = remappedCount + 1
         end
     end
@@ -2074,6 +2090,17 @@ function Core:PerformOnLoginMaintenance()
     end
 
     self:RemapLootedHistoryV6()
+
+    if L.HealLootedFromBackup then
+        local exact, rematched = L:HealLootedFromBackup()
+        local restored = (exact or 0) + (rematched or 0)
+        if restored > 0 and not hideMsgs then
+            print(string.format(
+                "|cff00ff00LootCollector:|r Restored %d looted pin(s) from backup (%d exact, %d rematched).",
+                restored, exact or 0, rematched or 0
+            ))
+        end
+    end
     
     -- Clean up cache queue on login to remove any WorldforgedList (undiscovered) items
     if L.db and L.db.global and L.db.global.cacheQueue then
@@ -3163,8 +3190,12 @@ function Core:HandleLocalLoot(discovery)
     end
     
     if L.db and L.db.char then
-        L.db.char.looted = L.db.char.looted or {}
-        L.db.char.looted[rec.g] = time()
+        if L.MarkLooted then
+            L:MarkLooted(rec.g)
+        else
+            L.db.char.looted = L.db.char.looted or {}
+            L.db.char.looted[rec.g] = time()
+        end
     end
     
     local Map = L:GetModule("Map", true)
@@ -4694,6 +4725,7 @@ function Core:HandleGuidedFix(fixData)
 			newRecord.g = newGuid
 			newRecord.mid = L:ComputeCanonicalDiscoveryMid(newRecord)
 			discoveries[newGuid] = newRecord
+			if L.RemapLootedGuid then L:RemapLootedGuid(oldGuid, newGuid) end
 			updatedCount = updatedCount + 1
 		  end
 	    end
@@ -4717,7 +4749,9 @@ function Core:HandleGuidedFix(fixData)
                 local newGuid = L:GenerateGUID(newRecord.c, newRecord.z, newRecord.iz, newRecord.i, newRecord.xy.x, newRecord.xy.y)
                 
                 
-                if L.db and L.db.char and L.db.char.looted and L.db.char.looted[oldGuid] then
+                if L.RemapLootedGuid then
+                    L:RemapLootedGuid(oldGuid, newGuid)
+                elseif L.db and L.db.char and L.db.char.looted and L.db.char.looted[oldGuid] then
                     L.db.char.looted[newGuid] = L.db.char.looted[oldGuid]
                     L.db.char.looted[oldGuid] = nil
                 end
@@ -4948,7 +4982,7 @@ function Core:FixLegacyZoneIDs()
                                 d.iz = 0 
                             end
 
-                            local newGuid = L:GenerateGUID(d.c, d.z, d.i, d.xy.x, d.xy.y)
+                            local newGuid = L:GenerateGUID(d.c, d.z, d.iz or 0, d.i, d.xy.x, d.xy.y)
                             d.g = newGuid
                             
                             table.insert(toRemove, oldGuid)
@@ -4973,18 +5007,10 @@ function Core:FixLegacyZoneIDs()
     
     if fixedCount > 0 then
          if L.db and L.db.char and L.db.char.looted then
-            local newLooted = {}
-            local charFixed = false
-            for guid, timestamp in pairs(L.db.char.looted) do
-                if guidRemap[guid] then
-                    newLooted[guidRemap[guid]] = timestamp
-                    charFixed = true
-                else
-                    newLooted[guid] = timestamp
+            for oldGuid, newGuid in pairs(guidRemap) do
+                if L.RemapLootedGuid then
+                    L:RemapLootedGuid(oldGuid, newGuid)
                 end
-            end
-            if charFixed then
-                L.db.char.looted = newLooted
             end
         end
         print(string.format("|cff00ff00LootCollector:|r Fixed %d records with invalid zone combinations.", fixedCount))

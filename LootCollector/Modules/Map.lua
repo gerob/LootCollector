@@ -1578,14 +1578,18 @@ function Map:OpenPinMenu(anchorFrame)
     if not isBlackmarket then
         table.insert(menuList, { text = "Set as looted", notCheckable = true, func = function()
           if not (L.db and L.db.char) then return end
-          L.db.char.looted = L.db.char.looted or {}
-          L.db.char.looted[d.g] = time()
+          if L.MarkLooted then L:MarkLooted(d.g) else
+            L.db.char.looted = L.db.char.looted or {}
+            L.db.char.looted[d.g] = time()
+          end
           Map.cacheIsDirty = true 
           Map:Update()
         end })
         table.insert(menuList, { text = "Set as unlooted", notCheckable = true, func = function()
-          if not (L.db and L.db.char and L.db.char.looted) then return end
-          L.db.char.looted[d.g] = nil
+          if not (L.db and L.db.char) then return end
+          if L.UnmarkLooted then L:UnmarkLooted(d.g) else
+            if L.db.char.looted then L.db.char.looted[d.g] = nil end
+          end
           Map.cacheIsDirty = true 
           Map:Update()
         end })

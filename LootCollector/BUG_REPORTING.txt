@@ -1,12 +1,34 @@
-To report bugs for the LootCollector addon include this key info for effective reports:
+Copy this, fill in each line, and reply in the thread.
 
-What: Clear description of the bug and expected vs. actual behavior.
-Steps to reproduce: Exact sequence to trigger it reliably.
-Where/When: Location in-game (zone, coords if relevant), server, time/date it occurred.
-Addon version: Check via in-game addon menu
-WoW client language: e.g., enUS
-Screenshots/videos: Of the issue, error popups, map/database glitches, etc.
-Additional helpful details:
-Other addons installed/enabled (disable others to test if conflict).
-Lua errors: Copy full error text.
-Your settings: e.g., sharing enabled? TomTom installed?
+**LootCollector support intake**
+
+1. Realm: (e.g. Rexxar, Vol'jin, Bronzebeard, Dawnrise, Area 52, Darkmoon)
+2. Addon version: (Settings → About, or minimap tooltip build)
+3. Issue summary: (1–3 sentences: what is wrong vs what you expect)
+4. When it started: (after install / update / import / share / always)
+5. Symptom category: (pick one)
+   - empty map
+   - wrong/extra pins
+   - missing pins
+   - Viewer filter/search
+   - freeze/crash
+   - sharing/import
+   - other: ___
+6. Folders installed:
+   - LootCollector: yes/no
+   - LootCollector_StarterDB: yes/no
+   - LootCollector_CustomImport: yes/no
+7. Data actions tried: (Merge Starter / Override Starter / /lcimport / /lcshare received / none)
+8. Public channel sync: on/off (Settings)
+9. Filter Map: on/off
+   Active Viewer filters (if any): Type / Slot / Usable By / Looted / Favorites / search chips: ___
+10. Map filters (if known): hide looted / hide bags / min rarity / show Worldforged·Mystic Scrolls·vendors: ___
+11. Zone + item (pin issues): zone name; item name or itemID
+    Optional: paste `/lcdiag <itemID>` output
+12. Map addon: default M / Magnify / ElvUI / other: ___
+13. Steps to reproduce:
+    1.
+    2.
+    3.
+14. Screenshot: (map or Viewer with filters visible, if possible)
+15. Errors: (any red Lua errors from BugSack/chat — paste text, or none)

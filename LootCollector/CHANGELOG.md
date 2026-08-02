@@ -1,5 +1,11 @@
 ## Version 1.0.3r-beta
 
+### Looted history safety
+- **Looted backup:** Every mark-as-looted also writes `char.lootedBackup`. Clear All Looted clears the live list only (backup kept).
+- **Merge Looted Backup:** Button on the Import/Export “Looted by this character” page restores greys from backup (exact GUID or same item/zone rematch).
+- **Login heal:** After maintenance, unmatched backup entries are merged/rematched when possible.
+- **GUID remap hardening:** Paths that regenerate discovery GUIDs (itemID→base, GFIX coord update, legacy zone/instance fixes) now move looted (+ backup) with the pin.
+
 ### Discoveries Viewer
 - **Two-row filter bar:** Looted, Date, Undiscovered, and Clear stay on the tab row; Source, Quality, Type, Slots, Usable By, Favorites, Enchant, and related controls sit on a second row.
 - **Stats filter:** EasyMenu grouped by Primary / Melee / Spell / Defense / Misc — picking a stat adds or removes a search chip (plain phrases like `armor penetration`).

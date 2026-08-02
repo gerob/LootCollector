@@ -146,13 +146,14 @@ StaticPopupDialogs["LOOTCOLLECTOR_NUKE_CONFIRM"] = {
 }
 
 StaticPopupDialogs["LOOTCOLLECTOR_CLEAR_LOOTED_CONFIRM"] = {
-	text = "Are you sure you want to clear ALL looted history for this character?\n\n|cffff7f00This only affects this character. The discovery database and all settings are untouched.\n\nUseful after prestiging or rerolling with the same name.|r\n\n|cffff0000This cannot be undone!|r",
+	text = "Are you sure you want to clear ALL looted history for this character?\n\n|cffff7f00This only affects this character. The discovery database and all settings are untouched.\n\nA backup of your looted list is kept — use |cffffffffMerge Looted Backup|r to restore greys later.\n\nUseful after prestiging or rerolling with the same name.|r",
 	button1 = "Yes, Clear History",
 	button2 = "Cancel",
 	OnAccept = function(self, data)
 		if not (L and L.db and L.db.char) then return end
 		L.db.char.looted = {}
-		print("|cff00ff00LootCollector:|r Looted history cleared for this character.")
+		-- Keep lootedBackup so Merge Looted Backup can restore.
+		print("|cff00ff00LootCollector:|r Looted history cleared for this character (backup kept).")
 		
 		local Map = L:GetModule("Map", true)
 		if Map and Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then
@@ -167,6 +168,41 @@ StaticPopupDialogs["LOOTCOLLECTOR_CLEAR_LOOTED_CONFIRM"] = {
 	whileDead = 1,
 	hideOnEscape = 1,
 	showAlert = true,
+}
+
+StaticPopupDialogs["LOOTCOLLECTOR_MERGE_LOOTED_BACKUP_CONFIRM"] = {
+	text = "Merge the looted backup into your live looted list for this character?\n\n|cffaaaaaaRestores greys for pins still in your database (exact GUID or same item/zone match). Does not remove anything already marked looted.|r",
+	button1 = "Merge Backup",
+	button2 = "Cancel",
+	OnAccept = function(self, data)
+		if not (L and L.HealLootedFromBackup) then return end
+		local exact, rematched, orphan = L:HealLootedFromBackup()
+		local restored = (exact or 0) + (rematched or 0)
+		if restored > 0 then
+			print(string.format(
+				"|cff00ff00LootCollector:|r Restored %d looted pin(s) from backup (%d exact, %d rematched). %d backup entr%s unmatched.",
+				restored, exact or 0, rematched or 0, orphan or 0, (orphan or 0) == 1 and "y" or "ies"
+			))
+		else
+			print(string.format(
+				"|cffff7f00LootCollector:|r No new looted pins restored from backup (%d unmatched entr%s).",
+				orphan or 0, (orphan or 0) == 1 and "y" or "ies"
+			))
+		end
+		local Map = L:GetModule("Map", true)
+		if Map then
+			Map.cacheIsDirty = true
+			if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then
+				Map:Update()
+			end
+		end
+		if data and data.refreshFunc then
+			data.refreshFunc()
+		end
+	end,
+	timeout = 0,
+	whileDead = 1,
+	hideOnEscape = 1,
 }
 
 local function longKeyRecordFromShort(d)
@@ -629,9 +665,14 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
 				L.db.char.hidden = {}
 			end
 			L.db.char.looted = L.db.char.looted or {}
+			L.db.char.lootedBackup = L.db.char.lootedBackup or {}
 			for oldGuid, ts in pairs(parsed.overlays.looted or {}) do
                 local mappedGuid = guidMap[oldGuid] or oldGuid
-				L.db.char.looted[mappedGuid] = tonumber(ts) or time()
+				if L.MarkLooted then
+					L:MarkLooted(mappedGuid, tonumber(ts) or time())
+				else
+					L.db.char.looted[mappedGuid] = tonumber(ts) or time()
+				end
 				applied.overlays = applied.overlays + 1
 			end
 			L.db.char.hidden = L.db.char.hidden or {}
@@ -744,17 +785,31 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
     
     if L.db and L.db.char and L.db.char.looted then
         local remappedLooted = false
-        local newLootedTable = {}
         for oldGuid, timestamp in pairs(L.db.char.looted) do
             if guidMap[oldGuid] and guidMap[oldGuid] ~= oldGuid then
-                newLootedTable[guidMap[oldGuid]] = timestamp
+                if L.RemapLootedGuid then
+                    L:RemapLootedGuid(oldGuid, guidMap[oldGuid])
+                end
                 remappedLooted = true
-            else
-                newLootedTable[oldGuid] = timestamp
             end
         end
-        if remappedLooted then
-            L.db.char.looted = newLootedTable
+        -- Also slide backup-only keys through guidMap.
+        if L.db.char.lootedBackup then
+            local bakSnap = {}
+            for oldGuid, timestamp in pairs(L.db.char.lootedBackup) do
+                bakSnap[oldGuid] = timestamp
+            end
+            for oldGuid, timestamp in pairs(bakSnap) do
+                if guidMap[oldGuid] and guidMap[oldGuid] ~= oldGuid then
+                    if L.RemapLootedGuid then
+                        L:RemapLootedGuid(oldGuid, guidMap[oldGuid])
+                    end
+                    remappedLooted = true
+                end
+            end
+        end
+        if remappedLooted and L.SeedLootedBackupFromLive then
+            L:SeedLootedBackupFromLive()
         end
     end
 
@@ -1120,12 +1175,16 @@ local function FocusOnDiscovery(d)
 end
 
 local function setLooted(guid, on)
-	if not L.db and L.db.char then return end
-	L.db.char.looted = L.db.char.looted or {}
+	if not (L.db and L.db.char) then return end
 	if on then
-		L.db.char.looted[guid] = now()
+		if L.MarkLooted then L:MarkLooted(guid) else
+			L.db.char.looted = L.db.char.looted or {}
+			L.db.char.looted[guid] = now()
+		end
 	else
-		L.db.char.looted[guid] = nil
+		if L.UnmarkLooted then L:UnmarkLooted(guid) else
+			if L.db.char.looted then L.db.char.looted[guid] = nil end
+		end
 	end
 	local Map = L:GetModule("Map", true)
 	if Map and Map.Update then Map:Update() end
@@ -1634,7 +1693,15 @@ local function BuildListPage(parent, titleText, dataFilterFunc)
 		clearBtn:SetText("|cffff7f00Clear All Looted|r")
 		clearBtn:SetScript("OnClick", function()
 			StaticPopup_Show("LOOTCOLLECTOR_CLEAR_LOOTED_CONFIRM", nil, nil, { refreshFunc = page.refresh })
-	end)
+		end)
+
+		local mergeBtn = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+		mergeBtn:SetSize(170, 24)
+		mergeBtn:SetPoint("RIGHT", clearBtn, "LEFT", -8, 0)
+		mergeBtn:SetText("Merge Looted Backup")
+		mergeBtn:SetScript("OnClick", function()
+			StaticPopup_Show("LOOTCOLLECTOR_MERGE_LOOTED_BACKUP_CONFIRM", nil, nil, { refreshFunc = page.refresh })
+		end)
 	end
 	
 	return page
