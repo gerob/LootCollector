@@ -149,6 +149,7 @@ local function ensureDefaults()
     p.viewer.inlineVendorView = true
     if p.viewer.splitRatio == nil then p.viewer.splitRatio = 0.64 end
     if p.viewer.asyncLoading == nil then p.viewer.asyncLoading = true end
+    if p.viewer.closeOnWorldMap == nil then p.viewer.closeOnWorldMap = false end
     if p.perCharacterFavorites == nil then p.perCharacterFavorites = false end
     p.favorites = p.favorites or {}
     if L.db.char then
@@ -830,6 +831,18 @@ local function buildOptions()
 							if Tooltip and Tooltip.ApplySetting then
 								Tooltip:ApplySetting()
 							end
+						end,
+					},
+					closeOnWorldMap = {
+						type = "toggle",
+						name = "Close Discoveries when map opens",
+						desc = "When enabled, opening the world map (M) closes the Discoveries window. When disabled (default), Discoveries stays open.",
+						order = 1.7,
+						get = function()
+							return L.db.profile.viewer.closeOnWorldMap and true or false
+						end,
+						set = function(_, v)
+							L.db.profile.viewer.closeOnWorldMap = v and true or false
 						end,
 					},
 					rowFont = {

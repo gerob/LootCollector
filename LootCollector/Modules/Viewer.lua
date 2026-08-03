@@ -152,8 +152,8 @@ local HEADER_HEIGHT = 25
 local BUTTON_HEIGHT = 22
 local BUTTON_WIDTH = 100
 local CONTEXT_MENU_WIDTH = 200
-local FRAME_LEVEL = 1
-local FRAME_STRATA = "MEDIUM"
+local FRAME_LEVEL = 50
+local FRAME_STRATA = "HIGH"
 
 local GRID_LAYOUT = {
     
@@ -6498,9 +6498,6 @@ beta-0.8.6r:
         Viewer:UpdateRows()
     end)
     
-    if WorldMapFrame then
-        self.window:SetFrameLevel(WorldMapFrame:GetFrameLevel() -1)
-    end
     if pTime then L:ProfileStop("Scanner:ExtractClassToken", pTime) end
 end
 
@@ -8588,6 +8585,32 @@ function Viewer:OnInitialize()
         end)
     end
 
+    -- Opening the world map (M) calls CloseSpecialWindows(), which hides
+    -- UISpecialFrames including Discoveries. Opt out unless the setting says close.
+    if type(CloseSpecialWindows) == "function" and not Viewer._closeSpecialWindowsHooked then
+        Viewer._closeSpecialWindowsHooked = true
+        local originalCloseSpecialWindows = CloseSpecialWindows
+        CloseSpecialWindows = function(...)
+            local window = Viewer.window or _G.LootCollectorViewerWindow
+            local windowName = window and window:GetName()
+            local keepOpen = window and window:IsShown() and windowName
+                and L.db and L.db.profile and L.db.profile.viewer
+                and not L.db.profile.viewer.closeOnWorldMap
+
+            local wasSpecial = false
+            if keepOpen then
+                wasSpecial = removeFromSpecialFrames(windowName)
+            end
+
+            local result = originalCloseSpecialWindows(...)
+
+            if keepOpen and wasSpecial then
+                addToSpecialFrames(windowName)
+            end
+            return result
+        end
+    end
+
     self:UpdateClearAllButton()
     self:UpdateFilterButtonStates()
     
@@ -8638,13 +8661,8 @@ function Viewer:Show()
     self.currentFilter = self.currentFilter or "eq"
     if isCoA and self.currentFilter == "ms" then self.currentFilter = "eq" end
     
-    if WorldMapFrame and WorldMapFrame.GetFrameLevel then
-        local level = WorldMapFrame:GetFrameLevel() - 1
-        if level < 1 then level = 1 end
-        self.window:SetFrameLevel(level)
-    else
-        self.window:SetFrameLevel(FRAME_LEVEL or 1)
-    end
+    self.window:SetFrameStrata(FRAME_STRATA)
+    self.window:SetFrameLevel(FRAME_LEVEL)
 
     self.pendingUpdatesCount = 0
     self:UpdateRefreshButton()

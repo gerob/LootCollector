@@ -247,6 +247,8 @@ local dbDefaults = {
         asyncLoading = true,
         undiscoveredFilter = "TOP",
         worldforgedPhase = 0,
+        -- false = Discoveries stays open when the world map opens (M)
+        closeOnWorldMap = false,
         
         width = 1150,
         height = 674,
@@ -657,7 +659,7 @@ function LootCollector:GetFilters()
     combined.pinSize = ui.pinSize or 16
     combined.minimapPinSize = ui.minimapPinSize or 10
     combined.disableFadeEffect = ui.disableFadeEffect or false
-    combined.showZoneSummaries = false -- Feature disabled (incomplete ZoneRelationshipsC data)
+    combined.showZoneSummaries = ui.showZoneSummaries or false
     combined.hideSearchBar = ui.hideSearchBar or false
     combined.disableProximityList = ui.disableProximityList or false
 	combined.enableChatLinkIntegration = ui.enableChatLinkIntegration ~= false

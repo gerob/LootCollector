@@ -1675,9 +1675,8 @@ local function BuildFilterEasyMenu()
         Map:ToggleSearchUI(show)
     end
   })
-  
-  -- Zone Summary disabled: ZoneRelationshipsC only has Mulgore stub data.
-  -- Keep the draw path gated; do not expose a menu toggle until data is complete.
+
+  addToggle("Show Zone Summary", "showZoneSummaries", menu, true)
 
   do
     local Viewer = L:GetModule("Viewer", true)
@@ -1966,15 +1965,12 @@ function Map:EnsureFilterUI()
             if isVisible then
                 FilterButton:Show()
                 PlaceFilterButton(FilterButton)
-                if LootCollectorViewerWindow then
-                    LootCollectorViewerWindow:SetFrameStrata("BACKGROUND")
-                    LootCollectorViewerWindow:SetFrameLevel(1)
-                end
+                -- Do not demote Discoveries under the map; stay-open is the default.
             else
                 FilterButton:Hide()
                 if LootCollectorViewerWindow then
-                    LootCollectorViewerWindow:SetFrameStrata("MEDIUM")
-                    LootCollectorViewerWindow:SetFrameLevel(53)
+                    LootCollectorViewerWindow:SetFrameStrata("HIGH")
+                    LootCollectorViewerWindow:SetFrameLevel(50)
                 end
             end
         end
@@ -2563,7 +2559,7 @@ function Map:BuildClusterPin(index)
         pin.count = pin:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 		
 		pin.count:SetFont("Fonts\\FRIZQT__.ttf", 16, "OUTLINE")		
-        pin.count:SetPoint("TOP", pin, "TOP")
+        pin.count:SetPoint("CENTER", pin, "CENTER")
         pin.count:SetTextColor(1, 1, 1, 1)
         pin.count:SetShadowOffset(2, -2)
         pin.count:SetShadowColor(0, 0, 0, 1)
@@ -3547,7 +3543,8 @@ function Map:DrawWorldMapPins()
                     local pin = self.clusterPins[clusterPinIndex] or self:BuildClusterPin(clusterPinIndex)
                     clusterPinIndex = clusterPinIndex + 1
                     pin.count:SetText(count)
-                    pin.label:SetText(zoneData.label or "L00Ts")
+                    -- Count only on continent summaries; abbreviations clutter the map.
+                    pin.label:SetText("")
                     
                     pin:ClearAllPoints()
                     pin:SetPoint("CENTER", WorldMapButton, "TOPLEFT", offsetX + zoneData.entrance.x * mapWidth, offsetY + zoneData.entrance.y * -mapHeight)
@@ -3556,7 +3553,12 @@ function Map:DrawWorldMapPins()
                         GameTooltip:AddLine(zoneData.name, 1,1,0); GameTooltip:AddLine(count .. " discoveries in this zone.", 1,1,1)
                         GameTooltip:AddLine("\n|cff00ff00Click to view this zone.|r", .8,.8,.8, true); GameTooltip:Show(); GameTooltip:SetFrameStrata("TOOLTIP") 
                     end)
-                    pin:SetScript("OnClick", function() if SetMapByID then SetMapByID(zoneData.z - 1) end end)
+                    pin:SetScript("OnClick", function()
+                        if SetMapByID then
+                            -- Ascension map IDs use the same SetMapByID offset as subzone clusters.
+                            SetMapByID(zoneData.z - 1)
+                        end
+                    end)
                     pin:Show()
                 end
             end
