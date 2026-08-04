@@ -909,6 +909,11 @@ function ImportExport:ApplyImportString(importString, mode, withOverlays, skipBl
     end
 
     if Core then Core:ScanDatabaseForUncachedItems() end
+
+    local Viewer = L:GetModule("Viewer", true)
+    if Viewer and Viewer.NotifyDatabaseChanged then
+        Viewer:NotifyDatabaseChanged()
+    end
 end
 
 local function CreateEditDialog(name, title, isReadOnly)

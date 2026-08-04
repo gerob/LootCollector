@@ -1000,6 +1000,148 @@ function Viewer:ClearDiscoveriesFilters()
     self:NotifyMapViewerFiltersChanged(true)
 end
 
+-- Starter DB CTA helpers (empty Discoveries list).
+function Viewer:IsDiscoveryStoreEmpty()
+    local discoveries = L.GetDiscoveriesDB and L:GetDiscoveriesDB() or nil
+    return not discoveries or not next(discoveries)
+end
+
+function Viewer:GetStarterDBAvailability()
+    local name, _, _, enabled, loadable, reason = GetAddOnInfo("LootCollector_StarterDB")
+    if reason == "MISSING" or not name or name == "" then
+        return "missing"
+    end
+    if reason == "DISABLED" or enabled == false then
+        return "disabled"
+    end
+    -- Some clients put "enabled" in arg4 and "loadable" in arg5; treat either false as disabled.
+    if loadable == false and enabled ~= true then
+        return "disabled"
+    end
+    return "available"
+end
+
+function Viewer:PromptMergeStarterDatabase()
+    local loaded, reason = LoadAddOn("LootCollector_StarterDB")
+    if _G.LootCollector_OptionalDB_Data and _G.LootCollector_OptionalDB_Data.data then
+        StaticPopup_Show("LOOTCOLLECTOR_MERGE_STARTER_CONFIRM")
+        return
+    end
+    local status = self:GetStarterDBAvailability()
+    if status == "disabled" or reason == "DISABLED" then
+        print("|cffff7f00LootCollector:|r LootCollector_StarterDB is disabled. Enable it in AddOns at character select, then /reload.")
+    elseif status == "missing" or reason == "MISSING" then
+        print("|cffff7f00LootCollector:|r LootCollector_StarterDB is not installed. Install it alongside LootCollector, enable it, then /reload.")
+    else
+        print(string.format("|cffff7f00LootCollector:|r Starter database could not be loaded. Reason: %s", tostring(reason or "unknown")))
+    end
+end
+
+function Viewer:NotifyDatabaseChanged()
+    Cache.discoveriesBuilt = false
+    Cache.discoveriesBuilding = false
+    Cache.lastDiscoveryCount = nil
+    Cache.filteredResults = {}
+    Cache.lastFilterState = nil
+    Cache.uniqueValuesValid = false
+    if self.window and self.window:IsShown() and self.RefreshData then
+        self:RefreshData()
+    end
+end
+
+function Viewer:EnsureEmptyState()
+    if self.emptyStateFrame or not self.window or not self.scrollFrame then return end
+
+    local frame = CreateFrame("Frame", nil, self.window)
+    frame:SetAllPoints(self.scrollFrame)
+    frame:SetFrameStrata(FRAME_STRATA)
+    frame:SetFrameLevel(FRAME_LEVEL + 6)
+    frame:Hide()
+    frame:EnableMouse(false)
+
+    local title = frame:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    title:SetPoint("CENTER", frame, "CENTER", 0, 36)
+    title:SetWidth(420)
+    title:SetJustifyH("CENTER")
+    title:SetTextColor(1, 0.82, 0, 1)
+    frame.title = title
+
+    local body = frame:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    body:SetPoint("TOP", title, "BOTTOM", 0, -10)
+    body:SetWidth(440)
+    body:SetJustifyH("CENTER")
+    body:SetTextColor(0.85, 0.85, 0.90, 1)
+    frame.body = body
+
+    local actionBtn = CreateFrame("Button", nil, frame)
+    actionBtn:SetSize(200, 26)
+    actionBtn:SetPoint("TOP", body, "BOTTOM", 0, -16)
+    actionBtn:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        edgeSize = 1,
+    })
+    actionBtn:SetBackdropColor(0.12, 0.18, 0.28, 0.95)
+    actionBtn:SetBackdropBorderColor(0.35, 0.55, 0.85, 0.95)
+    local bfs = actionBtn:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    bfs:SetPoint("CENTER", 0, 1)
+    bfs:SetTextColor(1, 1, 1, 1)
+    actionBtn:SetFontString(bfs)
+    actionBtn:SetText("Merge Starter Database")
+    actionBtn:HookScript("OnEnter", function(self)
+        self:SetBackdropBorderColor(1, 0.82, 0, 1)
+    end)
+    actionBtn:HookScript("OnLeave", function(self)
+        self:SetBackdropBorderColor(0.35, 0.55, 0.85, 0.95)
+    end)
+    frame.actionBtn = actionBtn
+
+    self.emptyStateFrame = frame
+end
+
+function Viewer:UpdateEmptyState(numFilteredRows)
+    self:EnsureEmptyState()
+    local frame = self.emptyStateFrame
+    if not frame then return end
+
+    if Cache.discoveriesBuilding or (numFilteredRows and numFilteredRows > 0) then
+        frame:Hide()
+        return
+    end
+
+    local storeEmpty = self:IsDiscoveryStoreEmpty()
+    if storeEmpty then
+        local status = self:GetStarterDBAvailability()
+        frame.title:SetText("No discoveries yet")
+        if status == "available" then
+            frame.body:SetText("Your discovery database is empty. Merge the Starter Database to load starter discoveries (same action as Import/Export).")
+            frame.actionBtn:SetText("Merge Starter Database")
+            frame.actionBtn:SetScript("OnClick", function()
+                Viewer:PromptMergeStarterDatabase()
+            end)
+            frame.actionBtn:Show()
+        elseif status == "disabled" then
+            frame.body:SetText("LootCollector_StarterDB is disabled. Enable it in AddOns at character select, then /reload, and open Discoveries again.")
+            frame.actionBtn:Hide()
+        else
+            frame.body:SetText("LootCollector_StarterDB is not installed. Install it alongside LootCollector, enable it at character select, then /reload.")
+            frame.actionBtn:Hide()
+        end
+        frame:Show()
+        return
+    end
+
+    -- Discoveries exist, but filters/search hid everything.
+    frame.title:SetText("Nothing matches your filters")
+    frame.body:SetText("Discoveries are present, but current filters or search hid them. Use Clear (top right), or adjust Filter Map if the world map looks empty too.")
+    frame.actionBtn:SetText("Clear Filters")
+    frame.actionBtn:SetScript("OnClick", function()
+        Viewer:ClearDiscoveriesFilters()
+    end)
+    frame.actionBtn:Show()
+    frame:Show()
+end
+
 -- Refresh map/minimap when Viewer filters change and Filter Map is ON.
 -- force=true rebuilds even when toggling the flag (ON or OFF).
 function Viewer:InvalidateArrowFilterCache()
@@ -2452,47 +2594,6 @@ local function RemoveCacheRowAtIndex(index)
     return removedBase
 end
 
-local function EnsureUndiscoveredPlaceholder(baseID)
-    if not baseID then return end
-    local undGuid = "undiscovered-" .. tostring(baseID)
-    if Cache.discoveriesByGuid[undGuid] then return end
-
-    for i = 1, #Cache.discoveries do
-        local r = Cache.discoveries[i]
-        if r and r.discovery and r.discovery.i and not r.isUndiscovered and not r.isVendor then
-            if L:GetBaseItemID(r.discovery.i) == baseID then
-                return
-            end
-        end
-    end
-
-    local wfClassic = L.WorldforgedList
-    if not wfClassic then return end
-    local inList = false
-    for _, itemID in ipairs(wfClassic) do
-        if itemID and L:GetBaseItemID(itemID) == baseID then
-            inList = true
-            break
-        end
-    end
-    if not inList then return end
-
-    local fakeDiscovery = {
-        i = baseID,
-        c = 0,
-        z = 0,
-        iz = 0,
-        q = 2,
-        isUndiscovered = true,
-    }
-    local row = {}
-    if FillDiscoveryRow(row, undGuid, fakeDiscovery, { isUndiscovered = true, allowDBPurge = false }) then
-        local idx = #Cache.discoveries + 1
-        Cache.discoveries[idx] = row
-        Cache.discoveriesByGuid[undGuid] = idx
-    end
-end
-
 function Viewer:UpdateAllDiscoveriesCache(onCompleteCallback)
     -- FIXED: this entry point used to fill a local scanQueue that
     -- ProcessCacheBuildChunk never read (it consumes self._cacheBuildQueue),
@@ -2546,43 +2647,14 @@ function Viewer:UpdateAllDiscoveriesCacheSync(onCompleteCallback)
     local discoveries = L:GetDiscoveriesDB()
     local vendors = L:GetVendorsDB()
     
-    local discoveredItemIDs = {}
     for guid, discovery in pairs(discoveries or {}) do
         table.insert(self._cacheBuildQueue, { guid = guid, d = discovery, isVendor = false })
-        -- Normalize to the BASE item ID so a discovery recorded under an
-        -- upgraded/scaled variant still suppresses the matching
-        -- "undiscovered" placeholder row (GetUndiscoveredCount already
-        -- normalizes this way; the grid builder didn't).
-        if discovery.i then discoveredItemIDs[L:GetBaseItemID(discovery.i)] = true end
     end
 
-    local wfClassic = L.WorldforgedList
-    if wfClassic then
-        -- Match GetUndiscoveredCount: one placeholder per base ID, keyed by base.
-        local countedBases = {}
-        for _, itemID in ipairs(wfClassic) do
-            if itemID then
-                local baseID = L:GetBaseItemID(itemID)
-                if baseID and not discoveredItemIDs[baseID] and not countedBases[baseID] then
-                    countedBases[baseID] = true
-                    local fakeDiscovery = {
-                        i = baseID,
-                        c = 0,
-                        z = 0,
-                        iz = 0,
-                        q = 2,
-                        isUndiscovered = true
-                    }
-                    table.insert(self._cacheBuildQueue, {
-                        guid = "undiscovered-" .. tostring(baseID),
-                        d = fakeDiscovery,
-                        isVendor = false,
-                        isUndiscovered = true,
-                    })
-                end
-            end
-        end
-    end
+    -- Discoveries lists real pins only. Worldforged catalog gaps are no longer
+    -- injected as synthetic "undiscovered" rows (that filled empty installs with
+    -- ~1800 placeholders and made Undiscovered: Hidden look like a blank bug).
+
     for guid, discovery in pairs(vendors or {}) do
         table.insert(self._cacheBuildQueue, { guid = guid, d = discovery, isVendor = true })
     end
@@ -3000,13 +3072,6 @@ function Viewer:GetFilteredDiscoveries()
 
             if passed and not filterPredicates.columnFilters.duplicates(data) then passed = false end
 
-            if passed and data.isNew then
-                local undiscoveredFilter = L.db.profile.viewer.undiscoveredFilter or "TOP"
-                if undiscoveredFilter == "HIDDEN" then
-                    passed = false
-                end
-            end
-
             if passed then
                 table.insert(currentFiltered, data)
             end
@@ -3016,15 +3081,6 @@ function Viewer:GetFilteredDiscoveries()
     table.sort(currentFiltered, function(a, b)
         if not a or not b then return false end
         if not a.discovery or not b.discovery then return false end
-
-        local undiscoveredFilter = L.db.profile.viewer.undiscoveredFilter or "TOP"
-        if undiscoveredFilter == "TOP" then
-            if a.isNew and not b.isNew then
-                return true
-            elseif not a.isNew and b.isNew then
-                return false
-            end
-        end
 
         if self.lastSeenSortState == "new" then
             local la = tonumber(a.discovery.ls) or 0
@@ -3163,9 +3219,6 @@ function Viewer:GetFilterStateHash()
         _tinsert(filterEntries, concatStrings("deepx:", _tconcat(dsf, "|")))
     end
     
-    local undiscoveredFilter = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.undiscoveredFilter or "TOP"
-    _tinsert(filterEntries, "undiscovered:" .. undiscoveredFilter)
-
     -- Belt-and-suspenders: the phase menu already force-clears the caches,
     -- but include the phase in the hash so no future phase-changing code
     -- path can ever be served a stale filtered list.
@@ -3321,80 +3374,6 @@ function Viewer:UpdateClearAllButton()
         self.clearAllBtn:Hide()
         self.actionsLabel:Show()
     end
-end
-
-function Viewer:GetUndiscoveredCount()
-    local CoreMod = L:GetModule("Core", true)
-
-    -- While the discovery cache is rebuilding, keep the last stable badge
-    -- value so Refresh does not flash the higher fallback WorldforgedList count.
-    if Cache.discoveriesBuilding and self._lastUndiscoveredCount ~= nil then
-        VDebug("GetUndiscoveredCount: hold last=" .. tostring(self._lastUndiscoveredCount) .. " (building)")
-        return self._lastUndiscoveredCount
-    end
-
-    if Cache.discoveriesBuilt and Cache.discoveries then
-        local isCoA = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
-        local count = 0
-        for i = 1, #Cache.discoveries do
-            local data = Cache.discoveries[i]
-            if data and data.isUndiscovered then
-                -- Keep the badge consistent with the list: CoA hides relics.
-                if not (isCoA and data.equipLoc == "INVTYPE_RELIC") then
-                    count = count + 1
-                end
-            end
-        end
-        self._lastUndiscoveredCount = count
-        VDebug("GetUndiscoveredCount: cache path=" .. tostring(count))
-        return count
-    end
-
-    if self._lastUndiscoveredCount ~= nil then
-        VDebug("GetUndiscoveredCount: hold last=" .. tostring(self._lastUndiscoveredCount) .. " (cache not built)")
-        return self._lastUndiscoveredCount
-    end
-
-    local discoveries = L:GetDiscoveriesDB()
-    local discoveredItemIDs = {}
-    if discoveries then
-        for _, discovery in pairs(discoveries) do
-            if discovery.i then
-                local baseID = L:GetBaseItemID(discovery.i)
-                discoveredItemIDs[baseID] = true
-            end
-        end
-    end
-    
-    local isCoA = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
-    local countedBases = {}
-    local count = 0
-    local wfClassic = L.WorldforgedList
-    if wfClassic then
-        for _, itemID in ipairs(wfClassic) do
-            if itemID then
-                local baseID = L:GetBaseItemID(itemID)
-                if not discoveredItemIDs[baseID] and not countedBases[baseID] then
-                    local skip = false
-                    if isCoA then
-                        local name, _, _, _, _, _, _, _, eqLoc = GetItemInfo(baseID)
-                        -- Only skip known relics; unknown equipLoc matches cache
-                        -- (cache skips only when equipLoc == INVTYPE_RELIC).
-                        if eqLoc == "INVTYPE_RELIC" then
-                            skip = true
-                        end
-                    end
-                    if not skip then
-                        countedBases[baseID] = true
-                        count = count + 1
-                    end
-                end
-            end
-        end
-    end
-    self._lastUndiscoveredCount = count
-    VDebug("GetUndiscoveredCount: fallback path=" .. tostring(count))
-    return count
 end
 
 function Viewer:BuildTypeFilterEasyMenu()
@@ -4125,22 +4104,6 @@ function Viewer:UpdateFilterButtonStates()
         self.presetsFilterBtn:SetShown(true)
     end
 
-    if self.undiscoveredFilterBtn then
-        local current = L.db.profile.viewer.undiscoveredFilter or "TOP"
-        local count = self:GetUndiscoveredCount()
-        if current == "TOP" then
-            setButtonTextColor(self.undiscoveredFilterBtn, 1, 0.8, 0.2) 
-            self.undiscoveredFilterBtn:SetText("Undiscovered: Top (" .. count .. ")")
-        elseif current == "MIXED" then
-            setButtonTextColor(self.undiscoveredFilterBtn, 1, 0.8, 0.2) 
-            self.undiscoveredFilterBtn:SetText("Undiscovered: Mixed (" .. count .. ")")
-        else
-            setButtonTextColor(self.undiscoveredFilterBtn, 1, 1, 1) 
-            self.undiscoveredFilterBtn:SetText("Undiscovered: Hidden (" .. count .. ")")
-        end
-        self.undiscoveredFilterBtn:SetShown(isEq)
-    end
-
     local lastDropdown = self.filtersLabel
     if lastDropdown then
         local dropdownBtns = {
@@ -4172,7 +4135,6 @@ function Viewer:UpdateFilterButtonStates()
         local quickBtns = {
             self.lootedFilterBtn,
             self.lsFilterBtn,
-            self.undiscoveredFilterBtn,
         }
         for _, btn in ipairs(quickBtns) do
             if btn and btn:IsShown() then
@@ -5628,9 +5590,9 @@ beta-0.8.6r:
         end)
     end)
 
-    -- Top strip (tab row): Looted / Date / Undiscovered
+    -- Top strip (tab row): Looted / Date
     local quickFiltersFrame = CreateFrame("Frame", "LootCollectorQuickFiltersFrame", window, "BackdropTemplate")
-    quickFiltersFrame:SetSize(340, 24)
+    quickFiltersFrame:SetSize(200, 24)
     quickFiltersFrame:SetFrameStrata(FRAME_STRATA)
     quickFiltersFrame:SetFrameLevel(FRAME_LEVEL + 1)
     quickFiltersFrame:SetPoint("LEFT", bmvBtn, "RIGHT", 20, 0)
@@ -5816,26 +5778,6 @@ beta-0.8.6r:
     end)
     lsFilterBtn:RegisterForClicks("LeftButtonUp")
     
-    local undiscoveredFilterBtn = CreateFlatFilterBtn(quickFiltersFrame, "Undiscovered: Top", 170, lsFilterBtn, "RIGHT", 3)
-    undiscoveredFilterBtn:SetScript("OnClick", function(self, button)
-        local current = L.db.profile.viewer.undiscoveredFilter or "TOP"
-        local nextState
-        if current == "TOP" then
-            nextState = "MIXED"
-        elseif current == "MIXED" then
-            nextState = "HIDDEN"
-        else
-            nextState = "TOP"
-        end
-        L.db.profile.viewer.undiscoveredFilter = nextState
-        Viewer.currentPage = 1
-        Cache.filteredResults = {}
-        Cache.lastFilterState = nil
-        Viewer:RefreshData()
-        Viewer:UpdateFilterButtonStates()
-    end)
-    undiscoveredFilterBtn:RegisterForClicks("LeftButtonUp")
-    
     self.sourceFilterBtn = sourceFilterBtn
     self.qualityFilterBtn = qualityFilterBtn
     self.statsFilterBtn = statsFilterBtn
@@ -5849,7 +5791,6 @@ beta-0.8.6r:
     self.duplicatesFilterBtn = duplicatesFilterBtn
     self.presetsFilterBtn = presetsFilterBtn
     self.lsFilterBtn = lsFilterBtn
-    self.undiscoveredFilterBtn = undiscoveredFilterBtn
     self.quickFiltersFrame = quickFiltersFrame
 
     -- Search row sits below the dropdown filter row
@@ -7540,18 +7481,7 @@ function Viewer:UpdateRows()
                     row.highlight:Hide()
                 end
 
-                local isSeparator = false
-                local undiscoveredFilter = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.undiscoveredFilter or "TOP"
-                if undiscoveredFilter == "TOP" and data.isNew then
-                    local nextData = discoveries[i + offset + 1]
-                    if nextData and not nextData.isNew then
-                        isSeparator = true
-                    end
-                end
-
-                if isSeparator and row.separatorLine then
-                    row.separatorLine:Show()
-                elseif row.separatorLine then
+                if row.separatorLine then
                     row.separatorLine:Hide()
                 end
                 
@@ -7912,6 +7842,8 @@ function Viewer:UpdateRows()
         end
     end
 
+    self:UpdateEmptyState(self.totalItems or 0)
+
     if pTime then L:ProfileStop("Viewer:UpdateRows", pTime) end 
 end
 
@@ -8168,12 +8100,6 @@ function Viewer:AddDiscoveryToCache(guid, discovery)
 
     if not isVendor and discovery.i then
         AdjustDuplicateCount(discovery.i, 1)
-        local baseID = L:GetBaseItemID(discovery.i)
-        local undGuid = "undiscovered-" .. tostring(baseID)
-        local undIdx = Cache.discoveriesByGuid[undGuid]
-        if undIdx then
-            RemoveCacheRowAtIndex(undIdx)
-        end
     end
 
     InvalidateViewerFilterCache()
@@ -8192,12 +8118,9 @@ function Viewer:RemoveDiscoveryFromCache(guid)
 
     local row = Cache.discoveries[idx]
     local wasVendor = row.isVendor
-    local removedBase = RemoveCacheRowAtIndex(idx)
+    RemoveCacheRowAtIndex(idx)
     if not wasVendor then
         Cache.lastDiscoveryCount = math.max(0, (Cache.lastDiscoveryCount or 1) - 1)
-        if removedBase then
-            EnsureUndiscoveredPlaceholder(removedBase)
-        end
     end
 
     InvalidateViewerFilterCache()

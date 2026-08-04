@@ -151,6 +151,7 @@ local function ensureDefaults()
     if p.viewer.asyncLoading == nil then p.viewer.asyncLoading = true end
     if p.viewer.closeOnWorldMap == nil then p.viewer.closeOnWorldMap = false end
     if p.perCharacterFavorites == nil then p.perCharacterFavorites = false end
+    if p.hideLootCollectorWelcome == nil then p.hideLootCollectorWelcome = false end
     p.favorites = p.favorites or {}
     if L.db.char then
         L.db.char.favorites = L.db.char.favorites or {}
@@ -1024,6 +1025,22 @@ local function buildOptions()
 										print("|cffffff00LootCollector|r Item cache processing will stop after current item.")
 									end
 								end
+							end
+						end,
+					},
+					showWelcomeTips = {
+						type = "toggle",
+						name = "Show welcome tips on login",
+						order = 2,
+						desc = "Show the LootCollector quick-start popup shortly after login. Uncheck Don't show this again on the popup to keep seeing it, or turn this back on here anytime.",
+						get = function()
+							return not (L.db and L.db.profile and L.db.profile.hideLootCollectorWelcome)
+						end,
+						set = function(_, v)
+							if not L.db or not L.db.profile then return end
+							L.db.profile.hideLootCollectorWelcome = not v
+							if v and L.MaybeShowWelcomeTips then
+								L:MaybeShowWelcomeTips()
 							end
 						end,
 					},

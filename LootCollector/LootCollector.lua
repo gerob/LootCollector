@@ -165,6 +165,42 @@ StaticPopupDialogs["LOOTCOLLECTOR_OPTIONAL_DB_UPDATE"] = {
   hideOnEscape = 1,
 }
 
+StaticPopupDialogs["LOOTCOLLECTOR_WELCOME"] = {
+  text = "|cffffff00LootCollector quick start|r\n\n" ..
+    "• Open Discoveries: minimap button or |cffffffff/lcv|r\n" ..
+    "• Filter Map: apply your Discoveries filters to map/minimap pins\n" ..
+    "• Sync: Settings (/lc) → Behavior & Sharing → Enable Sharing + Public Channel\n" ..
+    "• Empty Discoveries? Merge Starter Database (Import/Export), or use the button on the empty list\n\n" ..
+    "You can turn this tip back on in Settings → Behavior & Sharing.",
+  button1 = "Got it",
+  hasCheckBox = true,
+  OnShow = function(self)
+    if self.CheckBox then
+      self.CheckBox:SetText("Don't show this again")
+      self.CheckBox:SetChecked(true)
+      self.CheckBox:Show()
+    end
+  end,
+  OnAccept = function(self)
+    local hide = true
+    if self.CheckBox then
+      hide = self.CheckBox:GetChecked() and true or false
+    end
+    if hide and LootCollector.db and LootCollector.db.profile then
+      LootCollector.db.profile.hideLootCollectorWelcome = true
+    end
+  end,
+  OnHide = function(self)
+    if self.CheckBox then
+      self.CheckBox:SetChecked(false)
+    end
+  end,
+  timeout = 0,
+  whileDead = 1,
+  hideOnEscape = 1,
+  preferredIndex = 3,
+}
+
 local meCollectedCache = {}
 local meCollectedCacheTime = {}
 local ME_COLLECTED_CACHE_DURATION = 240
@@ -174,6 +210,7 @@ local dbDefaults = {
         enabled = true,
         paused = false,
         offeredOptionalDB = nil,
+        hideLootCollectorWelcome = false,
         minQuality = 2,
         favorites = {},
         perCharacterFavorites = false,
@@ -245,7 +282,6 @@ local dbDefaults = {
         inlineVendorView = false,
         splitRatio = 0.64,
         asyncLoading = true,
-        undiscoveredFilter = "TOP",
         worldforgedPhase = 0,
         -- false = Discoveries stays open when the world map opens (M)
         closeOnWorldMap = false,
@@ -1966,6 +2002,14 @@ function LootCollector:ToggleAllDiscoveries()
     end
 end
 
+function LootCollector:MaybeShowWelcomeTips()
+    if self.LEGACY_MODE_ACTIVE then return end
+    if not (self.db and self.db.profile) then return end
+    if self.db.profile.hideLootCollectorWelcome then return end
+    if StaticPopup_Visible and StaticPopup_Visible("LOOTCOLLECTOR_WELCOME") then return end
+    StaticPopup_Show("LOOTCOLLECTOR_WELCOME")
+end
+
 function LootCollector:IsZoneIgnored()
     if not (self.db and self.db.profile and self.db.profile.ignoreZones) then return false end
     local zoneName = GetRealZoneText()
@@ -2000,7 +2044,15 @@ function LootCollector:OnEnable()
         self:EnsureDatabaseInitialized()
         self:DelayedChannelInit()
         
-        self:EvaluateAutoPause() 
+        self:EvaluateAutoPause()
+
+        -- After DB is ready; before the optional Starter DB update prompt (~5s).
+        if not self._welcomeTipsScheduled then
+            self._welcomeTipsScheduled = true
+            self:ScheduleAfter(2.5, function()
+                LootCollector:MaybeShowWelcomeTips()
+            end)
+        end
     end)
     
     
