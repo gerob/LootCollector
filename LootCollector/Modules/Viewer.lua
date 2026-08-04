@@ -1370,7 +1370,18 @@ function Viewer:EnsureVendorInventoryPanel()
         line:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
 
         line:SetScript("OnClick", function(self)
+            local Map = L:GetModule("Map", true)
             if IsShiftKeyDown() and self.parentVendorData then
+                if Map and Map.IsChatEditBoxOpen and Map:IsChatEditBoxOpen() then
+                    if self.itemLink then
+                        if Map.LinkDiscoveryItemToChat then
+                            Map:LinkDiscoveryItemToChat(nil, self.itemLink)
+                        elseif HandleModifiedItemClick then
+                            HandleModifiedItemClick(self.itemLink)
+                        end
+                    end
+                    return
+                end
                 Viewer:ShowOnMap(self.parentVendorData)
                 return
             end
@@ -6700,7 +6711,20 @@ function Viewer:CreateRows(count)
                 end
 
                 if IsShiftKeyDown() and data then
-                    Viewer:ShowOnMap(data)
+                    local Map = L:GetModule("Map", true)
+                    if Map and Map.IsChatEditBoxOpen and Map:IsChatEditBoxOpen() then
+                        local overrideLink = nil
+                        local displayItemID = data.displayItemID
+                        if displayItemID and tonumber(displayItemID) and tonumber(displayItemID) > 0 then
+                            local _, link = GetItemInfo(displayItemID)
+                            overrideLink = link or ("item:" .. displayItemID)
+                        end
+                        if Map.LinkDiscoveryItemToChat then
+                            Map:LinkDiscoveryItemToChat(data.discovery, overrideLink)
+                        end
+                    else
+                        Viewer:ShowOnMap(data)
+                    end
                     return
                 end
 
@@ -7119,6 +7143,16 @@ function Viewer:CreateRows(count)
                 local isLooted = Viewer:IsLootedByChar(self.discoveryData.guid)
                 local buttons = {
                     { text = "Show", onClick = function() Viewer:ShowOnMap(self.discoveryData) end },
+                    {
+                        text = "Show to... (map ping)",
+                        onClick = function()
+                            local Map = L:GetModule("Map", true)
+                            local d = self.discoveryData and self.discoveryData.discovery
+                            if Map and Map.OpenShowToDialog and d then
+                                Map:OpenShowToDialog(d)
+                            end
+                        end
+                    },
                     { text = isLooted and "Set as unlooted" or "Set as looted", onClick = function() Viewer:ToggleLootedState(self.discoveryData.guid, self.discoveryData) end },
                     { text = "Delete", onClick = function() Viewer:ConfirmDelete(self.discoveryData) end },
                 }
@@ -7127,14 +7161,16 @@ function Viewer:CreateRows(count)
 
             nameFrame.LinkItemToChat = function(self)
                 if not self.discoveryData then return end
-                local itemID = self.discoveryData.displayItemID or (self.discoveryData.discovery and self.discoveryData.discovery.i)
-                if not itemID then return end
-                local _, itemLink = GetItemInfo(itemID)
-                if not itemLink then
-                    itemLink = "item:" .. itemID
+                local Map = L:GetModule("Map", true)
+                local d = self.discoveryData.discovery
+                local overrideLink = nil
+                local displayItemID = self.discoveryData.displayItemID
+                if displayItemID and tonumber(displayItemID) and tonumber(displayItemID) > 0 then
+                    local _, link = GetItemInfo(displayItemID)
+                    overrideLink = link or ("item:" .. displayItemID)
                 end
-                if IsShiftKeyDown() and ChatFrameEditBox and ChatFrameEditBox:IsShown() then
-                    ChatFrameEditBox:Insert(itemLink)
+                if Map and Map.LinkDiscoveryItemToChat then
+                    Map:LinkDiscoveryItemToChat(d, overrideLink)
                 end
             end
             

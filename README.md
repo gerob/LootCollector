@@ -57,7 +57,7 @@ The Starter DB and Custom Import addons load on demand with LootCollector. If yo
 
 - **Automatic sharing:** Qualifying discoveries can sync with other LootCollector users on the public channel (when sharing is enabled).
 - **Real-time updates:** Toasts and map updates as others find items.
-- **“Show to…”:** Right-click a pin → **Show to…** to ping a friend; if they accept, it pulses on their map.
+- **“Show to…”:** Right-click a pin (or a Discoveries row) → **Show to…** to whisper a map ping to another LootCollector user; if they accept, it pulses on their map.
 
 ![Show to menu](Docs/Images/showto.png)
 
@@ -75,8 +75,11 @@ The Starter DB and Custom Import addons load on demand with LootCollector. If yo
 
 ## Essential Shortcuts
 
-- **Shift + Left Click** (on a discovery): Pan the world map to that location with a pulse highlight.
-- **Ctrl + Alt + Left Click:** Link the item and coordinates into your active chat (party, guild, or whisper).
+- **Shift + Left Click** (chat open): Insert the item link into chat (Discoveries row or map/minimap pin).
+- **Shift + Left Click** (chat closed, on a discovery): Pan the world map to that location with a pulse highlight.
+- **Ctrl + Left Click** (on a discovery): Insert the item link into chat (opens chat if needed).
+- **Ctrl + Right Click** (on a discovery): Insert item + zone + coordinates into chat.
+- **Ctrl + Alt + Right Click** (on a map pin): Insert item + zone + coordinates into chat.
 - **Alt + Mouseover:** Extra discovery details in the tooltip.
 - **Ctrl + Mouseover:** Soften crowded pin tooltips so you can pick one target.
 - **Shift + Left Click** (minimap button): Drag to reposition the button.
@@ -111,7 +114,7 @@ Databases are per realm. Import a community string with `/lcimport`, sync with f
 
 #### How do I send one specific location to a friend?
 
-Right-click the pin → **Show to…** → their character name. They get a prompt to show it on their map.
+Right-click the pin (or a Discoveries row) → **Show to… (map ping)** → their character name. They get a prompt to show it on their map.
 
 #### Why did a pin fade or disappear?
 

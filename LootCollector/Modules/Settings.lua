@@ -330,7 +330,7 @@ local function buildOptions()
 				args = {
 					mapNote = {
 						type = "description",
-						name = "Many day-to-day pin filters also live on the World Map filter menu. Use Discoveries (/lcv) with Filter Map for text search and richer filters.",
+						name = "Many day-to-day pin filters also live on the World Map filter menu. Use Discoveries (/lcv) with Filter Map for text search and richer filters.\n\nShift-click a discovery or map pin while chat is open to insert the item link.",
 						order = 0.01,
 					},
 					hibernationHeader = {

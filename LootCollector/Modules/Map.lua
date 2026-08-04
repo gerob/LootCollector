@@ -935,6 +935,63 @@ local function PasteShareTextToChat(d)
     end
 end
 
+-- True when a chat edit box is open (cursor ready for typing / shift-click linking).
+function Map:IsChatEditBoxOpen()
+    local candidates = {
+        ChatFrame1EditBox,
+        ChatFrameEditBox,
+        DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.editBox,
+    }
+    for i = 1, #candidates do
+        local box = candidates[i]
+        if box then
+            if box.IsShown and box:IsShown() then return true end
+            if box.IsVisible and box:IsVisible() then return true end
+        end
+    end
+    return false
+end
+
+-- Insert a discovery's item hyperlink into chat (WoW shift-click style).
+-- overrideLink: optional pre-resolved link (e.g. Viewer WF phase display).
+-- Returns true if a link was inserted or chat was opened with the link.
+function Map:LinkDiscoveryItemToChat(d, overrideLink)
+    local link = overrideLink
+    if type(link) ~= "string" or link == "" then
+        link = GetDiscoveryItemLink(d)
+    end
+    if not link then return false end
+
+    -- Standard WoW path when chat is open and Shift (CHATLINK) is held.
+    if self:IsChatEditBoxOpen() and HandleModifiedItemClick
+        and IsModifiedClick and IsModifiedClick("CHATLINK") then
+        HandleModifiedItemClick(link)
+        return true
+    end
+
+    if ChatEdit_InsertLink and ChatEdit_InsertLink(link) then
+        return true
+    end
+
+    local box = nil
+    if ChatFrame1EditBox and ChatFrame1EditBox.IsVisible and ChatFrame1EditBox:IsVisible() then
+        box = ChatFrame1EditBox
+    elseif ChatFrameEditBox and ChatFrameEditBox.IsShown and ChatFrameEditBox:IsShown() then
+        box = ChatFrameEditBox
+    end
+    if box and box.Insert then
+        box:Insert(link)
+        return true
+    end
+
+    if ChatFrame_OpenChat then
+        ChatFrame_OpenChat(link)
+        return true
+    end
+
+    return false
+end
+
 function Map:ShareDiscoveryToChat(d, target)
     local msg = BuildDiscoveryShareText(d)
     if not msg then return end
@@ -1453,7 +1510,11 @@ function Map:OpenPinMenu(anchorFrame)
     wipe(menuList)
     table.insert(menuList, { text = tostring(name), isTitle = true, notCheckable = true })
     table.insert(menuList, { text = "Navigate here", notCheckable = true, func = function() NavigateHere(d) end })
-    table.insert(menuList, { text = "Show to...", notCheckable = true, func = function() Map:OpenShowToDialog(d) end })
+    table.insert(menuList, {
+        text = "Show to... (map ping)",
+        notCheckable = true,
+        func = function() Map:OpenShowToDialog(d) end
+    })
     
     
     table.insert(menuList, { text = "", notCheckable = true, disabled = true })
@@ -2248,17 +2309,16 @@ function Map:BuildPin()
     local d = self.discovery
     if not d then return end
 
-    if IsControlKeyDown() and IsAltKeyDown() and button == "RightButton" then
-        if d.il then
-            local zoneName = L.ResolveZoneDisplay(d.c, d.z, d.iz)
-            local coords = string.format("%.1f, %.1f", (d.xy.x or 0) * 100, (d.xy.y or 0) * 100)
-            local msg = string.format("%s @ %s (%s)", d.il, zoneName, coords)
-            if ChatFrame1EditBox:IsVisible() then
-                ChatFrame1EditBox:Insert(msg)
-            else
-                ChatFrame_OpenChat(msg)
-            end
+    -- Shift+Left with chat open: insert item link (standard WoW linking).
+    if button == "LeftButton" and IsShiftKeyDown() and not IsAltKeyDown()
+        and Map:IsChatEditBoxOpen() then
+        if Map:LinkDiscoveryItemToChat(d) then
+            return
         end
+    end
+
+    if IsControlKeyDown() and IsAltKeyDown() and button == "RightButton" then
+        PasteShareTextToChat(d)
         return 
     elseif IsShiftKeyDown() and IsAltKeyDown() and button == "LeftButton" then
         Map:OpenShowToDialog(d)
@@ -2280,8 +2340,8 @@ function Map:BuildPin()
             if ProximityList and ProximityList.ShowVendorInventory then
                 ProximityList:ShowVendorInventory(d)
             end
-        elseif IsControlKeyDown() and d.il then
-            ChatFrame1EditBox:Insert(d.il)
+        elseif IsControlKeyDown() then
+            Map:LinkDiscoveryItemToChat(d)
         end
     end
   end)
@@ -2364,6 +2424,13 @@ local function EnsureMmPin(i)
   end)
   f:SetScript("OnLeave", function(self)
     GameTooltip:Hide()
+  end)
+  f:SetScript("OnMouseUp", function(self, button)
+    local d = self.discovery
+    if not d or button ~= "LeftButton" then return end
+    if IsShiftKeyDown() and not IsAltKeyDown() and Map:IsChatEditBoxOpen() then
+      Map:LinkDiscoveryItemToChat(d)
+    end
   end)
   f:Hide()
   Map._mmPins[i] = f
