@@ -12,9 +12,46 @@ Arrow.currentTarget = nil
 Arrow.manualTarget = nil  
 Arrow.tomtomUID = nil
 Arrow.enabled = false 
+Arrow.lastTrackedTarget = nil
 
 Arrow.sessionSkipList = {}
 Arrow._scanKey = nil
+
+local function SnapshotTrackedTarget(d)
+    if not d or type(d) ~= "table" or not d.g or not d.xy then return nil end
+    return {
+        g = d.g,
+        i = d.i,
+        il = d.il,
+        xy = d.xy,
+        c = d.c,
+        z = d.z,
+        iz = tonumber(d.iz) or 0,
+        dt = d.dt,
+        onHold = d.onHold,
+        o = d.o,
+        fp = d.fp,
+        bySelf = d.bySelf,
+        isLocal = d.isLocal,
+    }
+end
+
+function Arrow:RememberTrackedTarget(d)
+    local snap = SnapshotTrackedTarget(d)
+    if snap then
+        self.lastTrackedTarget = snap
+    end
+end
+
+-- Prefer the live DB record when resuming so looted/onHold state stays current.
+function Arrow:ResolveTrackedTarget(snap)
+    if not snap or not snap.g then return nil end
+    local db = L:GetDiscoveriesDB()
+    local vendors = L:GetVendorsDB()
+    local live = (db and db[snap.g]) or (vendors and vendors[snap.g])
+    if live and live.xy then return live end
+    return snap
+end
 
 local function isMine(rec)
     local me = UnitName and UnitName("player")
@@ -226,6 +263,7 @@ function Arrow:NavigateTo(discovery)
     end
     self.enabled=true
     self.manualTarget=discovery
+    self:RememberTrackedTarget(discovery)
     self:UpdateArrow(true)
     self:StartUpdates()
 end
@@ -238,16 +276,36 @@ function Arrow:Show()
         return 
     end
     self.enabled=true
-    self.manualTarget=nil
+    self.waypointFailed=nil
+    self._scanKey=nil
+    self._invalidWaypointTicks=nil
+
+    -- Resume the last tracked discovery even if it is in another zone.
+    -- Fall back to in-zone auto-pick when there is nothing to resume.
+    local resume = self.lastTrackedTarget and self:ResolveTrackedTarget(self.lastTrackedTarget)
+    if resume and self:CanNavigateRecord(resume) then
+        self.manualTarget = resume
+    else
+        self.manualTarget = nil
+    end
+
     self:UpdateArrow(true)
     self:StartUpdates() 
 end
 
 function Arrow:Hide() 
     L._debug("Arrow", "Hide() called.")
+    -- Keep lastTrackedTarget so /lcarrow can resume cross-zone navigation.
+    local active = self.manualTarget or self.currentTarget
+    if active then
+        self:RememberTrackedTarget(active)
+    end
     self.enabled=false
     self.manualTarget=nil
     self.currentTarget=nil
+    self.waypointFailed=nil
+    self._scanKey=nil
+    self._invalidWaypointTicks=nil
     self:StopUpdates()
     self:ClearTomTomWaypoint() 
 end
@@ -255,14 +313,23 @@ end
 function Arrow:Toggle() 
     L._debug("Arrow", "Toggle() called. Current state: " .. (self.enabled and "Enabled" or "Disabled"))
     if self.enabled then 
-        self:Hide() 
+        self:Hide()
+        print("|cff00ff00LootCollector:|r Navigation arrow off.")
     else 
-        self:Show() 
+        self:Show()
+        if not self.enabled then
+            return
+        end
+        if self.tomtomUID or self.currentTarget or self.manualTarget then
+            print("|cff00ff00LootCollector:|r Navigation arrow on.")
+        else
+            print("|cffff7f00LootCollector:|r Arrow enabled, but nothing to track. Navigate to a pin, or move to a zone with matching discoveries.")
+        end
     end 
 end
 
 function Arrow:SlashCommandHandler(msg)
-    msg = msg or ""
+    msg = msg and msg:match("^%s*(.-)%s*$") or ""
     if msg == "clearskip" then
         self:ClearSessionSkipList()
     else
@@ -516,7 +583,10 @@ function Arrow:UpdateArrow(forceUpdate)
                 end
                 self:ClearTomTomWaypoint()
                 self.currentTarget = nil
-                return
+                self._scanKey = nil
+                -- Pick the next-nearest target instead of leaving the arrow blank.
+                self:FindBestTarget()
+                targetThisUpdate = self.currentTarget
             end
         end
     end
@@ -534,25 +604,31 @@ function Arrow:UpdateArrow(forceUpdate)
     elseif not self.tomtomUID and newTargetGUID and not self.waypointFailed then
         needsReapply = true
     elseif self.tomtomUID then
+        -- TomTom can report a just-created (or map-changed) waypoint as invalid.
+        -- Re-apply a couple of times while enabled; do not Hide() (that broke /lcarrow
+        -- toggle-on). Use /lcarrow to dismiss intentionally.
         if _G.TomTom and _G.TomTom.IsValidWaypoint and not _G.TomTom:IsValidWaypoint(self.tomtomUID) then
-            L._debug("Arrow:UpdateArrow", "User deleted TomTom waypoint manually. Disabling Arrow.")
-            if newTargetGUID then
-                self.sessionSkipList[newTargetGUID] = true
-            end
-            self:Hide()
-            return
-        end
-
-        local ttDist = TT_GetDistanceToWaypoint(self.tomtomUID)
-        if not ttDist then
-            self._ttMissingTicks = (self._ttMissingTicks or 0) + 1
-            if self._ttMissingTicks > 3 then
-                L._debug("Arrow:Resurrection", "CRITICAL: Astrolabe glitch confirmed. Forcefully resurrecting the TomTom waypoint!")
+            self._invalidWaypointTicks = (self._invalidWaypointTicks or 0) + 1
+            L._debug("Arrow:UpdateArrow", "TomTom waypoint invalid (tick " .. self._invalidWaypointTicks .. ").")
+            self.tomtomUID = nil
+            if self._invalidWaypointTicks <= 2 then
                 needsReapply = true
-                self._ttMissingTicks = 0
+            else
+                self.waypointFailed = true
             end
         else
-            self._ttMissingTicks = 0
+            self._invalidWaypointTicks = 0
+            local ttDist = TT_GetDistanceToWaypoint(self.tomtomUID)
+            if not ttDist then
+                self._ttMissingTicks = (self._ttMissingTicks or 0) + 1
+                if self._ttMissingTicks > 3 then
+                    L._debug("Arrow:Resurrection", "CRITICAL: Astrolabe glitch confirmed. Forcefully resurrecting the TomTom waypoint!")
+                    needsReapply = true
+                    self._ttMissingTicks = 0
+                end
+            else
+                self._ttMissingTicks = 0
+            end
         end
     end
 
@@ -587,6 +663,7 @@ function Arrow:UpdateArrow(forceUpdate)
         
         if self.tomtomUID then 
             self.waypointFailed = nil
+            self._invalidWaypointTicks = 0
             TT_SetCrazyArrow(self.tomtomUID, itemName) 
             L._debug("Arrow:UpdateArrow", "Successfully set TomTom waypoint. New UID: " .. tostring(self.tomtomUID))
         else
@@ -594,12 +671,17 @@ function Arrow:UpdateArrow(forceUpdate)
             L._debug("Arrow:UpdateArrow", "Failed to set TomTom waypoint (TT_AddZWaypoint returned nil). Blocked retries.")
         end
     end
+
+    if self.manualTarget or self.currentTarget then
+        self:RememberTrackedTarget(self.manualTarget or self.currentTarget)
+    end
 end
 
 function Arrow:ClearTarget()
     self:ClearTomTomWaypoint()
     self.currentTarget = nil
-    self.manualTarget = nil        
+    self.manualTarget = nil
+    self.lastTrackedTarget = nil
     self._ttMissingTicks = 0 
 end
 
@@ -665,6 +747,7 @@ function Arrow:PointToRecordV5(rec)
     }
 
     self.enabled = true
+    self:RememberTrackedTarget(self.manualTarget)
 
     if self.UpdateArrow then
         self:UpdateArrow(true)
