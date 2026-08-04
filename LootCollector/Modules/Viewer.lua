@@ -4576,6 +4576,12 @@ function Viewer:CreateWindow()
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT", 0, -2)
         GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
+Version 1.0.4r-beta:
+- Welcome tips; empty Discoveries Starter DB CTA; Sync hover tooltip.
+- Zone Summary map badges; Magnify-safe map filter button; Settings cleanup.
+- Shift-click chat linking; Show to… from Discoveries; removed map search bar.
+- /lcarrow toggle fix + resume last tracked discovery across zones.
+
 Version 1.0.3r-beta:
 - Two-row Discoveries filters; Stats filter chips; filter Presets (save/load/delete).
 - Sync status on Viewer + minimap (Quiet/Busy/Suspended); Enhanced WF Tooltip in Settings.

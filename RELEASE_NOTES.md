@@ -1,22 +1,24 @@
-# LootCollector 1.0.3r-beta
+# LootCollector 1.0.4r-beta
 
 ## Features added
 
-- **Two-row Discoveries filters** — Everyday toggles stay on the top row; Source, Quality, Type, Slots, Usable By, Favorites, Enchant, and related filters sit on a second row so the list is easier to scan.
-- **Stats filter** — Pick common tooltip stats from a categorized menu; each pick adds or removes a search chip.
-- **Filter Presets** — Save, load, and delete up to ten named filter setups from the Discoveries window.
-- **Clearer sync status** — The Viewer shows a small Sync line (Quiet through Extreme, or Suspended when traffic protection pauses the channel). The minimap tooltip uses the same wording.
-- **Enhanced WF Tooltip in Settings** — Turn Worldforged upgrade lines on or off under Settings → Viewer Setup (same option as the map menu and `/lcwf`).
-- **Reporter addon version on discoveries** — When a find is shared, which addon version reported it is stored and shown on Alt-tooltips and `/lcdiag`.
+- **Zone Summary** — Continent / parent-zone discovery count badges on the world map (map filter menu → Show Zone Summary).
+- **Empty Discoveries Starter DB CTA** — When your discovery store is empty (not merely filtered), Discoveries offers a one-click merge of the bundled Starter Database.
+- **Welcome tips on login** — Dismissible quick-start popup for new installs; re-enable under Settings → Behavior & Sharing.
+- **Shift-click chat linking** — With chat open, Shift-click a Discoveries row or map/minimap pin to insert the item link (same muscle memory as bag items). Ctrl+Left also links from Discoveries.
+- **Show to… from Discoveries** — Right-click a discovery row for a map ping to another LootCollector user (same as map pins).
+- **Sync status tooltip** — Hover the Discoveries Sync label for channel join/leave guidance.
 
-## Performance improvements
+## Quality of life
 
-- **Faster Discoveries Refresh** — New sync updates land in a live list cache; Refresh usually only refilters instead of rebuilding everything.
-- **Less work at login** — Worldforged list warming waits until you open Discoveries, so login hitches less.
-- **Smoother busy channels** — Public sync queues handle heavy traffic without the old cost of shuffling every waiting message each time one is sent or received.
+- **Settings cleanup** — Grouped Map & Minimap, Toasts, Discoveries Window, Behavior & Sharing, Advanced, and About; clearer labels; Mystic options hidden on CoA.
+- **Map filter menu** — Cleaner Display / Hide / Show layout; retired the redundant world-map search bar (use Discoveries + Filter Map instead).
+- **Map filter button** — Anchored to World Map chrome so Magnify/Mapster zoom no longer drifts the button.
+- **README** — Install-first guide (three folders, common mistakes), then features, then troubleshooting.
 
 ## Bug fixes
 
-- **Arrow with Filter Map** — Auto-track again follows the same filtered pins you see on the map (it no longer depended on whatever Discoveries tab was open).
-- **Decay and silent cleanup** — Removed discoveries are taken out of the zone index properly, so maps and counts stay consistent.
-- **Database version key** — Saved data uses one schema version field; older duplicate keys are cleaned up on load.
+- **/lcarrow toggle** — Turning the navigation arrow back on no longer fails after TomTom waypoint churn; invalid waypoints are reapplied instead of silently disabling.
+- **Cross-zone arrow resume** — `/lcarrow` remembers the last tracked discovery and resumes it even when you are in another zone.
+- **ESC + Discoveries** — ESC closes Discoveries when the map is closed (keep-open-with-map no longer blocks ESC incorrectly).
+- **Discoveries strata** — Viewer sits above low UI / minimap chrome so it stays clickable.

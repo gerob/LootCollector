@@ -1,3 +1,28 @@
+## Version 1.0.4r-beta
+
+### Onboarding & Discoveries
+- **Welcome tips:** Dismissible login popup with quick-start guidance; Settings → Behavior & Sharing to show again.
+- **Empty-store Starter DB CTA:** When the discovery database is empty (not just filtered), Discoveries offers Merge Starter Database.
+- **Sync tooltip:** Hover the Sync label for channel status guidance.
+- **Discoveries strata / ESC:** Window draws above low UI; ESC closes it when the map is closed.
+
+### Map & filters
+- **Zone Summary:** Continent/parent-zone count badges; toggle on the map filter menu.
+- **Map filter button:** Parent to World Map chrome (Magnify-safe); default BOTTOMRIGHT.
+- **Map filter menu cleanup:** Display / Filter Map / Hide / Show sections; CoA hides Mystic options; removed world-map search bar (Discoveries + Filter Map replace it).
+- **Settings cleanup:** Regrouped tabs, clearer names, dead options removed.
+
+### Chat & sharing
+- **Shift-click item links** from Discoveries rows and map/minimap pins when chat is open; Ctrl+Left links from Discoveries.
+- **Show to… (map ping)** on Discoveries context menu as well as map pins.
+
+### Arrow / TomTom
+- **/lcarrow** reliably toggles on/off (no longer disables itself on transient invalid waypoints).
+- **Cross-zone resume:** Last tracked discovery is remembered across `/lcarrow` toggle when you leave the zone.
+
+### Docs
+- README restructured: install → first steps → features → shortcuts → troubleshooting.
+
 ## Version 1.0.3r-beta
 
 ### Looted history safety
