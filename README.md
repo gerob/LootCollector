@@ -131,10 +131,10 @@ Vendors tab in the Viewer
 ## Essential shortcuts
 
 - **Shift + Left Click** (chat open): Insert the item link into chat (Discoveries row or map/minimap pin).
-- **Shift + Left Click** (chat closed, on a discovery): Pan the world map to that location with a pulse highlight.
-- **Ctrl + Left Click** (on a discovery): Insert the item link into chat (opens chat if needed).
-- **Ctrl + Right Click** (on a discovery): Insert item + zone + coordinates into chat.
-- **Ctrl + Alt + Right Click** (on a map pin): Insert item + zone + coordinates into chat.
+- **Shift + Left Click** (chat closed, Discoveries row): Pan the world map to that location with a pulse highlight.
+- **Ctrl + Left Click** (Discoveries row): Insert the item link into chat (opens chat if needed).
+- **Ctrl + Right Click** (Discoveries row): Insert item + zone + coordinates into chat.
+- **Ctrl + Alt + Right Click** (map pin): Insert item + zone + coordinates into chat.
 - **Alt + Mouseover:** Extra discovery details in the tooltip.
 - **Ctrl + Mouseover:** Soften crowded pin tooltips so you can pick one target.
 - **Shift + Left Click** (minimap button): Drag to reposition the button.

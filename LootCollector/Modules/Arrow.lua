@@ -551,6 +551,10 @@ function Arrow:UpdateArrow(forceUpdate)
         local dist = TT_GetDistanceToWaypoint(self.tomtomUID)
         if dist and dist < ARRIVAL_DISTANCE_YARDS then
             print("|cff00ff00LootCollector:|r Arrived at manual destination. Switching to auto-navigation.")
+            local arrivedGuid = self.manualTarget.g
+            if arrivedGuid then
+                self.sessionSkipList[arrivedGuid] = true
+            end
             self.manualTarget = nil
             self:ClearTomTomWaypoint()
             forceUpdate = true 
@@ -610,7 +614,8 @@ function Arrow:UpdateArrow(forceUpdate)
         if _G.TomTom and _G.TomTom.IsValidWaypoint and not _G.TomTom:IsValidWaypoint(self.tomtomUID) then
             self._invalidWaypointTicks = (self._invalidWaypointTicks or 0) + 1
             L._debug("Arrow:UpdateArrow", "TomTom waypoint invalid (tick " .. self._invalidWaypointTicks .. ").")
-            self.tomtomUID = nil
+            -- ClearTomTomWaypoint removes via UID then nils; do not nil first or the pin is orphaned.
+            self:ClearTomTomWaypoint()
             if self._invalidWaypointTicks <= 2 then
                 needsReapply = true
             else

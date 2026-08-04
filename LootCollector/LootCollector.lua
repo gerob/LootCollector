@@ -1680,7 +1680,7 @@ function LootCollector:EnsureDatabaseInitialized()
             end
         end
     else
-        local name, title, notes, loadable, reason, security, newVersion = GetAddOnInfo("LootCollector_StarterDB")
+        local name, title, notes, enabled, loadable, reason = GetAddOnInfo("LootCollector_StarterDB")
         if name and loadable then
             local starterVersion = GetAddOnMetadata("LootCollector_StarterDB", "Version")
             

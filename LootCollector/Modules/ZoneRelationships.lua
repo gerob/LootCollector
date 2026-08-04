@@ -81,5 +81,7 @@ ZoneList.ZoneRelationshipsC = {
     [496] = { parentMapID = 486, c = 4, z = 496, name = "The Storm Peaks", label = "SP", parent = { c = 4, z = 486, name = "Northrend" }, entrance = { x = 0.6158, y = 0.2338 } },
     [497] = { parentMapID = 486, c = 4, z = 497, name = "Zul'Drak", label = "Z", parent = { c = 4, z = 486, name = "Northrend" }, entrance = { x = 0.6937, y = 0.3878 } },
     [502] = { parentMapID = 486, c = 4, z = 502, name = "Wintergrasp", label = "W", parent = { c = 4, z = 486, name = "Northrend" }, entrance = { x = 0.3592, y = 0.4959 } },
+    [503] = { parentMapID = 15, c = 2, z = 503, name = "Plaguelands: The Scarlet Enclave", label = "SE", parent = { c = 2, z = 15, name = "Eastern Kingdoms" }, entrance = { x = 0.5800, y = 0.3000 } },
     [511] = { parentMapID = 486, c = 4, z = 511, name = "Crystalsong Forest", label = "CF", parent = { c = 4, z = 486, name = "Northrend" }, entrance = { x = 0.5146, y = 0.4224 } },
+    [542] = { parentMapID = 486, c = 4, z = 542, name = "Hrothgar's Landing", label = "HL", parent = { c = 4, z = 486, name = "Northrend" }, entrance = { x = 0.4800, y = 0.1800 } },
 }
