@@ -199,7 +199,6 @@ local function ensureDefaults()
     
     
     p.mapFilters = p.mapFilters or {}
-    if p.mapFilters.showMapFilter == nil then p.mapFilters.showMapFilter = false end
     if p.mapFilters.showMinimap == nil then p.mapFilters.showMinimap = true end
     if p.mapFilters.maxMinimapDistance == nil then p.mapFilters.maxMinimapDistance = 500 end 
 	if p.mapFilters.disableProximityList == nil then p.mapFilters.disableProximityList = true end 
@@ -331,7 +330,7 @@ local function buildOptions()
 				args = {
 					mapNote = {
 						type = "description",
-						name = "Many day-to-day pin filters (rarity, class, equipment type, and more) also live on the World Map filter menu.",
+						name = "Many day-to-day pin filters also live on the World Map filter menu. Use Discoveries (/lcv) with Filter Map for text search and richer filters.",
 						order = 0.01,
 					},
 					hibernationHeader = {
@@ -487,20 +486,6 @@ local function buildOptions()
 						get = function() return L.db.profile.mapFilters.enableChatLinkIntegration ~= false end,
 						set = function(_, v)
 							L.db.profile.mapFilters.enableChatLinkIntegration = v
-						end,
-					},
-					showMapFilter = {
-						type = "toggle",
-						name = "Show Map Search Bar",
-						order = 4.4,
-						desc = "Show the LootCollector search bar on the world map for finding discoveries by name.",
-						get = function() return L.db.profile.mapFilters.showMapFilter end,
-						set = function(_, v)
-							L.db.profile.mapFilters.showMapFilter = v
-							local Map = L:GetModule("Map", true)
-							if Map and Map.ToggleSearchUI then
-								Map:ToggleSearchUI(v) 
-							end
 						end,
 					},
 					disableProximityList = {

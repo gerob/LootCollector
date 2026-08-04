@@ -36,11 +36,6 @@ local menuList = {}
 
 Map._pinsByMid = Map._pinsByMid or {}
 
-Map._searchFrame = nil
-Map._searchBox = nil
-Map._searchResultsFrame = nil 
-Map._searchTimer = nil
-
 Map._showToDialog = nil
 
 Map._cachedFriends = {}
@@ -579,17 +574,10 @@ function Map:OnInitialize()
 
     if WorldMapFrame and hooksecurefunc then
         hooksecurefunc(WorldMapFrame, "Show", function()
-            Map:EnsureSearchUI()
-            if Map._searchFrame and not L.db.profile.mapFilters.hideSearchBar then Map._searchFrame:Show() end
             Map:EnsureShowToDialog()
             if Map._showToDialog then
                 Map._showToDialog:SetParent(WorldMapFrame)
                 Map._showToDialog:SetFrameLevel(WorldMapFrame:GetFrameLevel() + 50)
-            end
-            if Map._searchResultsFrame then
-                Map._searchResultsFrame:SetParent(UIParent)
-                Map._searchResultsFrame:ClearAllPoints()
-                Map._searchResultsFrame:SetPoint("CENTER")
             end
             Map.cacheIsDirty = true
             L.DataHasChanged = true 
@@ -600,17 +588,10 @@ function Map:OnInitialize()
           if SetMapToCurrentZone then SetMapToCurrentZone() end
           
           Map:HideDiscoveryTooltip()
-          if Map._searchFrame then Map._searchFrame:Hide() end
-          if Map._searchBox then Map._searchBox:SetText("") end
           if Map._showToDialog then
               Map._showToDialog:SetParent(UIParent)
               Map._showToDialog:ClearAllPoints()
               Map._showToDialog:SetPoint("CENTER")
-          end
-          if Map._searchResultsFrame then
-              Map._searchResultsFrame:SetParent(UIParent)
-              Map._searchResultsFrame:ClearAllPoints()
-              Map._searchResultsFrame:SetPoint("CENTER")
           end
           local ProximityList = L:GetModule("ProximityList", true)
           if ProximityList and ProximityList:IsShown() then
@@ -623,60 +604,7 @@ function Map:OnInitialize()
     end
 end
 
-local function SearchDiscoveryForTerm(d, term)
-    if not d or not term or term == "" then return false end
-
-    
-    local rawItemLink = d.il or ""
-    if d._rawIl ~= rawItemLink then
-        d._rawIl = rawItemLink
-        local itemName = rawItemLink:match("%[(.+)%]") or ""
-        
-        if itemName == "" and d.i then
-            itemName = tostring(d.i) 
-        end
-        
-        d._ln = string.lower(itemName)
-    end
-
-    if string.find(d._ln, term, 1, true) then
-        return true
-    end
-
-    
-    local currentC = tonumber(d.c) or 0
-    local currentZ = tonumber(d.z) or 0
-    local currentIz = tonumber(d.iz) or 0
-    if d._rawC ~= currentC or d._rawZ ~= currentZ or d._rawIz ~= currentIz then
-        d._rawC = currentC
-        d._rawZ = currentZ
-        d._rawIz = currentIz
-        local zoneName = (L.ResolveZoneDisplay and L:ResolveZoneDisplay(currentC, currentZ, currentIz)) or ""
-        d._lz = string.lower(zoneName)
-    end
-
-    if string.find(d._lz, term, 1, true) then
-        return true
-    end
-
-    local Constants = L:GetModule("Constants", true)
-    if d.dt == (Constants and Constants.DISCOVERY_TYPE.BLACKMARKET) then
-        if d.vendorName and string.find(string.lower(d.vendorName), term, 1, true) then
-            return true
-        end
-        if d.vendorItems then
-            for _, itemData in ipairs(d.vendorItems) do
-                if itemData.name and string.find(string.lower(itemData.name), term, 1, true) then
-                    return true
-                end
-            end
-        end
-    end
-    
-    return false
-end
-
-local function passesFiltersLocal(d, searchTerm)
+local function passesFilters(d)
     if not L:DiscoveryPassesFilters(d) then
         return false
     end
@@ -689,20 +617,7 @@ local function passesFiltersLocal(d, searchTerm)
             return false
         end
     end
-    if searchTerm and searchTerm ~= "" then
-        if not SearchDiscoveryForTerm(d, searchTerm) then
-            return false
-        end
-    end
     return true
-end
-
-local function passesFilters(d)
-    local term = ""
-    if Map._searchBox and Map._searchBox:GetText() ~= "" then
-        term = string.lower(Map._searchBox:GetText())
-    end
-    return passesFiltersLocal(d, term)
 end
 
 local IST_TO_EQUIPLOC = {
@@ -1135,8 +1050,6 @@ function Map:RebuildFilteredCache()
 
     wipe(self.cachedVisibleDiscoveries)
 
-    local term = ""
-
     local discoveries = L:GetDiscoveriesDB()
     local vendors = L:GetVendorsDB()
     local zoneGUIDs = Core.ZoneIndex[tonumber(currentMapID)]
@@ -1156,7 +1069,7 @@ function Map:RebuildFilteredCache()
                     local iz = tonumber(d.iz) or 0
                     local isVisibleOnThisMap = (iz == 0 or iz == tonumber(currentMapID))
                     if isVisibleOnThisMap and tonumber(d.c) == tonumber(currentContinent) then
-                        if passesFiltersLocal(d, term) then
+                        if passesFilters(d) then
                             table.insert(self.cachedVisibleDiscoveries, d)
                         end
                     end
@@ -1623,24 +1536,22 @@ end
 
 local function BuildFilterEasyMenu()
   local Constants = L:GetModule("Constants", true)
+  local hasMysticScrolls = Constants and Constants:HasMysticScrolls()
   local f = L:GetFilters()
   local menu = {}
-  table.insert(menu, { text = "LootCollector Filters", isTitle = true, notCheckable = true })
-  table.insert(menu, {
-    text = L:IsPaused() and "|cffff7f00Resume Processing|r" or "|cffff0000Enter Hibernation (Pause)|r",
-    checked = L:IsPaused(),
-    keepShownOnClick = true,
-    isNotRadio = true,
-    func = function()
-      L:TogglePause()
-      if EasyMenu and FilterButton then
-        
-        HideDropDownMenu(1)
-        EasyMenu(BuildFilterEasyMenu(), FilterMenuHost, FilterButton, 0, 0, "MENU", 2)
-      end
+
+  local function refreshMenu()
+    if EasyMenu and FilterButton then
+      HideDropDownMenu(1)
+      EasyMenu(BuildFilterEasyMenu(), FilterMenuHost, FilterButton, 0, 0, "MENU", 2)
     end
-  })
-  table.insert(menu, { text = "", notCheckable = true, disabled = true })
+  end
+
+  local function refreshMap()
+    Map.cacheIsDirty = true
+    Map:Update()
+    Map:UpdateMinimap()
+  end
 
   local function addToggle(label, key, targetTable, isGlobal)
     table.insert(targetTable, {
@@ -1648,93 +1559,124 @@ local function BuildFilterEasyMenu()
       checked = f[key] and true or false,
       keepShownOnClick = true,
       isNotRadio = true,
-       func = function() 
-          
-          if isGlobal then
-              L.db.profile.mapFilters[key] = not L.db.profile.mapFilters[key]
-          else
-              L.db.char.mapFilters[key] = not L.db.char.mapFilters[key]
-          end
-          Map.cacheIsDirty = true
-          Map:Update()
-          Map:UpdateMinimap()
-      end 
+      func = function()
+        -- Flip from the normalized GetFilters() value so default-true
+        -- keys (e.g. showWorldforged) toggle correctly on first click.
+        if isGlobal then
+          L.db.profile.mapFilters[key] = not f[key]
+        else
+          L.db.char.mapFilters[key] = not f[key]
+        end
+        refreshMap()
+      end
     })
   end
 
-  addToggle("Show on Minimap", "showMinimap", menu, true)
-  
+  table.insert(menu, { text = "LootCollector", isTitle = true, notCheckable = true })
   table.insert(menu, {
-    text = "Show Map Filter",
-    checked = not f.hideSearchBar,
+    text = L:IsPaused() and "|cffff7f00Resume Processing|r" or "|cffff0000Enter Hibernation (Pause)|r",
+    checked = L:IsPaused(),
     keepShownOnClick = true,
     isNotRadio = true,
     func = function()
-        local mf = L.db.profile.mapFilters
-        local show = mf.hideSearchBar -- if currently hidden, show; else hide
-        Map:ToggleSearchUI(show)
+      L:TogglePause()
+      refreshMenu()
     end
   })
+  table.insert(menu, { text = "", notCheckable = true, disabled = true })
 
+  -- Display / Discoveries filters
+  table.insert(menu, { text = "Display", isTitle = true, notCheckable = true })
+  addToggle("Show on Minimap", "showMinimap", menu, true)
   addToggle("Show Zone Summary", "showZoneSummaries", menu, true)
 
   do
     local Viewer = L:GetModule("Viewer", true)
     local filterMapOn = f.applyViewerFiltersOnMap
     table.insert(menu, {
-        text = "Filter Map",
-        desc = "Apply Discoveries Viewer filters (including search chips) to map/minimap pins.",
-        checked = filterMapOn and true or false,
-        keepShownOnClick = true,
-        isNotRadio = true,
-        func = function()
-            if Viewer and Viewer.SetFilterMapEnabled then
-                Viewer:SetFilterMapEnabled(not Viewer:IsFilterMapEnabled())
-            else
-                L.db.char.mapFilters = L.db.char.mapFilters or {}
-                L.db.char.mapFilters.applyViewerFiltersOnMap = not L.db.char.mapFilters.applyViewerFiltersOnMap
-                Map.cacheIsDirty = true
-                Map:Update()
-                Map:UpdateMinimap()
-            end
-        end
-    })
-    table.insert(menu, {
-        text = "Clear Discoveries Filters",
-        notCheckable = true,
-        func = function()
-            if Viewer and Viewer.ClearDiscoveriesFilters then
-                Viewer:ClearDiscoveriesFilters()
-            end
-        end
-    })
-  end
-
-  local arrowSub = { { text = "Arrow", isTitle = true, notCheckable = true } }
-  table.insert(arrowSub, {
-      text = "Auto-track Nearest Unlooted",
-      checked = f.autoTrackNearest,
+      text = "Filter Map",
+      tooltipTitle = "Filter Map",
+      tooltipText = "Apply Discoveries (/lcv) filters — including search chips — to map and minimap pins.",
+      checked = filterMapOn and true or false,
       keepShownOnClick = true,
       isNotRadio = true,
       func = function()
-          L.db.char.mapFilters.autoTrackNearest = not L.db.char.mapFilters.autoTrackNearest
-          local Arrow = L:GetModule("Arrow", true)
-          if Arrow then
-              if not L.db.char.mapFilters.autoTrackNearest then Arrow:Hide() else Arrow:Show() end
-          end
+        if Viewer and Viewer.SetFilterMapEnabled then
+          Viewer:SetFilterMapEnabled(not Viewer:IsFilterMapEnabled())
+        else
+          L.db.char.mapFilters = L.db.char.mapFilters or {}
+          L.db.char.mapFilters.applyViewerFiltersOnMap = not L.db.char.mapFilters.applyViewerFiltersOnMap
+          refreshMap()
+        end
       end
+    })
+    table.insert(menu, {
+      text = "Clear Discoveries Filters",
+      notCheckable = true,
+      func = function()
+        if Viewer and Viewer.ClearDiscoveriesFilters then
+          Viewer:ClearDiscoveriesFilters()
+        end
+      end
+    })
+  end
+
+  table.insert(menu, {
+    text = "Enhanced WF Tooltip",
+    checked = (L.db and L.db.profile and L.db.profile.enhancedWFTooltip) and true or false,
+    keepShownOnClick = true,
+    isNotRadio = true,
+    func = function()
+      if not (L and L.db and L.db.profile) then return end
+      L.db.profile.enhancedWFTooltip = not (L.db.profile.enhancedWFTooltip and true or false)
+      local Tooltip = L:GetModule("Tooltip", true)
+      if Tooltip and Tooltip.ApplySetting then
+        Tooltip:ApplySetting()
+      else
+        _G.ItemUpgradeTooltipDB = _G.ItemUpgradeTooltipDB or {}
+        _G.ItemUpgradeTooltipDB.enabled = L.db.profile.enhancedWFTooltip and true or false
+      end
+      refreshMap()
+    end
   })
-  table.insert(arrowSub, { text = "Skip nearest (session)", notCheckable = true, func = function() 
+
+  table.insert(menu, { text = "", notCheckable = true, disabled = true })
+
+  -- Arrow
+  local arrowSub = { { text = "Arrow", isTitle = true, notCheckable = true } }
+  table.insert(arrowSub, {
+    text = "Auto-track Nearest Unlooted",
+    checked = f.autoTrackNearest,
+    keepShownOnClick = true,
+    isNotRadio = true,
+    func = function()
+      L.db.char.mapFilters.autoTrackNearest = not L.db.char.mapFilters.autoTrackNearest
+      local Arrow = L:GetModule("Arrow", true)
+      if Arrow then
+        if not L.db.char.mapFilters.autoTrackNearest then Arrow:Hide() else Arrow:Show() end
+      end
+    end
+  })
+  table.insert(arrowSub, {
+    text = "Skip nearest (session)",
+    notCheckable = true,
+    func = function()
       local Arrow = L:GetModule("Arrow", true)
       if Arrow and Arrow.SkipNearest then Arrow:SkipNearest() end
-  end})
-  table.insert(arrowSub, { text = "Clear skipped (session)", notCheckable = true, func = function() 
+    end
+  })
+  table.insert(arrowSub, {
+    text = "Clear skipped (session)",
+    notCheckable = true,
+    func = function()
       local Arrow = L:GetModule("Arrow", true)
       if Arrow and Arrow.ClearSessionSkipList then Arrow:ClearSessionSkipList() end
-  end})
+    end
+  })
   table.insert(menu, { text = "Arrow", hasArrow = true, notCheckable = true, menuList = arrowSub })
 
-  local hideSub = { { text = "Hide Options", isTitle = true, notCheckable = true } }
+  -- Hide
+  local hideSub = { { text = "Hide", isTitle = true, notCheckable = true } }
   addToggle("Hide All Discoveries", "hideAll", hideSub, false)
   addToggle("Hide Looted", "hideLooted", hideSub, false)
   addToggle("Hide Unconfirmed", "hideUnconfirmed", hideSub, false)
@@ -1742,57 +1684,37 @@ local function BuildFilterEasyMenu()
   addToggle("Hide Faded", "hideFaded", hideSub, false)
   addToggle("Hide Stale", "hideStale", hideSub, false)
   addToggle("Hide Collected Appearances", "hideLearnedTransmog", hideSub, false)
-  addToggle("Hide Collected Mystic Enchants", "hideCollectedME", hideSub, false)
+  if hasMysticScrolls then
+    addToggle("Hide Collected Mystic Enchants", "hideCollectedME", hideSub, false)
+  end
   addToggle("Hide Bags", "hideBags", hideSub, false)
   table.insert(hideSub, { text = "", notCheckable = true, disabled = true })
   addToggle("Disable Fade Effect", "disableFadeEffect", hideSub, true)
-  table.insert(menu, { text = "Hide", hasArrow = true, notCheckable = true, menuList = hideSub })
-  
   table.insert(hideSub, {
-      text = "Disable 'Nearby Discoveries'",
-      checked = f.disableProximityList,
-      keepShownOnClick = true,
-      isNotRadio = true,
-      func = function()
-          L.db.profile.mapFilters.disableProximityList = not L.db.profile.mapFilters.disableProximityList
-          if L.db.profile.mapFilters.disableProximityList then
-              local PL = L:GetModule("ProximityList", true)
-              if PL and PL.Hide then PL:Hide() end
-          end
+    text = "Disable 'Nearby Discoveries'",
+    checked = f.disableProximityList,
+    keepShownOnClick = true,
+    isNotRadio = true,
+    func = function()
+      L.db.profile.mapFilters.disableProximityList = not L.db.profile.mapFilters.disableProximityList
+      if L.db.profile.mapFilters.disableProximityList then
+        local PL = L:GetModule("ProximityList", true)
+        if PL and PL.Hide then PL:Hide() end
       end
+    end
   })
-  
-  local showSub = { { text = "Show Item Types", isTitle = true, notCheckable = true } }
-  table.insert(showSub, { text = "Mystic Scrolls", checked = f.showMysticScrolls, keepShownOnClick = true, isNotRadio = true, func = function() L.db.char.mapFilters.showMysticScrolls = not L.db.char.mapFilters.showMysticScrolls; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end })
-  table.insert(showSub, { text = "Worldforged Items", checked = f.showWorldforged, keepShownOnClick = true, isNotRadio = true, func = function() L.db.char.mapFilters.showWorldforged = not L.db.char.mapFilters.showWorldforged; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end })
-  table.insert(showSub, { text = "Vendors", checked = f.showVendors, keepShownOnClick = true, isNotRadio = true, func = function() L.db.char.mapFilters.showVendors = not L.db.char.mapFilters.showVendors; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end })
-  
-  table.insert(showSub, {
-      text = "Enhanced WF Tooltip",
-      checked = (L.db and L.db.profile and L.db.profile.enhancedWFTooltip) and true or false,
-      keepShownOnClick = true,
-      isNotRadio = true,
-      func = function()
-        if not (L and L.db and L.db.profile) then return end
-        L.db.profile.enhancedWFTooltip = not (L.db.profile.enhancedWFTooltip and true or false)
+  table.insert(menu, { text = "Hide", hasArrow = true, notCheckable = true, menuList = hideSub })
 
-        local Tooltip = L:GetModule("Tooltip", true)
-        if Tooltip and Tooltip.ApplySetting then
-          Tooltip:ApplySetting()
-        else
-          _G.ItemUpgradeTooltipDB = _G.ItemUpgradeTooltipDB or {}
-          _G.ItemUpgradeTooltipDB.enabled = L.db.profile.enhancedWFTooltip and true or false
-        end
-
-        if Map then
-          if Map.Update then Map:Update() end
-          if Map.UpdateMinimap then Map:UpdateMinimap() end
-        end
-      end
-  })
-
+  -- Show item types
+  local showSub = { { text = "Show", isTitle = true, notCheckable = true } }
+  if hasMysticScrolls then
+    addToggle("Mystic Scrolls", "showMysticScrolls", showSub, false)
+  end
+  addToggle("Worldforged Items", "showWorldforged", showSub, false)
+  addToggle("Vendors", "showVendors", showSub, false)
   table.insert(menu, { text = "Show", hasArrow = true, notCheckable = true, menuList = showSub })
 
+  -- Minimum quality
   local qualities = { "Poor","Common","Uncommon","Rare","Epic","Legendary","Artifact","Heirloom" }
   local raritySub = { { text = "Minimum Quality", isTitle = true, notCheckable = true } }
   for q = 0, 7 do
@@ -1804,19 +1726,25 @@ local function BuildFilterEasyMenu()
       keepShownOnClick = true,
       func = function()
         L.db.char.mapFilters.minRarity = q
-        Map.cacheIsDirty = true 
-        Map:Update()
-        Map:UpdateMinimap()
-        if EasyMenu and FilterButton then
-          HideDropDownMenu(1)
-          EasyMenu(BuildFilterEasyMenu(), FilterMenuHost, FilterButton, 0, 0, "MENU", 2)
-        end
+        refreshMap()
+        refreshMenu()
       end
     })
   end
   table.insert(menu, { text = "Minimum Quality", hasArrow = true, notCheckable = true, menuList = raritySub })
 
-  local slotsSub = { { text = "Slots", isTitle = true, notCheckable = true }, { text = "Clear All", notCheckable = true, func = function() for k in pairs(f.allowedEquipLoc) do L.db.char.mapFilters.allowedEquipLoc[k] = nil end; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end } }
+  -- Slots
+  local slotsSub = {
+    { text = "Slots", isTitle = true, notCheckable = true },
+    {
+      text = "Clear All",
+      notCheckable = true,
+      func = function()
+        for k in pairs(f.allowedEquipLoc) do L.db.char.mapFilters.allowedEquipLoc[k] = nil end
+        refreshMap()
+      end
+    }
+  }
   for _, opt in ipairs(SLOT_OPTIONS) do
     table.insert(slotsSub, {
       text = opt.text,
@@ -1824,120 +1752,161 @@ local function BuildFilterEasyMenu()
       keepShownOnClick = true,
       isNotRadio = true,
       func = function()
-        if L.db.char.mapFilters.allowedEquipLoc[opt.loc] then 
-            L.db.char.mapFilters.allowedEquipLoc[opt.loc] = nil 
-        else 
-            L.db.char.mapFilters.allowedEquipLoc[opt.loc] = true 
+        if L.db.char.mapFilters.allowedEquipLoc[opt.loc] then
+          L.db.char.mapFilters.allowedEquipLoc[opt.loc] = nil
+        else
+          L.db.char.mapFilters.allowedEquipLoc[opt.loc] = true
         end
-        Map.cacheIsDirty = true 
-        Map:Update(); Map:UpdateMinimap()
+        refreshMap()
       end
     })
   end
   table.insert(menu, { text = "Slots", hasArrow = true, notCheckable = true, menuList = slotsSub })
 
-  local usableBySub = { { text = "Usable by", isTitle = true, notCheckable = true }, { text = "Clear All", notCheckable = true, func = function() for k in pairs(f.usableByClasses) do L.db.char.mapFilters.usableByClasses[k] = nil end; Map.cacheIsDirty = true; Map:Update(); Map:UpdateMinimap() end } }
+  -- Usable by
+  local usableBySub = {
+    { text = "Usable by", isTitle = true, notCheckable = true },
+    {
+      text = "Clear All",
+      notCheckable = true,
+      func = function()
+        for k in pairs(f.usableByClasses) do L.db.char.mapFilters.usableByClasses[k] = nil end
+        refreshMap()
+      end
+    }
+  }
   local activeClasses = Constants and Constants:GetActiveClasses() or { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
-  
   for _, classTok in ipairs(activeClasses) do
     if classTok ~= "HERO" then
-        local locName = Constants and Constants:GetLocalizedClassName(classTok) or classTok
-        table.insert(usableBySub, {
-          text = locName,
-          checked = f.usableByClasses[classTok] and true or false,
-          keepShownOnClick = true,
-          isNotRadio = true,
-          func = function()
-            if L.db.char.mapFilters.usableByClasses[classTok] then 
-                L.db.char.mapFilters.usableByClasses[classTok] = nil 
-            else 
-                L.db.char.mapFilters.usableByClasses[classTok] = true 
-            end
-            Map.cacheIsDirty = true 
-            Map:Update(); Map:UpdateMinimap()
+      local locName = Constants and Constants:GetLocalizedClassName(classTok) or classTok
+      table.insert(usableBySub, {
+        text = locName,
+        checked = f.usableByClasses[classTok] and true or false,
+        keepShownOnClick = true,
+        isNotRadio = true,
+        func = function()
+          if L.db.char.mapFilters.usableByClasses[classTok] then
+            L.db.char.mapFilters.usableByClasses[classTok] = nil
+          else
+            L.db.char.mapFilters.usableByClasses[classTok] = true
           end
-        })
+          refreshMap()
+        end
+      })
     end
   end
   table.insert(menu, { text = "Usable by", hasArrow = true, notCheckable = true, menuList = usableBySub })
 
   table.insert(menu, { text = "", notCheckable = true, disabled = true })
 
-  
+  -- Copy filters from another character on this realm
   local copySub = { { text = "Copy Filters From...", isTitle = true, notCheckable = true } }
-  
   if _G.LootCollectorDB_Asc and _G.LootCollectorDB_Asc.char then
-      local myName = UnitName("player")
-      local myRealm = GetRealmName() or ""
-      
-      for rawKey, charData in pairs(_G.LootCollectorDB_Asc.char) do
-          local charName, charRealm = rawKey:match("^(.-) %- (.*)$")
-          
-          if charName and charName ~= myName and charRealm == myRealm then
-              if charData.mapFilters then
-                  table.insert(copySub, {
-                      text = charName,
-                      notCheckable = true,
-                      func = function()
-                          L.db.char.mapFilters = {}
-                          for k, v in pairs(charData.mapFilters) do
-                              if type(v) == "table" then
-                                  L.db.char.mapFilters[k] = {}
-                                  for subK, subV in pairs(v) do
-                                      L.db.char.mapFilters[k][subK] = subV
-                                  end
-                              else
-                                  L.db.char.mapFilters[k] = v
-                              end
-                          end
-                          print(string.format("|cff00ff00LootCollector:|r Data filters copied from %s.", charName))
-                          Map.cacheIsDirty = true
-                          Map:Update()
-                          Map:UpdateMinimap()
-                          HideDropDownMenu(1)
-                      end
-                  })
+    local myName = UnitName("player")
+    local myRealm = GetRealmName() or ""
+    for rawKey, charData in pairs(_G.LootCollectorDB_Asc.char) do
+      local charName, charRealm = rawKey:match("^(.-) %- (.*)$")
+      if charName and charName ~= myName and charRealm == myRealm and charData.mapFilters then
+        table.insert(copySub, {
+          text = charName,
+          notCheckable = true,
+          func = function()
+            L.db.char.mapFilters = {}
+            for k, v in pairs(charData.mapFilters) do
+              if type(v) == "table" then
+                L.db.char.mapFilters[k] = {}
+                for subK, subV in pairs(v) do
+                  L.db.char.mapFilters[k][subK] = subV
+                end
+              else
+                L.db.char.mapFilters[k] = v
               end
+            end
+            print(string.format("|cff00ff00LootCollector:|r Data filters copied from %s.", charName))
+            refreshMap()
+            HideDropDownMenu(1)
           end
+        })
       end
+    end
   end
-  
   if #copySub == 1 then
-      table.insert(copySub, { text = "No other characters found.", notCheckable = true, disabled = true })
+    table.insert(copySub, { text = "No other characters found.", notCheckable = true, disabled = true })
   end
-  
   table.insert(menu, { text = "Copy Filters From...", hasArrow = true, notCheckable = true, menuList = copySub })
 
   return menu
 end
 
-local function PlaceFilterButton(btn)
-  
-  if btn.isDragging then return end
+-- Resolve a stable World Map chrome control (not Magnify/Mapster canvas).
+-- Avoid WorldMapTrackQuest itself: that is only the checkbox, and anchoring
+-- to its RIGHT covers the "Track Quest" label.
+local function GetFilterButtonChromeAnchor()
+  -- Mapster title button (optional): place to its LEFT on the top bar.
+  local mapsterCandidates = {
+    "MapsterButton",
+    "MapsterWorldMapButton",
+    "MapsterToggle",
+  }
+  for _, anchorName in ipairs(mapsterCandidates) do
+    local anchorFrame = _G[anchorName]
+    if anchorFrame and anchorFrame:IsShown() then
+      return anchorFrame, "RIGHT", "LEFT", -5, 0
+    end
+  end
+  if WorldMapFrame then
+    local i = 1
+    while true do
+      local child = select(i, WorldMapFrame:GetChildren())
+      if not child then break end
+      i = i + 1
+      if child:IsObjectType("Button") and child:IsShown() and child.GetText then
+        local text = child:GetText()
+        if text and text:find("Mapster") then
+          return child, "RIGHT", "LEFT", -5, 0
+        end
+      end
+    end
+  end
 
-  
-  if L.db and L.db.profile and L.db.profile.mapFilters and L.db.profile.mapFilters.filterButtonDragged and L.db.profile.mapFilters.filterButtonPos then
-      local pos = L.db.profile.mapFilters.filterButtonPos
-      btn:ClearAllPoints()
-      btn:SetPoint(pos.point, WorldMapFrame, pos.relPoint, pos.x, pos.y)
-      return
+  -- Bottom-right chrome: sit just left of the close/corner area, clear of
+  -- Track Quest (bottom-left) and to the right of Quest Objectives / Blobs.
+  -- Returned as WorldMapFrame + offsets via PlaceFilterButton fallbacks.
+  return nil, nil, nil, nil, nil
+end
+
+local function PlaceFilterButton(btn)
+  if not btn or btn.isDragging then return end
+  if not WorldMapFrame then return end
+
+  if L.db and L.db.profile and L.db.profile.mapFilters
+      and L.db.profile.mapFilters.filterButtonDragged
+      and L.db.profile.mapFilters.filterButtonPos then
+    local pos = L.db.profile.mapFilters.filterButtonPos
+    btn:ClearAllPoints()
+    btn:SetPoint(pos.point or "TOPLEFT", WorldMapFrame, pos.relPoint or "TOPLEFT", pos.x or 0, pos.y or 0)
+    return
   end
 
   btn:ClearAllPoints()
-  local potentialAnchors = { "WorldMapButtonFilters", "WorldMapTrackQuest", "WorldMapQuestShowObjectives", "_NPCScanOverlayWorldMapToggle", "WorldMapFrameCloseButton" }
-  for _, anchorName in ipairs(potentialAnchors) do
-    local anchorFrame = _G[anchorName]
-    if anchorFrame and anchorFrame:IsShown() then
-      btn:SetPoint("RIGHT", anchorFrame, "LEFT", -5, 0)
-      return
-    end
+  local anchor, myPoint, relPoint, x, y = GetFilterButtonChromeAnchor()
+  if anchor then
+    btn:SetPoint(myPoint, anchor, relPoint, x, y)
+    return
   end
-  btn:SetPoint("TOPRIGHT", WorldMapFrame, "TOPRIGHT", -80, -30)
+  -- Default: bottom-right map chrome bar (does not overlap Track Quest).
+  btn:SetPoint("BOTTOMRIGHT", WorldMapFrame, "BOTTOMRIGHT", -18, 10)
 end
 
 function Map:EnsureFilterUI()
   if not WorldMapFrame then return end
   if L.db and L.db.profile and L.db.profile.mapFilters then
+    -- One-shot clear of Magnify-skewed / old canvas-relative drag coords.
+    if not L.db.profile.mapFilters.filterButtonReset_104r then
+      L.db.profile.mapFilters.filterButtonPos = nil
+      L.db.profile.mapFilters.filterButtonDragged = false
+      L.db.profile.mapFilters.filterButtonReset_104r = true
+    end
     if not L.db.profile.mapFilters.filterButtonReset_087r then
       L.db.profile.mapFilters.filterButtonPos = nil
       L.db.profile.mapFilters.filterButtonDragged = false
@@ -1945,27 +1914,28 @@ function Map:EnsureFilterUI()
     end
   end
   if not FilterButton then
-    FilterButton = CreateFrame("Button", "LootCollectorFilterButton", WorldFrame)
+    -- Parent to WorldMapFrame chrome so Magnify canvas zoom does not move us.
+    FilterButton = CreateFrame("Button", "LootCollectorFilterButton", WorldMapFrame)
     FilterButton:SetSize(31, 31)
-    FilterButton:SetFrameStrata("FULLSCREEN_DIALOG")
-    FilterButton:SetFrameLevel(90)
-    FilterButton:SetToplevel(true)
+    FilterButton:SetFrameStrata(WorldMapFrame:GetFrameStrata() or "FULLSCREEN_DIALOG")
+    FilterButton:SetFrameLevel((WorldMapFrame:GetFrameLevel() or 1) + 50)
     FilterButton:EnableMouse(true)
     FilterButton:Hide()
-    
-    local poller = CreateFrame("Frame", nil, WorldFrame)
+
+    -- Show/hide with the map only — no canvas scale chasing.
+    local poller = CreateFrame("Frame", nil, WorldMapFrame)
     poller.lastVisible = nil
-    poller.lastScale = nil
+    poller.lastChromeKey = nil
     poller:SetScript("OnUpdate", function(self)
         if not WorldMapFrame or not FilterButton then return end
-        
+
         local isVisible = WorldMapFrame:IsShown() and true
         if self.lastVisible ~= isVisible then
             self.lastVisible = isVisible
             if isVisible then
                 FilterButton:Show()
                 PlaceFilterButton(FilterButton)
-                -- Do not demote Discoveries under the map; stay-open is the default.
+                self.lastChromeKey = nil
             else
                 FilterButton:Hide()
                 if LootCollectorViewerWindow then
@@ -1973,25 +1943,19 @@ function Map:EnsureFilterUI()
                     LootCollectorViewerWindow:SetFrameLevel(50)
                 end
             end
-        end
-        
-        if isVisible then
-            local refFrame
-            local potentialRefs = { "WorldMapButtonFilters", "WorldMapTrackQuest", "WorldMapQuestShowObjectives" }
-            for _, name in ipairs(potentialRefs) do
-                local frame = _G[name]
-                if frame and frame:IsShown() then
-                    refFrame = frame
-                    break
+        elseif isVisible and not FilterButton.isDragging then
+            -- No chrome-key reanchor needed for fixed BOTTOMRIGHT default;
+            -- Mapster presence can change after map open — recheck lightly.
+            local dragged = L.db and L.db.profile and L.db.profile.mapFilters
+                and L.db.profile.mapFilters.filterButtonDragged
+            if not dragged then
+                local hasMapster = false
+                if _G.MapsterButton and _G.MapsterButton:IsShown() then
+                    hasMapster = true
                 end
-            end
-            refFrame = refFrame or WorldMapDetailFrame
-            
-            if refFrame then
-                local currentScale = refFrame:GetEffectiveScale() or 1
-                if self.lastScale ~= currentScale then
-                    self.lastScale = currentScale
-                    FilterButton:SetScale(currentScale)
+                local chromeKey = hasMapster and "m1" or "m0"
+                if self.lastChromeKey ~= chromeKey then
+                    self.lastChromeKey = chromeKey
                     PlaceFilterButton(FilterButton)
                 end
             end
@@ -2793,267 +2757,6 @@ function Map:EnsureMinimapTicker()
     end)
 end
 
-function Map:EnsureSearchUI()
-    if L.LEGACY_MODE_ACTIVE then return end
-    if self._searchFrame then return end
-    if not WorldMapDetailFrame then return end
-    if L.db.profile.mapFilters.hideSearchBar then return end
-
-    local f = CreateFrame("Frame", "LootCollectorMapSearchFrame", WorldMapDetailFrame)
-    f:SetSize(400, 30)
-    f:SetPoint("BOTTOM", WorldMapDetailFrame, "BOTTOM", 0, 5)
-    f:SetFrameStrata("HIGH")
-
-    local label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    label:SetPoint("LEFT", 5, 0)
-    label:SetText("Filter:")
-
-    local editBox = CreateFrame("EditBox", "LootCollectorMapSearchBox", f, "InputBoxTemplate")
-    editBox:SetSize(180, 20)
-    editBox:SetPoint("LEFT", label, "RIGHT", 5, 0)
-    editBox:SetAutoFocus(false)
-    editBox:SetScript("OnTextChanged", function()
-        
-        if L:IsPaused() then return end
-        
-        if Map._searchTimer then
-            C_Timer.CancelTimer(Map._searchTimer)
-            Map._searchTimer = nil
-        end
-        Map._searchTimer = C_Timer.After(0.3, function()
-            Map.cacheIsDirty = true 
-            Map:Update()
-            Map._searchTimer = nil
-        end)
-    end)
-
-    local findBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    findBtn:SetSize(60, 22)
-    findBtn:SetText("Find")
-    findBtn:SetPoint("LEFT", editBox, "RIGHT", 5, 0)
-    findBtn:SetScript("OnClick", function() Map:ExecuteSearch() end)
-    
-    local clearBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    clearBtn:SetSize(60, 22)
-    clearBtn:SetText("Clear")
-    clearBtn:SetPoint("LEFT", findBtn, "RIGHT", 5, 0)
-    clearBtn:SetScript("OnClick", function()
-        editBox:SetText("") 
-        if Map._searchTimer then 
-            C_Timer.CancelTimer(Map._searchTimer) 
-            Map._searchTimer = nil 
-        end
-        Map.cacheIsDirty = true 
-        Map:Update()
-        if Map._searchResultsFrame then Map._searchResultsFrame:Hide() end
-    end)
-
-    self._searchFrame = f
-    self._searchBox = editBox
-end
-
--- Show/hide the world-map search bar ("Filter:" + Find/Clear).
--- show=true creates the UI if needed and displays it; show=false hides it and clears the term.
-function Map:ToggleSearchUI(show)
-    if not (L.db and L.db.profile and L.db.profile.mapFilters) then return end
-    L.db.profile.mapFilters.hideSearchBar = not show
-    -- Keep Settings toggle in sync when present.
-    if L.db.profile.mapFilters.showMapFilter ~= nil then
-        L.db.profile.mapFilters.showMapFilter = show and true or false
-    end
-
-    if show then
-        self:EnsureSearchUI()
-        if self._searchFrame then
-            self._searchFrame:Show()
-        end
-    else
-        if self._searchBox then self._searchBox:SetText("") end
-        if self._searchResultsFrame then self._searchResultsFrame:Hide() end
-        if self._searchFrame then self._searchFrame:Hide() end
-        self.cacheIsDirty = true
-        if self.Update then self:Update() end
-    end
-end
-
-function Map:ExecuteSearch()
-    if L:IsPaused() then return end
-    if self._searchResultsFrame then self._searchResultsFrame:Hide() end
-    
-    local term = self._searchBox and string.lower(self._searchBox:GetText() or "")
-    if not term or term == "" then return end
-
-    local results = {}
-    
-    local discoveries = L:GetDiscoveriesDB() or {}
-    for _, d in pairs(discoveries) do
-        if SearchDiscoveryForTerm(d, term) then
-            table.insert(results, d)
-        end
-    end
-    
-    local vendors = L:GetVendorsDB() or {}
-    for _, d in pairs(vendors) do
-         if SearchDiscoveryForTerm(d, term) then
-            table.insert(results, d)
-        end
-    end
-
-    if #results == 0 then
-        print("|cffff7f00LootCollector:|r No discovery found matching '"..term.."'")
-    elseif #results == 1 then
-        self:FocusOnDiscovery(results[1])
-    else
-        self:ShowSearchResults(results)
-    end
-end
-
-function Map:ShowSearchResults(results)
-  if not self._searchResultsFrame then
-      
-      local f = CreateFrame("Frame", "LootCollectorSearchResultsFrame", UIParent)
-      f:SetSize(450, 250)
-      f:SetPoint("CENTER")
-      f:SetFrameStrata("FULLSCREEN_DIALOG") 
-      f:SetFrameLevel(200) 
-      f:SetBackdrop({ bgFile = "Interface/DialogFrame/UI-DialogBox-Background", edgeFile = "Interface/DialogFrame/UI-DialogBox-Border", tile = true, tileSize = 32, edgeSize = 32, insets = { left = 8, right = 8, top = 8, bottom = 8 } })
-      f:SetMovable(true)
-      f:EnableMouse(true)
-      f:RegisterForDrag("LeftButton")
-      f:SetScript("OnDragStart", f.StartMoving)
-      f:SetScript("OnDragStop", f.StopMovingOrSizing)
-      
-      local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-      title:SetPoint("TOP", 0, -16)
-      title:SetText("Multiple Discoveries Found")
-
-      local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-      closeBtn:SetPoint("TOPRIGHT", -4, -4)
-      closeBtn:SetScript("OnClick", function() f:Hide() end)
-
-      f.scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-      f.scroll:SetPoint("TOPLEFT", 16, -38)
-      f.scroll:SetPoint("BOTTOMRIGHT", -34, 12)
-
-      f.content = CreateFrame("Frame", nil, f.scroll)
-      f.scroll:SetScrollChild(f.content)
-      f.content:SetWidth(400)
-      f.content:SetHeight(1)
-      f.buttons = {}
-      
-      self._searchResultsFrame = f
-  end
-
-  local f = self._searchResultsFrame
-  
-  
-  if WorldMapFrame and WorldMapFrame:IsShown() then
-       local mapSize = WORLDMAP_SETTINGS and WORLDMAP_SETTINGS.size
-       if mapSize == WORLDMAP_QUESTLIST_SIZE or mapSize == WORLDMAP_FULLMAP_SIZE then
-           f:SetParent(WorldMapFrame)
-           f:SetFrameStrata("FULLSCREEN_DIALOG")
-           f:SetFrameLevel(WorldMapFrame:GetFrameLevel() + 200)
-       else
-           f:SetParent(UIParent)
-       end
-  else
-       f:SetParent(UIParent)
-  end
-  
-  for _, btn in ipairs(f.buttons) do
-      btn:Hide()
-  end
-  
-  table.sort(results, function(a,b) return (a.ls or 0) > (b.ls or 0) end)
-  
-  local Constants = L:GetModule("Constants", true)
-
-  for i, d in ipairs(results) do
-      local btn = f.buttons[i]
-      if not btn then
-          btn = CreateFrame("Button", nil, f.content)
-          btn:SetSize(400, 20)
-          f.buttons[i] = btn
-      end
-      
-      if i == 1 then
-          btn:SetPoint("TOPLEFT", 0, 0)
-      else
-          btn:SetPoint("TOPLEFT", f.buttons[i-1], "BOTTOMLEFT", 0, -2)
-      end
-      
-      local text = btn.text or btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-      btn.text = text
-      text:SetAllPoints(true)
-      text:SetJustifyH("LEFT")
-
-      local zoneName
-      local c, z, iz = tonumber(d.c) or 0, tonumber(d.z) or 0, tonumber(d.iz) or 0
-      
-      zoneName = L.ResolveZoneDisplay(c, z, iz)
-      
-      local coords = string.format("%.1f, %.1f", (d.xy.x or 0) * 100, (d.xy.y or 0) * 100)
-
-      local metaParts = {}
-      if d.dt and Constants and Constants.DISCOVERY_TYPE then
-          if d.dt == Constants.DISCOVERY_TYPE.WORLDFORGED then table.insert(metaParts, "WF")
-          elseif d.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL then table.insert(metaParts, "MS")
-          end
-      end
-      if d.it and d.ist and Constants and Constants.ID_TO_ITEM_TYPE and Constants.ID_TO_ITEM_SUBTYPE then
-          local typeStr = Constants.ID_TO_ITEM_TYPE[d.it]
-          local subTypeStr = Constants.ID_TO_ITEM_SUBTYPE[d.ist]
-          if subTypeStr then
-              table.insert(metaParts, subTypeStr)
-          elseif typeStr then
-              table.insert(metaParts, typeStr)
-          end
-      end
-      local meta = table.concat(metaParts, ", ")
-      
-      text:SetText(string.format("%s (%s) | %s | %s", d.il or "Unknown Item", zoneName, coords, meta))
-
-      btn:SetHighlightTexture("Interface/QuestFrame/UI-QuestTitleHighlight", "ADD")
-      
-      btn:SetScript("OnClick", function()
-          Map:FocusOnDiscovery(d)
-      end)
-      
-      btn:SetScript("OnEnter", function(self)
-          local selectedPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
-          local itemID = d.i
-          if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
-              itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
-          end
-          local itemLink = itemID and ("item:" .. itemID) or d.il
-          if itemLink then
-              local tooltip = GameTooltip
-              if f:GetParent() == WorldMapFrame then
-                  tooltip:SetParent(WorldMapFrame)
-                  tooltip:SetFrameLevel(f:GetFrameLevel() + 10)
-              else
-                  tooltip:SetParent(UIParent)
-              end
-              
-              tooltip:SetOwner(self, "ANCHOR_RIGHT")
-              tooltip:SetHyperlink(itemLink)
-              tooltip:Show()
-          end
-      end)
-      btn:SetScript("OnLeave", function()
-          GameTooltip:Hide()
-          if f:GetParent() == WorldMapFrame then
-               GameTooltip:SetParent(UIParent) 
-          end
-      end)
-      
-      btn:Show()
-  end
-
-  f.content:SetHeight(#results * 22)
-  f:Show()
-end
-
 function Map:PopulateShowToDropdown(dropdownFrame, level)
   local f = self._showToDialog
   if not f then return end
@@ -3316,8 +3019,6 @@ function Map:DrawWorldMapPins()
         return 
     end  
     
-    self:EnsureSearchUI()
-
     local ProximityList = L:GetModule("ProximityList", true)
 
     if L.IsZoneIgnored and L:IsZoneIgnored() then
@@ -3325,7 +3026,6 @@ function Map:DrawWorldMapPins()
         for _, pin in ipairs(self.clusterPins) do pin:Hide() end
         self:HideDiscoveryTooltip()
         if ProximityList and ProximityList._frame then ProximityList._frame:Hide("Call from Map:Update@ IsZoneIgnored") end
-        if self._searchFrame then self._searchFrame:Hide() end
         
         if pTime then L:ProfileStop("Map:DrawWorldMapPins", pTime) end
         return
@@ -3345,12 +3045,9 @@ function Map:DrawWorldMapPins()
         for _, pin in ipairs(self.clusterPins) do pin:Hide() end
         self:HideDiscoveryTooltip()
         if ProximityList and ProximityList._frame then ProximityList._frame:Hide() end
-        if self._searchFrame then self._searchFrame:Hide() end
         
         if pTime then L:ProfileStop("Map:DrawWorldMapPins", pTime) end
         return
-    else
-        if self._searchFrame and not filters.hideSearchBar then self._searchFrame:Show() end
     end
 
     local currentContinent, currentMapID = GetCurrentMapContinent(), GetCurrentMapAreaID()
@@ -3374,11 +3071,6 @@ function Map:DrawWorldMapPins()
         return
     end
 
-    local searchTerm = ""
-    if self._searchBox and self._searchBox:GetText() ~= "" then
-        searchTerm = string.lower(self._searchBox:GetText())
-    end
-  
     local offsetX, offsetY = mapLeft - parentLeft, mapTop - parentTop
     local pinIndex = 1
   
@@ -3410,7 +3102,7 @@ function Map:DrawWorldMapPins()
                         isVisibleOnThisMap = false
                     end
                     
-                    if isVisibleOnThisMap and passesFiltersLocal(d, searchTerm) then
+                    if isVisibleOnThisMap and passesFilters(d) then
                         if type(d) == "table" and d.xy then
                             if isB then
                             else            
@@ -3489,7 +3181,7 @@ function Map:DrawWorldMapPins()
                     for _, guid in ipairs(childGUIDs) do
                         local d = discoveries[guid] or vendors[guid]
                         if d and d.c == subzoneData.c then 
-                            if passesFiltersLocal(d, searchTerm) then
+                            if passesFilters(d) then
                                 count = count + 1
                             end
                         end
@@ -3533,7 +3225,7 @@ function Map:DrawWorldMapPins()
                 if targetGUIDs then
                     for _, guid in ipairs(targetGUIDs) do
                         local d = discoveries[guid] or vendors[guid]
-                        if d and passesFiltersLocal(d, searchTerm) then
+                        if d and passesFilters(d) then
                             count = count + 1
                         end
                     end

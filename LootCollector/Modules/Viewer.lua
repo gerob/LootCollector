@@ -4181,21 +4181,18 @@ function Viewer:UpdateSyncStatus()
     local Comm = L:GetModule("Comm", true)
     if not Comm or not Comm.GetPublicChannelCongestionStatus then
         self.syncStatusText:SetText("")
+        if self.syncStatusHit then self.syncStatusHit:Hide() end
         return
     end
     local st = Comm:GetPublicChannelCongestionStatus()
     if not st.active then
         self.syncStatusText:SetText("|cff888888Sync: Off|r")
-        return
-    end
-    if st.suspended then
+    elseif st.suspended then
         self.syncStatusText:SetText(string.format(
             "|cffff0000Sync: Suspended|r |cff888888(%ds)|r",
             st.remaining or 0
         ))
-        return
-    end
-    if st.label == "Quiet" or st.label == "Active" then
+    elseif st.label == "Quiet" or st.label == "Active" then
         self.syncStatusText:SetText(string.format("|cff%sSync: %s|r", st.colorHex, st.label))
     else
         self.syncStatusText:SetText(string.format(
@@ -4203,6 +4200,60 @@ function Viewer:UpdateSyncStatus()
             st.colorHex, st.label, st.mpm
         ))
     end
+
+    if self.syncStatusHit then
+        local w = self.syncStatusText:GetStringWidth() or 0
+        self.syncStatusHit:SetWidth(math.max(60, w + 8))
+        self.syncStatusHit:Show()
+        if GameTooltip:IsOwned(self.syncStatusHit) then
+            self:ShowSyncStatusTooltip(self.syncStatusHit)
+        end
+    end
+end
+
+function Viewer:ShowSyncStatusTooltip(owner)
+    local Comm = L:GetModule("Comm", true)
+    local st = Comm and Comm.GetPublicChannelCongestionStatus and Comm:GetPublicChannelCongestionStatus() or nil
+
+    GameTooltip:SetOwner(owner or self.syncStatusHit or self.window, "ANCHOR_BOTTOM")
+    GameTooltip:ClearLines()
+    GameTooltip:AddLine("Public Channel Sync", 1, 0.82, 0)
+
+    if not st or not st.active then
+        GameTooltip:AddLine("Status: Off — not joined to the public sync channel.", 1, 1, 1, true)
+        GameTooltip:AddLine("To join: /lc → Behavior & Sharing → Sharing Controls → enable Enable Sharing and Enable Public Channel Sync.", 0.8, 0.8, 0.8, true)
+    elseif st.suspended then
+        GameTooltip:AddLine(string.format(
+            "Status: Suspended — temporarily left because traffic was high (%d msgs/min).",
+            st.mpm or 0
+        ), 1, 0.4, 0.4, true)
+        if st.remaining and st.remaining > 0 then
+            GameTooltip:AddLine(string.format("Auto-rejoin in about %d seconds.", st.remaining), 1, 1, 1, true)
+        else
+            GameTooltip:AddLine("Will rejoin automatically when traffic cools down.", 1, 1, 1, true)
+        end
+        GameTooltip:AddLine("This is the Auto-Pause Shield, not a permanent leave.", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("To leave for good: /lc → Behavior & Sharing → Sharing Controls → turn off Enable Public Channel Sync (or Enable Sharing).", 0.8, 0.8, 0.8, true)
+    else
+        local stateLine = string.format("Status: %s", st.label or "?")
+        if st.label ~= "Quiet" and st.label ~= "Active" then
+            stateLine = string.format("%s (%d msgs/min)", stateLine, st.mpm or 0)
+        end
+        GameTooltip:AddLine(stateLine, 1, 1, 1, true)
+
+        if st.label == "Quiet" or st.label == "Active" then
+            GameTooltip:AddLine("Channel is joined and traffic is manageable. Discoveries sync with other players.", 0.8, 0.8, 0.8, true)
+        elseif st.label == "Busy" then
+            GameTooltip:AddLine("Moderate traffic. Sharing may slow down to protect performance.", 0.8, 0.8, 0.8, true)
+        elseif st.label == "Congested" or st.label == "Extreme" then
+            GameTooltip:AddLine("Heavy public-channel traffic. Outgoing sync is throttled; the Auto-Pause Shield may suspend the channel if it stays this high.", 0.8, 0.8, 0.8, true)
+        end
+
+        GameTooltip:AddLine("To leave: /lc → Behavior & Sharing → Sharing Controls → turn off Enable Public Channel Sync (or Enable Sharing).", 0.8, 0.8, 0.8, true)
+    end
+
+    GameTooltip:Show()
+    GameTooltip:SetFrameStrata("TOOLTIP")
 end
 
 function Viewer:UpdateReloadHint()
@@ -4446,7 +4497,7 @@ function Viewer:CreateWindow()
     window.closeBtn = hiddenCloseBtn
 
     window:SetScript("OnShow", function(self)
-        _tinsert(UISpecialFrames, self:GetName())
+        addToSpecialFrames(self:GetName())
     end)
 
     window:SetScript("OnHide", function(self)
@@ -4466,12 +4517,7 @@ function Viewer:CreateWindow()
             return
         end
 
-        for i = #UISpecialFrames, 1, -1 do
-            if UISpecialFrames[i] == self:GetName() then
-                _tremove(UISpecialFrames, i)
-                break
-            end
-        end
+        removeFromSpecialFrames(self:GetName())
         Viewer.allowManualClose = false
     end)
 
@@ -5280,11 +5326,27 @@ beta-0.8.6r:
     refreshDataBtn:SetPoint("LEFT", filterMapBtn, "RIGHT", 12, 0)
     refreshDataBtn:SetSize(110, BUTTON_HEIGHT)
 
-    local syncStatusText = window:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
-    syncStatusText:SetPoint("LEFT", refreshDataBtn, "RIGHT", 10, 0)
+    local syncStatusHit = CreateFrame("Frame", nil, window)
+    syncStatusHit:SetSize(120, BUTTON_HEIGHT)
+    syncStatusHit:SetPoint("LEFT", refreshDataBtn, "RIGHT", 10, 0)
+    syncStatusHit:SetFrameStrata(FRAME_STRATA)
+    syncStatusHit:SetFrameLevel(FRAME_LEVEL + 2)
+    syncStatusHit:EnableMouse(true)
+
+    local syncStatusText = syncStatusHit:CreateFontString(nil, "OVERLAY", UI_FONT_NAME)
+    syncStatusText:SetPoint("LEFT", syncStatusHit, "LEFT", 0, 0)
     syncStatusText:SetJustifyH("LEFT")
     syncStatusText:SetText("")
     self.syncStatusText = syncStatusText
+    self.syncStatusHit = syncStatusHit
+
+    syncStatusHit:SetScript("OnEnter", function(self)
+        Viewer:ShowSyncStatusTooltip(self)
+    end)
+    syncStatusHit:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
     self:UpdateSyncStatus()
     
     local bugBtn = CreateFrame("Button", nil, window)
@@ -5843,9 +5905,9 @@ beta-0.8.6r:
         GameTooltip:SetText("Favorites", 1, 1, 1)
         GameTooltip:AddLine("Click the star next to an item to favorite it.", nil, nil, nil, true)
         if L.db and L.db.profile and L.db.profile.perCharacterFavorites then
-            GameTooltip:AddLine("Favorites are saved per-character (Settings → Viewer Setup).", 1, 0.8, 0, true)
+            GameTooltip:AddLine("Favorites are saved per-character (Settings → Discoveries Window).", 1, 0.8, 0, true)
         else
-            GameTooltip:AddLine("Favorites are shared across characters on this profile (opt into per-character in Settings → Viewer Setup).", 1, 0.8, 0, true)
+            GameTooltip:AddLine("Favorites are shared across characters on this profile (opt into per-character in Settings → Discoveries Window).", 1, 0.8, 0, true)
         end
         GameTooltip:Show()
     end)
@@ -8508,27 +8570,44 @@ function Viewer:OnInitialize()
         end)
     end
 
-    -- Opening the world map (M) calls CloseSpecialWindows(), which hides
-    -- UISpecialFrames including Discoveries. Opt out unless the setting says close.
+    -- Opening the world map (M) calls CloseSpecialWindows(), which would hide
+    -- Discoveries (it is a UISpecialFrame). ESC also uses CloseSpecialWindows.
+    -- Protect Discoveries only when the map ends up open and the setting says
+    -- keep it open; otherwise let ESC close Discoveries like other windows.
     if type(CloseSpecialWindows) == "function" and not Viewer._closeSpecialWindowsHooked then
         Viewer._closeSpecialWindowsHooked = true
         local originalCloseSpecialWindows = CloseSpecialWindows
         CloseSpecialWindows = function(...)
             local window = Viewer.window or _G.LootCollectorViewerWindow
             local windowName = window and window:GetName()
-            local keepOpen = window and window:IsShown() and windowName
+            local protect = window and window:IsShown() and windowName
                 and L.db and L.db.profile and L.db.profile.viewer
                 and not L.db.profile.viewer.closeOnWorldMap
 
             local wasSpecial = false
-            if keepOpen then
+            if protect then
                 wasSpecial = removeFromSpecialFrames(windowName)
             end
 
             local result = originalCloseSpecialWindows(...)
 
-            if keepOpen and wasSpecial then
-                addToSpecialFrames(windowName)
+            if protect and wasSpecial then
+                createTimer(0, function()
+                    if not window or not windowName then return end
+                    local mapOpen = WorldMapFrame and WorldMapFrame:IsShown()
+                    if mapOpen then
+                        -- Map open path (M): keep Discoveries up and re-register ESC.
+                        if window:IsShown() then
+                            addToSpecialFrames(windowName)
+                        end
+                    else
+                        -- ESC / clear-UI with map closed: close Discoveries now.
+                        if window:IsShown() then
+                            Viewer.allowManualClose = true
+                            window:Hide()
+                        end
+                    end
+                end)
             end
             return result
         end

@@ -169,9 +169,9 @@ StaticPopupDialogs["LOOTCOLLECTOR_WELCOME"] = {
   text = "|cffffff00LootCollector quick start|r\n\n" ..
     "• Open Discoveries: minimap button or |cffffffff/lcv|r\n" ..
     "• Filter Map: apply your Discoveries filters to map/minimap pins\n" ..
-    "• Sync: Settings (/lc) → Behavior & Sharing → Enable Sharing + Public Channel\n" ..
+    "• Sync: |cffffffff/lc|r → Behavior & Sharing → Sharing Controls → Enable Sharing + Enable Public Channel Sync\n" ..
     "• Empty Discoveries? Merge Starter Database (Import/Export), or use the button on the empty list\n\n" ..
-    "You can turn this tip back on in Settings → Behavior & Sharing.",
+    "Re-enable this tip anytime: |cffffffff/lc|r → Behavior & Sharing → Show welcome tips on login.",
   button1 = "Got it",
   hasCheckBox = true,
   OnShow = function(self)
@@ -232,7 +232,6 @@ local dbDefaults = {
             pinSize = 15, 
             minimapPinSize = 15, 
             showZoneSummaries = false,
-            showMapFilter = false,
             showMinimap = true,
             autoTrackNearest = false,
             maxMinimapDistance = 500,
@@ -695,7 +694,6 @@ function LootCollector:GetFilters()
     combined.minimapPinSize = ui.minimapPinSize or 10
     combined.disableFadeEffect = ui.disableFadeEffect or false
     combined.showZoneSummaries = ui.showZoneSummaries or false
-    combined.hideSearchBar = ui.hideSearchBar or false
     combined.disableProximityList = ui.disableProximityList or false
 	combined.enableChatLinkIntegration = ui.enableChatLinkIntegration ~= false
     
