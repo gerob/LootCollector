@@ -146,14 +146,14 @@ StaticPopupDialogs["LOOTCOLLECTOR_NUKE_CONFIRM"] = {
 }
 
 StaticPopupDialogs["LOOTCOLLECTOR_CLEAR_LOOTED_CONFIRM"] = {
-	text = "Are you sure you want to clear ALL looted history for this character?\n\n|cffff7f00This only affects this character. The discovery database and all settings are untouched.\n\nA backup of your looted list is kept — use |cffffffffMerge Looted Backup|r to restore greys later.\n\nUseful after prestiging or rerolling with the same name.|r",
+	text = "Are you sure you want to clear ALL looted history for this character?\n\n|cffff7f00This only affects this character. The discovery database and all settings are untouched.\n\nYour |cfffffffflooted backup|r and account |cfffffffflooted archive|r are kept — use |cffffffffMerge Looted Backup|r to restore greys later.\n\nUseful after prestiging or rerolling with the same name.|r",
 	button1 = "Yes, Clear History",
 	button2 = "Cancel",
 	OnAccept = function(self, data)
 		if not (L and L.db and L.db.char) then return end
 		L.db.char.looted = {}
-		-- Keep lootedBackup so Merge Looted Backup can restore.
-		print("|cff00ff00LootCollector:|r Looted history cleared for this character (backup kept).")
+		-- Keep lootedBackup + global.lootedArchive so Merge can restore.
+		print("|cff00ff00LootCollector:|r Looted history cleared for this character (backup and archive kept).")
 		
 		local Map = L:GetModule("Map", true)
 		if Map and Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then
@@ -171,22 +171,31 @@ StaticPopupDialogs["LOOTCOLLECTOR_CLEAR_LOOTED_CONFIRM"] = {
 }
 
 StaticPopupDialogs["LOOTCOLLECTOR_MERGE_LOOTED_BACKUP_CONFIRM"] = {
-	text = "Merge the looted backup into your live looted list for this character?\n\n|cffaaaaaaRestores greys for pins still in your database (exact GUID or same item/zone match). Does not remove anything already marked looted.|r",
+	text = "Merge the looted backup (and account archive) into your live looted list for this character?\n\n|cffaaaaaaRestores greys for pins still in your database (exact GUID or same item/zone match). Does not remove anything already marked looted.|r",
 	button1 = "Merge Backup",
 	button2 = "Cancel",
 	OnAccept = function(self, data)
 		if not (L and L.HealLootedFromBackup) then return end
 		local exact, rematched, orphan = L:HealLootedFromBackup()
 		local restored = (exact or 0) + (rematched or 0)
+		local live, backup, archive = 0, 0, 0
+		if L.GetLootedLayerCounts then
+			live, backup, archive = L:GetLootedLayerCounts()
+		end
 		if restored > 0 then
 			print(string.format(
-				"|cff00ff00LootCollector:|r Restored %d looted pin(s) from backup (%d exact, %d rematched). %d backup entr%s unmatched.",
-				restored, exact or 0, rematched or 0, orphan or 0, (orphan or 0) == 1 and "y" or "ies"
+				"|cff00ff00LootCollector:|r Restored %d looted pin(s) from backup/archive (%d exact, %d rematched). %d unmatched. Now live=%d backup=%d archive=%d.",
+				restored, exact or 0, rematched or 0, orphan or 0, live, backup, archive
+			))
+		elseif (backup or 0) == 0 and (archive or 0) == 0 then
+			print(string.format(
+				"|cffff7f00LootCollector:|r Backup and archive are empty (live=%d). Nothing to merge.",
+				live or 0
 			))
 		else
 			print(string.format(
-				"|cffff7f00LootCollector:|r No new looted pins restored from backup (%d unmatched entr%s).",
-				orphan or 0, (orphan or 0) == 1 and "y" or "ies"
+				"|cffff7f00LootCollector:|r No new looted pins restored (%d unmatched). Counts: live=%d backup=%d archive=%d.",
+				orphan or 0, live or 0, backup or 0, archive or 0
 			))
 		end
 		local Map = L:GetModule("Map", true)

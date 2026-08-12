@@ -1257,6 +1257,8 @@ function Core:RemapLootedHistoryV6()
 
     L.db.char.looted_remapped_v6 = true
     if L.SeedLootedBackupFromLive then L:SeedLootedBackupFromLive() end
+    if L.SeedLootedArchiveFromLayers then L:SeedLootedArchiveFromLayers() end
+    if L.UpdateLootedHighWater then L:UpdateLootedHighWater() end
 end
 
 function Core:DeduplicateItems(mysticScrollsKeepOldest)
@@ -2091,7 +2093,9 @@ function Core:PerformOnLoginMaintenance()
 
     self:RemapLootedHistoryV6()
 
-    if L.HealLootedFromBackup then
+    if L.EnsureLootedSafetyNets then
+        L:EnsureLootedSafetyNets(hideMsgs)
+    elseif L.HealLootedFromBackup then
         local exact, rematched = L:HealLootedFromBackup()
         local restored = (exact or 0) + (rematched or 0)
         if restored > 0 and not hideMsgs then

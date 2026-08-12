@@ -318,6 +318,10 @@ local dbDefaults = {
         autoCleanupPhase = 0,
         manualCleanupRunCount = 0,
         purgeEmbossedState = 0,
+        -- Append-only per-character looted safety net (survives Clear All / char wipe).
+        lootedArchive = {},
+        -- High-water mark for sudden-drop detection on login.
+        lootedHighWater = {},
     },
 }
 
@@ -719,6 +723,85 @@ local function _earlierTs(a, b)
     return a or b
 end
 
+local function _countLootedKeys(t)
+    local n = 0
+    if type(t) ~= "table" then return 0 end
+    for _ in pairs(t) do
+        n = n + 1
+    end
+    return n
+end
+
+function LootCollector:GetLootedCharKey()
+    if self.db and self.db.keys and type(self.db.keys.char) == "string" and self.db.keys.char ~= "" then
+        return self.db.keys.char
+    end
+    local name = UnitName and UnitName("player")
+    local realm = GetRealmName and GetRealmName()
+    if type(name) == "string" and name ~= "" and type(realm) == "string" and realm ~= "" then
+        return name .. " - " .. realm
+    end
+    return nil
+end
+
+function LootCollector:GetLootedArchive(charKey)
+    if not (self.db and self.db.global) then return nil end
+    charKey = charKey or self:GetLootedCharKey()
+    if not charKey then return nil end
+    self.db.global.lootedArchive = self.db.global.lootedArchive or {}
+    local arch = self.db.global.lootedArchive[charKey]
+    if type(arch) ~= "table" then
+        arch = {}
+        self.db.global.lootedArchive[charKey] = arch
+    end
+    return arch
+end
+
+function LootCollector:ArchiveLootedGuid(guid, timestamp)
+    if not guid then return end
+    local arch = self:GetLootedArchive()
+    if not arch then return end
+    local ts = tonumber(timestamp) or time()
+    local existing = arch[guid]
+    arch[guid] = existing and _earlierTs(existing, ts) or ts
+end
+
+function LootCollector:GetLootedLayerCounts()
+    local live = _countLootedKeys(self.db and self.db.char and self.db.char.looted)
+    local backup = _countLootedKeys(self.db and self.db.char and self.db.char.lootedBackup)
+    local archive = _countLootedKeys(self:GetLootedArchive())
+    return live, backup, archive
+end
+
+function LootCollector:UpdateLootedHighWater()
+    local charKey = self:GetLootedCharKey()
+    if not charKey or not (self.db and self.db.global) then return end
+    local live, backup, archive = self:GetLootedLayerCounts()
+    local current = math.max(live, backup, archive)
+    self.db.global.lootedHighWater = self.db.global.lootedHighWater or {}
+    local hw = self.db.global.lootedHighWater[charKey]
+    local prev = (type(hw) == "table" and tonumber(hw.n)) or 0
+    if current > prev then
+        self.db.global.lootedHighWater[charKey] = { n = current, t = time() }
+    end
+end
+
+function LootCollector:SeedLootedArchiveFromLayers()
+    if not (self.db and self.db.char) then return end
+    local arch = self:GetLootedArchive()
+    if not arch then return end
+    self.db.char.looted = self.db.char.looted or {}
+    self.db.char.lootedBackup = self.db.char.lootedBackup or {}
+    for guid, ts in pairs(self.db.char.looted) do
+        local existing = arch[guid]
+        arch[guid] = existing and _earlierTs(existing, ts) or ts
+    end
+    for guid, ts in pairs(self.db.char.lootedBackup) do
+        local existing = arch[guid]
+        arch[guid] = existing and _earlierTs(existing, ts) or ts
+    end
+end
+
 function LootCollector:MarkLooted(guid, timestamp)
     if not guid or not (self.db and self.db.char) then return end
     local ts = tonumber(timestamp) or time()
@@ -727,6 +810,8 @@ function LootCollector:MarkLooted(guid, timestamp)
     self.db.char.looted[guid] = ts
     local bak = self.db.char.lootedBackup[guid]
     self.db.char.lootedBackup[guid] = bak and _earlierTs(bak, ts) or ts
+    self:ArchiveLootedGuid(guid, ts)
+    self:UpdateLootedHighWater()
 end
 
 function LootCollector:UnmarkLooted(guid)
@@ -753,6 +838,16 @@ function LootCollector:RemapLootedGuid(oldGuid, newGuid)
         self.db.char.lootedBackup[newGuid] = existing and _earlierTs(existing, bakTs) or bakTs
         self.db.char.lootedBackup[oldGuid] = nil
     end
+
+    local arch = self:GetLootedArchive()
+    if arch then
+        local archTs = arch[oldGuid]
+        if archTs ~= nil then
+            local existing = arch[newGuid]
+            arch[newGuid] = existing and _earlierTs(existing, archTs) or archTs
+            arch[oldGuid] = nil
+        end
+    end
 end
 
 local function _parseLootedGuidFields(guid)
@@ -770,7 +865,7 @@ local function _parseLootedGuidFields(guid)
     return nil
 end
 
--- Merge lootedBackup into live looted; rematch orphan GUIDs to current discoveries.
+-- Merge lootedBackup (+ account archive) into live looted; rematch orphan GUIDs.
 -- Returns exactRestored, rematched, stillOrphan.
 function LootCollector:HealLootedFromBackup()
     if not (self.db and self.db.char) then return 0, 0, 0 end
@@ -782,6 +877,7 @@ function LootCollector:HealLootedFromBackup()
             self.db.char.lootedBackup[guid] = ts
         end
     end
+    self:SeedLootedArchiveFromLayers()
 
     local discoveries = self.GetDiscoveriesDB and self:GetDiscoveriesDB() or nil
     if not discoveries then return 0, 0, 0 end
@@ -800,18 +896,29 @@ function LootCollector:HealLootedFromBackup()
     end
 
     local exactRestored, rematched, stillOrphan = 0, 0, 0
-    local backupSnapshot = {}
+    local healSnapshot = {}
     for guid, ts in pairs(self.db.char.lootedBackup) do
-        backupSnapshot[guid] = ts
+        healSnapshot[guid] = ts
+    end
+    local archive = self:GetLootedArchive()
+    if archive then
+        for guid, ts in pairs(archive) do
+            local existing = healSnapshot[guid]
+            healSnapshot[guid] = existing and _earlierTs(existing, ts) or ts
+        end
     end
 
-    for guid, ts in pairs(backupSnapshot) do
+    for guid, ts in pairs(healSnapshot) do
         ts = tonumber(ts) or time()
         if discoveries[guid] then
             if not self.db.char.looted[guid] then
                 self.db.char.looted[guid] = ts
                 exactRestored = exactRestored + 1
             end
+            if self.db.char.lootedBackup[guid] == nil then
+                self.db.char.lootedBackup[guid] = ts
+            end
+            self:ArchiveLootedGuid(guid, ts)
         else
             local c, z, iz, i, x, y = _parseLootedGuidFields(guid)
             local matched = nil
@@ -848,17 +955,70 @@ function LootCollector:HealLootedFromBackup()
                     rematched = rematched + 1
                 end
                 if newGuid ~= guid then
-                    local existing = self.db.char.lootedBackup[newGuid]
-                    self.db.char.lootedBackup[newGuid] = existing and _earlierTs(existing, ts) or ts
-                    self.db.char.lootedBackup[guid] = nil
+                    self:RemapLootedGuid(guid, newGuid)
                 end
+                if self.db.char.lootedBackup[newGuid] == nil then
+                    self.db.char.lootedBackup[newGuid] = ts
+                end
+                self:ArchiveLootedGuid(newGuid, ts)
             else
                 stillOrphan = stillOrphan + 1
             end
         end
     end
 
+    self:UpdateLootedHighWater()
     return exactRestored, rematched, stillOrphan
+end
+
+-- Login safety: seed layers, detect sudden drops vs high-water, heal, update high-water.
+-- Returns exactRestored, rematched, stillOrphan, dropDetected.
+function LootCollector:EnsureLootedSafetyNets(hideMsgs)
+    if not (self.db and self.db.char) then return 0, 0, 0, false end
+    self:SeedLootedBackupFromLive()
+    self:SeedLootedArchiveFromLayers()
+
+    local live, backup, archive = self:GetLootedLayerCounts()
+    local charKey = self:GetLootedCharKey()
+    local high = 0
+    if charKey and self.db.global and self.db.global.lootedHighWater then
+        local hw = self.db.global.lootedHighWater[charKey]
+        high = (type(hw) == "table" and tonumber(hw.n)) or 0
+    end
+
+    local dropDetected = high >= 10 and live < (high * 0.5) and backup < (high * 0.5)
+    if dropDetected and not hideMsgs then
+        print(string.format(
+            "|cffff7f00LootCollector:|r Looted history drop detected (live=%d backup=%d archive=%d, previous high=%d). Attempting restore...",
+            live, backup, archive, high
+        ))
+    end
+
+    local exact, rematched, orphan = self:HealLootedFromBackup()
+    local restored = (exact or 0) + (rematched or 0)
+    live, backup, archive = self:GetLootedLayerCounts()
+
+    if dropDetected and not hideMsgs then
+        if restored > 0 then
+            print(string.format(
+                "|cff00ff00LootCollector:|r Restored %d looted pin(s) after drop detection (%d exact, %d rematched). Now live=%d backup=%d archive=%d.",
+                restored, exact or 0, rematched or 0, live, backup, archive
+            ))
+        else
+            print(string.format(
+                "|cffff7f00LootCollector:|r Could not restore looted pins (live=%d backup=%d archive=%d). Re-mark as you loot.",
+                live, backup, archive
+            ))
+        end
+    elseif restored > 0 and not hideMsgs then
+        print(string.format(
+            "|cff00ff00LootCollector:|r Restored %d looted pin(s) from backup/archive (%d exact, %d rematched).",
+            restored, exact or 0, rematched or 0
+        ))
+    end
+
+    self:UpdateLootedHighWater()
+    return exact, rematched, orphan, dropDetected
 end
 
 function LootCollector:SeedLootedBackupFromLive()
@@ -1420,6 +1580,7 @@ function LootCollector:PreInitializeMigration()
                     local finalLooted = {}
                     for oldGuid, timestamp in pairs(charData.looted) do
                         local c, z, i, x, y = oldGuid:match("^(%d+)%-(%d+)%-(%d+)%-([%-%d%.]+)%-([%-%d%.]+)$")
+                        local converted = false
                         if c and z and i and x and y then
                             local oldC, oldZ = tonumber(c), tonumber(z)
                             
@@ -1433,6 +1594,7 @@ function LootCollector:PreInitializeMigration()
                                 local newGuid = GenerateLegacyGUID(newMapInfo.c, newMapInfo.z, i, x, y)
                                 finalLooted[newGuid] = timestamp
                                 lootedConverted = lootedConverted + 1
+                                converted = true
                             else
                                 local zoneName = (oldC and oldZ and LegacyZoneData[oldC] and LegacyZoneData[oldC][oldZ])
                                 if zoneName then
@@ -1441,9 +1603,14 @@ function LootCollector:PreInitializeMigration()
                                         local newGuid = GenerateLegacyGUID(oldC, newMapID, i, x, y)
                                         finalLooted[newGuid] = timestamp
                                         lootedConverted = lootedConverted + 1
+                                        converted = true
                                     end
                                 end
                             end
+                        end
+                        -- Never drop unmatched looted GUIDs during migration.
+                        if not converted then
+                            finalLooted[oldGuid] = timestamp
                         end
                     end
                     charData.looted = finalLooted
@@ -1755,7 +1922,12 @@ function LootCollector:OnInitialize()
     self.db.char.hidden = self.db.char.hidden or {}
     self.db.char.favorites = self.db.char.favorites or {}
     self.db.char.mapFilters = self.db.char.mapFilters or {}
+    self.db.global = self.db.global or {}
+    self.db.global.lootedArchive = self.db.global.lootedArchive or {}
+    self.db.global.lootedHighWater = self.db.global.lootedHighWater or {}
     self:SeedLootedBackupFromLive()
+    self:SeedLootedArchiveFromLayers()
+    self:UpdateLootedHighWater()
     if self.db.profile.perCharacterFavorites == nil then
         self.db.profile.perCharacterFavorites = false
     end
