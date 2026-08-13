@@ -292,6 +292,7 @@ local dbDefaults = {
         scale = 1.0,
         },
         filterPresets = {},
+        viewerLiveFilters = false,
         lastVersionToastAt = 0,
         ignoreZones = {},
         decay = { fadeAfterDays  = 30, staleAfterDays = 90, },

@@ -1068,6 +1068,35 @@ local function GetQualityColor(quality)
   return 1,1,1
 end
 
+local function ResolveDiscoveryQuality(d, itemID)
+    itemID = itemID or (d and d.i)
+    local cached = itemID and L.itemInfoCache and L.itemInfoCache[itemID]
+    if cached and cached[3] then return cached[3] end
+    if d and d.q then return d.q end
+    if itemID then
+        local q = select(3, GetItemInfo(itemID))
+        if q then return q end
+    end
+    if d and d.il then
+        return select(3, GetItemInfo(d.il))
+    end
+    return nil
+end
+
+local function ResolveDiscoveryIconTexture(d, itemID)
+    itemID = itemID or (d and d.i)
+    local cached = itemID and L.itemInfoCache and L.itemInfoCache[itemID]
+    if cached and cached[10] then return cached[10] end
+    if itemID then
+        local tex = select(10, GetItemInfo(itemID))
+        if tex then return tex end
+    end
+    if d and d.il then
+        return select(10, GetItemInfo(d.il))
+    end
+    return nil
+end
+
 local function AlphaForStatus(status)
   local f = L:GetFilters()
   if f.disableFadeEffect then return 1.0 end
@@ -1106,6 +1135,9 @@ function Map:RebuildFilteredCache()
     end
 
     wipe(self.cachedVisibleDiscoveries)
+
+    local Viewer = L:GetModule("Viewer", true)
+    if Viewer and Viewer.ResetFilterMapUncachedCount then Viewer:ResetFilterMapUncachedCount() end
 
     local discoveries = L:GetDiscoveriesDB()
     local vendors = L:GetVendorsDB()
@@ -1179,8 +1211,8 @@ function Map:GetDiscoveryIcon(d)
   if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
       itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
   end
-  if itemID then texture = select(10, GetItemInfo(itemID)) end
-  if (not texture) and d and d.il then texture = select(10, GetItemInfo(d.il)) end
+  if itemID then texture = ResolveDiscoveryIconTexture(d, itemID) end
+  if (not texture) and d and d.il then texture = ResolveDiscoveryIconTexture(d) end
   return texture or PIN_FALLBACK_TEXTURE
 end
 
@@ -2537,10 +2569,7 @@ function Map:UpdateMinimap()
             if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
                 itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
             end
-            local quality = itemID and select(3, GetItemInfo(itemID))
-            if not quality then
-                quality = discovery.q or select(3, GetItemInfo(discovery.il or discovery.i))
-            end
+            local quality = ResolveDiscoveryQuality(discovery, itemID)
             local r, g, b = GetQualityColor(quality)
             local isLooted = L:IsLootedByChar(discovery.g)
             local isFallback = (icon == PIN_FALLBACK_TEXTURE)
@@ -3106,6 +3135,8 @@ function Map:DrawWorldMapPins()
     
     self:EnsureFilterUI()
     local filters = L:GetFilters()
+    local ViewerMod = L:GetModule("Viewer", true)
+    if ViewerMod and ViewerMod.ResetFilterMapUncachedCount then ViewerMod:ResetFilterMapUncachedCount() end
     
     if filters.hideAll or L:IsPaused() then
         for _, pin in ipairs(self.pins) do pin:Hide() end
@@ -3201,10 +3232,7 @@ function Map:DrawWorldMapPins()
                                     if itemID and selectedPhase > 0 and L:IsWorldforgedUpgradeable(itemID) then
                                         itemID = L:GetWorldforgedPhaseItemID(itemID, selectedPhase)
                                     end
-                                    local quality = itemID and select(3, GetItemInfo(itemID))
-                                    if not quality then
-                                        quality = d.q or select(3, GetItemInfo(d.il or d.i))
-                                    end
+                                    local quality = ResolveDiscoveryQuality(d, itemID)
                                     local r, g, b = GetQualityColor(quality)
                                     
                                     if isFallback then

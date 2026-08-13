@@ -540,6 +540,12 @@ local Cache = {
 
 L.itemInfoCache = L.itemInfoCache or {}
 
+local function CachedItemInfoRow(d)
+    local itemID = d and tonumber(d.i)
+    if not itemID then return nil end
+    return Cache.itemInfo[itemID] or (L.itemInfoCache and L.itemInfoCache[itemID]) or nil
+end
+
 local function GetItemTypeIDs(itemType, itemSubType)
     local Constants = L:GetModule("Constants", true)
     if not Constants then return 0, 0 end
@@ -714,7 +720,13 @@ function Viewer:MatchesDeepFilterOnDiscoveryRecord(d)
     if isVendor then
         name = d.n or d.vendorName or d.name or ""
     else
-        local itemName, _, _, _, _, _, subType, _, equipLoc = GetItemInfo(d.il or d.i or 0)
+        local cached = CachedItemInfoRow(d)
+        local itemName = cached and cached[1]
+        local subType = cached and cached[7]
+        local equipLoc = d.el or (cached and cached[9])
+        if not itemName then
+            itemName, _, _, _, _, _, subType, _, equipLoc = GetItemInfo(d.il or d.i or 0)
+        end
         name = itemName or ""
         itemSubType = subType or ""
         if itemSubType == "" and Constants and d.ist and Constants.ID_TO_ITEM_SUBTYPE then
@@ -731,7 +743,19 @@ function Viewer:MatchesDeepFilterOnDiscoveryRecord(d)
         tip = Scanner and Scanner.GetCachedFullText and Scanner:GetCachedFullText(d.i, d.il) or ""
     end
     local zone = GetLocalizedZoneName(d) or ""
-    return self:MatchesDeepFilter(self:BuildDeepFilterHaystack(name, zone, tip, itemSubType, slot))
+    local haystack = self:BuildDeepFilterHaystack(name, zone, tip, itemSubType, slot)
+    if self:MatchesDeepFilter(haystack) then return true end
+    -- Tooltip chips (Stats) cannot match until Scanner RAM cache fills.
+    -- Keep WF pins visible rather than emptying the map; they re-filter later.
+    if not isVendor and self:HasDeepFilters() and (not tip or tip == "") then
+        self._filterMapUncachedCount = (self._filterMapUncachedCount or 0) + 1
+        return true
+    end
+    return false
+end
+
+function Viewer:ResetFilterMapUncachedCount()
+    self._filterMapUncachedCount = 0
 end
 
 function Viewer:EnsureDeepFiltersLoaded()
@@ -800,8 +824,12 @@ function Viewer:DiscoveryPassesViewerFilters(d)
         end
 
         if size(self.columnFilters.quality) > 0 then
-            local _, _, quality = GetItemInfo(d.il or d.i or 0)
-            quality = quality or d.q
+            local cached = CachedItemInfoRow(d)
+            local quality = d.q or (cached and cached[3])
+            if not quality then
+                local _, _, q = GetItemInfo(d.il or d.i or 0)
+                quality = q
+            end
             if not quality then
                 if not self.columnFilters.quality["Unknown"] then return false end
             else
@@ -848,19 +876,26 @@ function Viewer:DiscoveryPassesViewerFilters(d)
 
     if isWF then
         if self.minReqLevel or self.maxReqLevel then
-            local _, _, _, _, minLevel = GetItemInfo(d.il or d.i or 0)
-            minLevel = minLevel or 0
+            local cached = CachedItemInfoRow(d)
+            local minLevel = (cached and cached[5]) or 0
+            if minLevel == 0 then
+                local _, _, _, _, ml = GetItemInfo(d.il or d.i or 0)
+                minLevel = ml or 0
+            end
             if self.minReqLevel and minLevel < self.minReqLevel then return false end
             if self.maxReqLevel and minLevel > self.maxReqLevel then return false end
         end
 
         if size(self.columnFilters.eq.slot) > 0 then
-            local equipLoc = d.el
+            local cached = CachedItemInfoRow(d)
+            local equipLoc = d.el or (cached and cached[9])
             if (not equipLoc or equipLoc == "") and Constants then
-                local _, _, _, _, _, _, _, _, el = GetItemInfo(d.il or d.i or 0)
-                equipLoc = el
                 if (not equipLoc or equipLoc == "") and d.ist and Constants.IST_TO_EQUIPLOC then
                     equipLoc = Constants.IST_TO_EQUIPLOC[d.ist]
+                end
+                if (not equipLoc or equipLoc == "") then
+                    local _, _, _, _, _, _, _, _, el = GetItemInfo(d.il or d.i or 0)
+                    equipLoc = el
                 end
             end
             local slotValue = equipLoc and _G[equipLoc] or ""
@@ -868,7 +903,15 @@ function Viewer:DiscoveryPassesViewerFilters(d)
         end
 
         if size(self.columnFilters.eq.type) > 0 then
-            local _, _, _, _, _, _, itemSubType = GetItemInfo(d.il or d.i or 0)
+            local cached = CachedItemInfoRow(d)
+            local itemSubType = (cached and cached[7]) or ""
+            if itemSubType == "" and Constants and d.ist and Constants.ID_TO_ITEM_SUBTYPE then
+                itemSubType = Constants.ID_TO_ITEM_SUBTYPE[d.ist] or ""
+            end
+            if itemSubType == "" then
+                local _, _, _, _, _, _, st = GetItemInfo(d.il or d.i or 0)
+                itemSubType = st or ""
+            end
             if not DiscoveryMatchesTypeFilter({ itemSubType = itemSubType or "", ist = d.ist }, self.columnFilters.eq.type) then
                 return false
             end
@@ -877,9 +920,15 @@ function Viewer:DiscoveryPassesViewerFilters(d)
         if size(self.columnFilters.eq.class) > 0 and Constants and Constants.CLASS_PROFICIENCIES then
             local subTypeID = d.ist
             local typeID = d.it
-            -- Resolve type IDs from item info when discovery lacks them.
+            -- Resolve type IDs from cached/item info when discovery lacks them.
             if not (subTypeID and typeID and subTypeID > 0 and typeID > 0) then
-                local _, _, _, _, _, itemType, itemSubType = GetItemInfo(d.il or d.i or 0)
+                local cached = CachedItemInfoRow(d)
+                local itemType = cached and cached[6]
+                local itemSubType = cached and cached[7]
+                if not itemType then
+                    local _, _, _, _, _, it, ist = GetItemInfo(d.il or d.i or 0)
+                    itemType, itemSubType = it, ist
+                end
                 if itemType and itemSubType and Constants.ITEM_TYPE_TO_ID and Constants.ITEM_SUBTYPE_TO_ID then
                     typeID = Constants.ITEM_TYPE_TO_ID[itemType] or 0
                     subTypeID = Constants.ITEM_SUBTYPE_TO_ID[itemSubType] or 0
@@ -998,6 +1047,7 @@ function Viewer:ClearDiscoveriesFilters()
     end
 
     self:NotifyMapViewerFiltersChanged(true)
+    self:PersistLiveFilters()
 end
 
 -- Starter DB CTA helpers (empty Discoveries list).
@@ -1162,6 +1212,7 @@ function Viewer:NotifyMapViewerFiltersChanged(force)
         if Map.Update then Map:Update() end
         if Map.UpdateMinimap then Map:UpdateMinimap() end
     end
+    if self.SchedulePersistLiveFilters then self:SchedulePersistLiveFilters() end
 end
 
 function Viewer:ScheduleMapViewerFilterNotify()
@@ -2841,9 +2892,11 @@ function Viewer:GetFilteredDiscoveries()
 
     if Cache.lastFilterState ~= filterState then
         self:ScheduleMapViewerFilterNotify()
+        if self.SchedulePersistLiveFilters then self:SchedulePersistLiveFilters() end
     end
 
-    if Cache.lastFilterState == filterState and #Cache.filteredResults > 0 then
+    -- Empty is a valid cached result (tight presets can match nothing).
+    if Cache.lastFilterState == filterState then
         if pTime then L:ProfileStop("Viewer:GetFilteredDiscoveries", pTime) end
         return Cache.filteredResults
     end
@@ -3732,6 +3785,14 @@ function Viewer:CaptureFilterPresetSnapshot()
             chips[i] = self.deepSearchFilters[i]
         end
     end
+    local minReq = self.minReqLevel
+    local maxReq = self.maxReqLevel
+    if self.minReqLevelBox then
+        minReq = tonumber(self.minReqLevelBox:GetText())
+    end
+    if self.maxReqLevelBox then
+        maxReq = tonumber(self.maxReqLevelBox:GetText())
+    end
     return {
         currentFilter = self.currentFilter or "eq",
         columnFilters = deepCopy(self.columnFilters),
@@ -3740,48 +3801,33 @@ function Viewer:CaptureFilterPresetSnapshot()
         favoritesFilterState = self.favoritesFilterState,
         collectedMEFilterState = self.collectedMEFilterState,
         lastSeenSortState = self.lastSeenSortState or "off",
-        minReqLevel = self.minReqLevel,
-        maxReqLevel = self.maxReqLevel,
+        minReqLevel = minReq,
+        maxReqLevel = maxReq,
     }
 end
 
-function Viewer:SaveFilterPreset(name)
-    name = strtrim(tostring(name or ""))
-    if name == "" then
-        print("|cffff0000LootCollector:|r Preset name cannot be empty.")
-        return false
-    end
-    local presets = self:EnsureFilterPresetsTable()
-    if not presets[name] and self:CountFilterPresets() >= MAX_FILTER_PRESETS then
-        print(string.format("|cffff0000LootCollector:|r Maximum of %d filter presets reached. Delete one first.", MAX_FILTER_PRESETS))
-        return false
-    end
-    presets[name] = self:CaptureFilterPresetSnapshot()
-    print(string.format("|cff00ff00LootCollector:|r Saved filter preset '%s'.", name))
-    return true
+function Viewer:PersistLiveFilters()
+    if self._restoringLiveFilters then return end
+    if type(L.db) ~= "table" or not L.db.profile then return end
+    L.db.profile.viewerLiveFilters = self:CaptureFilterPresetSnapshot()
 end
 
-function Viewer:DeleteFilterPreset(name)
-    local presets = self:EnsureFilterPresetsTable()
-    if not presets[name] then return false end
-    presets[name] = nil
-    print(string.format("|cff00ff00LootCollector:|r Deleted filter preset '%s'.", name))
-    return true
+function Viewer:SchedulePersistLiveFilters()
+    if self._restoringLiveFilters then return end
+    if self._persistLiveFiltersTimer then return end
+    self._persistLiveFiltersTimer = C_Timer.After(0.4, function()
+        Viewer._persistLiveFiltersTimer = nil
+        Viewer:PersistLiveFilters()
+    end)
 end
 
-function Viewer:ApplyFilterPreset(name)
-    local presets = self:EnsureFilterPresetsTable()
-    local snap = presets[name]
-    if type(snap) ~= "table" then
-        print(string.format("|cffff0000LootCollector:|r Unknown filter preset '%s'.", tostring(name)))
-        return false
-    end
+function Viewer:ApplyFilterSnapshot(snap)
+    if type(snap) ~= "table" then return false end
 
     self:EnsureDeepFiltersLoaded()
 
     if type(snap.columnFilters) == "table" then
         self.columnFilters = deepCopy(snap.columnFilters)
-        -- Ensure nested tables exist after older/partial snaps.
         self.columnFilters.eq = self.columnFilters.eq or { slot = {}, type = {}, class = {} }
         self.columnFilters.eq.slot = self.columnFilters.eq.slot or {}
         self.columnFilters.eq.type = self.columnFilters.eq.type or {}
@@ -3809,14 +3855,18 @@ function Viewer:ApplyFilterPreset(name)
     self.favoritesFilterState = snap.favoritesFilterState
     self.collectedMEFilterState = snap.collectedMEFilterState
     self.lastSeenSortState = snap.lastSeenSortState or "off"
-    self.minReqLevel = snap.minReqLevel
-    self.maxReqLevel = snap.maxReqLevel
+    local minReq = tonumber(snap.minReqLevel)
+    local maxReq = tonumber(snap.maxReqLevel)
+    self._applyingReqLevelPreset = true
     if self.minReqLevelBox then
-        self.minReqLevelBox:SetText(self.minReqLevel and tostring(self.minReqLevel) or "")
+        self.minReqLevelBox:SetText(minReq and tostring(minReq) or "")
     end
     if self.maxReqLevelBox then
-        self.maxReqLevelBox:SetText(self.maxReqLevel and tostring(self.maxReqLevel) or "")
+        self.maxReqLevelBox:SetText(maxReq and tostring(maxReq) or "")
     end
+    self.minReqLevel = minReq
+    self.maxReqLevel = maxReq
+    self._applyingReqLevelPreset = nil
 
     local tab = snap.currentFilter or "eq"
     local CoreMod = L:GetModule("Core", true)
@@ -3848,7 +3898,55 @@ function Viewer:ApplyFilterPreset(name)
     if self.UpdateClearAllButton then self:UpdateClearAllButton() end
     if self.UpdateFilterButtonStates then self:UpdateFilterButtonStates() end
     self:NotifyMapViewerFiltersChanged(true)
+    return true
+end
 
+function Viewer:RestoreLiveFilters()
+    if type(L.db) ~= "table" or not L.db.profile then return false end
+    local snap = L.db.profile.viewerLiveFilters
+    if type(snap) ~= "table" or type(snap.columnFilters) ~= "table" then return false end
+    self._restoringLiveFilters = true
+    local ok = self:ApplyFilterSnapshot(snap)
+    self._restoringLiveFilters = nil
+    return ok
+end
+
+function Viewer:SaveFilterPreset(name)
+    name = strtrim(tostring(name or ""))
+    if name == "" then
+        print("|cffff0000LootCollector:|r Preset name cannot be empty.")
+        return false
+    end
+    local presets = self:EnsureFilterPresetsTable()
+    if not presets[name] and self:CountFilterPresets() >= MAX_FILTER_PRESETS then
+        print(string.format("|cffff0000LootCollector:|r Maximum of %d filter presets reached. Delete one first.", MAX_FILTER_PRESETS))
+        return false
+    end
+    presets[name] = self:CaptureFilterPresetSnapshot()
+    self:PersistLiveFilters()
+    print(string.format("|cff00ff00LootCollector:|r Saved filter preset '%s'.", name))
+    return true
+end
+
+function Viewer:DeleteFilterPreset(name)
+    local presets = self:EnsureFilterPresetsTable()
+    if not presets[name] then return false end
+    presets[name] = nil
+    print(string.format("|cff00ff00LootCollector:|r Deleted filter preset '%s'.", name))
+    return true
+end
+
+function Viewer:ApplyFilterPreset(name)
+    local presets = self:EnsureFilterPresetsTable()
+    local snap = presets[name]
+    if type(snap) ~= "table" then
+        print(string.format("|cffff0000LootCollector:|r Unknown filter preset '%s'.", tostring(name)))
+        return false
+    end
+    if not self:ApplyFilterSnapshot(snap) then
+        return false
+    end
+    self:PersistLiveFilters()
     print(string.format("|cff00ff00LootCollector:|r Loaded filter preset '%s'.", name))
     return true
 end
@@ -5334,6 +5432,10 @@ beta-0.8.6r:
         GameTooltip:SetText("Filter Map", 1, 1, 1)
         GameTooltip:AddLine("When on, map and minimap pins use your Discoveries filters (including search chips).", 1, 0.82, 0, true)
         GameTooltip:AddLine("Map-only options (hide unconfirmed/faded, show WF/MS/vendors, etc.) still apply.", 0.8, 0.8, 0.8, true)
+        local pending = Viewer._filterMapUncachedCount or 0
+        if pending > 0 then
+            GameTooltip:AddLine(string.format("%d pins are shown until tooltip cache fills (Stats chips). They may hide after.", pending), 1, 0.6, 0.2, true)
+        end
         GameTooltip:Show(); GameTooltip:SetFrameStrata("TOOLTIP")
     end)
     filterMapBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -5402,6 +5504,7 @@ beta-0.8.6r:
     end)
 
     local function UpdateReqLevelFilter()
+        if Viewer._applyingReqLevelPreset then return end
         Viewer.minReqLevel = tonumber(minReqLevelBox:GetText())
         Viewer.maxReqLevel = tonumber(maxReqLevelBox:GetText())
         if Viewer.searchTypingTimer then C_Timer.CancelTimer(Viewer.searchTypingTimer) end
@@ -8521,6 +8624,7 @@ function Viewer:OnInitialize()
 
     self:CreateWindow() 
     self:ApplySettings()
+    self:RestoreLiveFilters()
 
     L:RegisterEvent("GET_ITEM_INFO_RECEIVED", function(_, itemID)
         Viewer:OnGetItemInfoReceived(itemID)
@@ -8735,6 +8839,7 @@ function Viewer:Show()
 end
 
 function Viewer:Hide()
+    if self.PersistLiveFilters then self:PersistLiveFilters() end
     if self.window then self.window:Hide() end
     self.pendingMapAreaID = nil
     Cache.discoveriesBuilding = false

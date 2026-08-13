@@ -377,6 +377,7 @@ function Arrow:GetFilterMapZoneGuidSet(zoneID, viewerHash, Viewer)
     if self._fmZoneSet and self._fmZoneKey == key then
         return self._fmZoneSet
     end
+    if Viewer and Viewer.ResetFilterMapUncachedCount then Viewer:ResetFilterMapUncachedCount() end
     local set = {}
     local Core = L:GetModule("Core", true)
     local zoneGUIDs = Core and Core.ZoneIndex and Core.ZoneIndex[zoneID]

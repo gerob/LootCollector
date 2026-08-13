@@ -241,6 +241,12 @@ function Scanner:GetItemData(itemID, itemLink)
                 end
             end
             self.ramCache[cacheKey] = { fullText = string.lower(table.concat(textParts, " ")) }
+            local Viewer = L:GetModule("Viewer", true)
+            if Viewer and Viewer.IsFilterMapEnabled and Viewer:IsFilterMapEnabled()
+                and Viewer.HasDeepFilters and Viewer:HasDeepFilters()
+                and Viewer.ScheduleMapViewerFilterNotify then
+                Viewer:ScheduleMapViewerFilterNotify()
+            end
         end
     end
 
