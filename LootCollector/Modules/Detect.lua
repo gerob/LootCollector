@@ -619,6 +619,15 @@ function Detect:OnChatMsgLoot(_, msg)
         end
     end
 
+    -- Capital WF upgrades (AP NPC) fire CHAT_MSG_LOOT with src=direct and no
+    -- loot window. Bag/ProcessPotentialDiscovery already rejects those; the
+    -- chat path must too or they become mc=1 pins at a leftover map AreaID.
+    if isWF and src ~= "world_loot" then
+        L._ddebug("Detect", "Dropped: Worldforged chat loot is not from a loot window (" .. tostring(src) .. ")")
+        if pTime then L:ProfileStop("Detect:OnChatMsgLoot", pTime) end
+        return
+    end
+
     if src == "quest_reward" then
         L._ddebug("Detect", "Dropped: Source is in denied list (quest_reward)")
         if pTime then L:ProfileStop("Detect:OnChatMsgLoot", pTime) end 

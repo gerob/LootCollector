@@ -67,6 +67,25 @@ local function RestoreMapState(c, z, dl)
     if dl then SetDungeonMapLevel(dl) end
 end
 
+function Map:OnWorldMapUpdate()
+    if Map.isOpeningMenu then
+        Map.isOpeningMenu = false
+        return
+    end
+    if not Map.mapSystemReady then return end
+    if WorldMapFrame and WorldMapFrame:IsShown() then
+        Map.cacheIsDirty = true
+        Map:Update()
+    end
+    if WorldMapFrame and WorldMapFrame.viewerOverlayPin then
+        WorldMapFrame.viewerOverlayPin:Hide()
+    end
+end
+
+function Map:BindWorldMapUpdate()
+    self:RegisterEvent("WORLD_MAP_UPDATE", "OnWorldMapUpdate")
+end
+
 local function CreateOrShowPersistentOverlayPin(px, py, discovery)
     local parent = WorldMapDetailFrame or WorldMapFrame
     if not parent then return end
@@ -463,21 +482,7 @@ function Map:OnInitialize()
         
         pcall(RestoreMapState, sc, sz, sdl)
         
-        
-        Map:RegisterEvent("WORLD_MAP_UPDATE", function()
-            if Map.isOpeningMenu then
-                Map.isOpeningMenu = false
-                return
-            end
-            if not Map.mapSystemReady then return end
-            if WorldMapFrame and WorldMapFrame:IsShown() then
-                Map.cacheIsDirty = true 
-                Map:Update()
-            end
-            if WorldMapFrame and WorldMapFrame.viewerOverlayPin then
-                WorldMapFrame.viewerOverlayPin:Hide()
-            end
-        end)
+        Map:BindWorldMapUpdate()
         
         if (px and py and (px > 0 or py > 0)) and (mapID and mapID > 0) then
             Map._cachedLocation.c = c
@@ -810,21 +815,7 @@ function Map:GetPlayerLocation()
         
         RestoreMapState(sc, sz, sdl)
         
-        
-        Map:RegisterEvent("WORLD_MAP_UPDATE", function()
-            if Map.isOpeningMenu then
-                Map.isOpeningMenu = false
-                return
-            end
-            if not Map.mapSystemReady then return end
-            if WorldMapFrame and WorldMapFrame:IsShown() then
-                Map.cacheIsDirty = true 
-                Map:Update()
-            end
-            if WorldMapFrame and WorldMapFrame.viewerOverlayPin then
-                WorldMapFrame.viewerOverlayPin:Hide()
-            end
-        end)
+        Map:BindWorldMapUpdate()
         
         return cache.c, cache.mapID, cache.px, cache.py
     end

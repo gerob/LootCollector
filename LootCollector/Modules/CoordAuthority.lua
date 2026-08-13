@@ -39,18 +39,49 @@ function LootCollector:LockDiscoveryToCoordAuthority(rec)
     return true
 end
 
--- Always record in the player's current zone map, then restore whatever
--- the world map was showing (open or closed).
+-- Record in the player's current zone. When the world map is closed, do
+-- not SetMapZoom back to leftover continent/zone (3.3.5 keeps the last
+-- viewed AreaID after the map UI closes; restoring it is what stamped
+-- capital upgrades onto EPL/Azshara). When the map is open, restore so
+-- we do not steal the viewed zone.
 function LootCollector:GetPlayerZoneMapPosition()
-    local sc = GetCurrentMapContinent and GetCurrentMapContinent() or 0
-    local sz = GetCurrentMapZone and GetCurrentMapZone() or 0
-    local sdl = GetCurrentMapDungeonLevel and GetCurrentMapDungeonLevel() or 0
+    local mapOpen = WorldMapFrame and WorldMapFrame:IsVisible()
+    local sc, sz, sdl
+    if mapOpen then
+        sc = GetCurrentMapContinent and GetCurrentMapContinent() or 0
+        sz = GetCurrentMapZone and GetCurrentMapZone() or 0
+        sdl = GetCurrentMapDungeonLevel and GetCurrentMapDungeonLevel() or 0
+    end
+
+    local Map = self:GetModule("Map", true)
+    if Map and Map.UnregisterEvent then
+        Map:UnregisterEvent("WORLD_MAP_UPDATE")
+    end
+
     if SetMapToCurrentZone then SetMapToCurrentZone() end
     local px, py = GetPlayerMapPosition("player")
     local mapID = GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
     local c = GetCurrentMapContinent and GetCurrentMapContinent() or 0
-    if SetMapZoom then SetMapZoom(sc, sz) end
-    if SetDungeonMapLevel and sdl then SetDungeonMapLevel(sdl) end
+
+    local zoneName = GetRealZoneText and GetRealZoneText() or ""
+    if zoneName ~= "" and mapID and mapID > 0 then
+        local ZoneList = self:GetModule("ZoneList", true)
+        local info = ZoneList and ZoneList.MapDataByID and ZoneList.MapDataByID[mapID]
+        if info and info.name and string.lower(info.name) ~= string.lower(zoneName) then
+            -- Leftover/viewed AreaID. Do not report it.
+            c, mapID, px, py = 0, 0, 0, 0
+        end
+    end
+
+    if mapOpen then
+        if SetMapZoom and sc and sz then SetMapZoom(sc, sz) end
+        if SetDungeonMapLevel and sdl then SetDungeonMapLevel(sdl) end
+    end
+
+    if Map and Map.BindWorldMapUpdate then
+        Map:BindWorldMapUpdate()
+    end
+
     return c, mapID, px or 0, py or 0
 end
 

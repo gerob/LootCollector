@@ -3,6 +3,8 @@ Docs/Plans/*
 
 # Editor / AI backups
 *.lua.bak*
+.cursor
+/graphify*
 *~
 
 # OS junk

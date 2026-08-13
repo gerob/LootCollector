@@ -1929,6 +1929,7 @@ function Core:FixMismappedZones()
     if not (discoveries and next(discoveries)) then
         return
     end
+    L._wfBaseNameIndex = nil
 
     local function getPreferredZone(z1, z2)
         z1 = tonumber(z1)
@@ -1950,15 +1951,15 @@ function Core:FixMismappedZones()
         return nil, nil
     end
 
-    local function getBaseItemID(id)
-        return L:GetBaseItemID(id)
+    local function getBaseItemID(id, nameHint)
+        return L:GetBaseItemID(id, nameHint)
     end
 
     -- Step 1: Scan and remap upgraded item IDs to base item IDs
     local guidsToRemap = {}
     for guid, d in pairs(discoveries) do
         if d and d.i then
-            local baseID = getBaseItemID(tonumber(d.i))
+            local baseID = getBaseItemID(tonumber(d.i), d.il)
             if baseID ~= tonumber(d.i) then
                 table.insert(guidsToRemap, { guid = guid, baseID = baseID })
             end
@@ -2047,6 +2048,69 @@ function Core:FixMismappedZones()
         end
         L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
     end
+end
+
+-- One-shot: after upgrade IDs remap to base, drop pins whose zone is not
+-- in StarterDB for that base. Do not merge their mc into the real spawn.
+function Core:PurgeOffStarterZoneDiscoveries()
+    if not (L.db and L.db.global) then return 0 end
+    if L.db.global.offStarterZonePurgeV1 then return 0 end
+    if not (L.StarterDBItemZones and next(L.StarterDBItemZones)) then
+        return 0
+    end
+
+    local discoveries = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not discoveries then
+        L.db.global.offStarterZonePurgeV1 = true
+        return 0
+    end
+
+    local Constants = L:GetModule("Constants", true)
+    local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+
+    local keepByBase = {}
+    local toRemove = {}
+    for guid, d in pairs(discoveries) do
+        if type(d) == "table" and d.i and d.z and not d.vendorType and d.dt ~= BM and (not WF or not d.dt or d.dt == WF) then
+            local base = (L.GetBaseItemID and L:GetBaseItemID(d.i, d.il)) or d.i
+            local allowed = L.StarterDBItemZones[base]
+            if allowed then
+                local z = tonumber(d.z)
+                local inStarter = z and (allowed[z] or allowed[tostring(z)])
+                if inStarter then
+                    local cur = keepByBase[base]
+                    local mc = tonumber(d.mc) or 1
+                    if not cur or mc > (tonumber(cur.mc) or 1) then
+                        keepByBase[base] = d
+                    end
+                else
+                    table.insert(toRemove, guid)
+                end
+            end
+        end
+    end
+
+    local removed = 0
+    for _, guid in ipairs(toRemove) do
+        local d = discoveries[guid]
+        if d then
+            local base = (L.GetBaseItemID and L:GetBaseItemID(d.i, d.il)) or d.i
+            local keep = keepByBase[base]
+            if keep and keep.g and keep.g ~= guid and L.RemapLootedGuid then
+                L:RemapLootedGuid(guid, keep.g)
+            end
+            self:RemoveDiscoveryByGuid(guid, nil, true)
+            removed = removed + 1
+        end
+    end
+
+    L.db.global.offStarterZonePurgeV1 = true
+    if removed > 0 then
+        self:InvalidateLookupIndices()
+        L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
+    end
+    return removed
 end
 
 function Core:ApplyCoordAuthority()
@@ -2167,6 +2231,10 @@ function Core:PerformOnLoginMaintenance()
     self:FixCorruptedTimestamps()    
     self:FixInvalidContinentIDs()
     self:FixMismappedZones()
+    local purgedOffZone = self:PurgeOffStarterZoneDiscoveries()
+    if purgedOffZone > 0 and not hideMsgs then
+        print(string.format("|cff00ff00LootCollector:|r Removed %d pin(s) whose zone is not in Starter DB for that item.", purgedOffZone))
+    end
     self:FixLegacyVendorQuality()
 
     local phase = L.db.global.autoCleanupPhase or 0
@@ -3019,7 +3087,13 @@ function Core:HandleLocalLoot(discovery)
         if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
         return
     end
-    if itemID ~= 0 then
+    if itemID ~= 0 and not isVendorPayload and L.GetBaseItemID then
+        itemID = L:GetBaseItemID(itemID, discovery.il or name)
+        discovery.i = itemID
+        if discovery.il and type(discovery.il) == "string" then
+            discovery.il = discovery.il:gsub("item:%d+", "item:" .. itemID)
+        end
+    elseif itemID ~= 0 then
         discovery.i = itemID
     end
     
@@ -4155,11 +4229,7 @@ function Core:AddDiscovery(d, options)
         if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
         return nil 
     end
-    local function getBaseItemID(id)
-        return L:GetBaseItemID(id)
-    end
-
-    itemID = getBaseItemID(itemID)
+    itemID = L:GetBaseItemID(itemID, d.il)
     d.i = itemID
     if d.il and type(d.il) == "string" then
         d.il = d.il:gsub("item:%d+", "item:" .. itemID)

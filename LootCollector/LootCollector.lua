@@ -2432,7 +2432,95 @@ function LootCollector:IsWorldforgedListItem(id)
     return set[baseID] == true
 end
 
-function LootCollector:GetBaseItemID(id)
+function LootCollector:_IsKnownWorldforgedBase(id)
+    id = tonumber(id)
+    if not id or id == 0 then return false end
+    if self.WorldforgedUpgrades and self.WorldforgedUpgrades[id] then
+        return true
+    end
+    local set = self._wfListSet
+    if not set then
+        set = {}
+        if self.WorldforgedList then
+            for _, itemID in ipairs(self.WorldforgedList) do
+                if itemID then set[itemID] = true end
+            end
+        end
+        self._wfListSet = set
+    end
+    return set[id] == true
+end
+
+local function ExtractItemNameFromHint(hint)
+    if type(hint) ~= "string" or hint == "" then return nil end
+    return hint:match("%[(.-)%]")
+end
+
+function LootCollector:_IndexWfBaseName(index, name, itemID)
+    if not name or name == "" or not itemID then return end
+    local key = string.lower(name)
+    local existing = index[key]
+    if existing == nil then
+        index[key] = itemID
+    elseif existing ~= itemID then
+        index[key] = false
+    end
+end
+
+function LootCollector:_EnsureWfBaseNameIndex()
+    if self._wfBaseNameIndex then return self._wfBaseNameIndex end
+    local index = {}
+    local db = self.WorldforgedUpgrades
+    if db then
+        for baseID in pairs(db) do
+            local bid = tonumber(baseID) or baseID
+            local cached = self.itemInfoCache and self.itemInfoCache[bid]
+            local name = cached and cached[1]
+            if name then
+                self:_IndexWfBaseName(index, name, bid)
+            end
+        end
+    end
+    local discoveries = self.GetDiscoveriesDB and self:GetDiscoveriesDB()
+    if discoveries then
+        local Constants = self:GetModule("Constants", true)
+        local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+        for _, d in pairs(discoveries) do
+            if type(d) == "table" and d.i and not d.vendorType and d.dt ~= BM then
+                local di = tonumber(d.i)
+                if di and self:_IsKnownWorldforgedBase(di) then
+                    local n = ExtractItemNameFromHint(d.il) or (self.itemInfoCache and self.itemInfoCache[di] and self.itemInfoCache[di][1])
+                    if n then
+                        self:_IndexWfBaseName(index, n, di)
+                    end
+                end
+            end
+        end
+    end
+    self._wfBaseNameIndex = index
+    return index
+end
+
+function LootCollector:_ResolveBaseItemIDByName(name, incomingReqLevel, incomingID)
+    if not name or name == "" then return nil end
+    local index = self:_EnsureWfBaseNameIndex()
+    local baseID = index[string.lower(name)]
+    if not baseID or baseID == incomingID then return nil end
+
+    if incomingReqLevel then
+        local cached = self.itemInfoCache and self.itemInfoCache[baseID]
+        local baseReq = cached and cached[5]
+        if baseReq == nil then
+            baseReq = select(5, GetItemInfo(baseID))
+        end
+        if baseReq and baseReq >= incomingReqLevel then
+            return nil
+        end
+    end
+    return baseID
+end
+
+function LootCollector:GetBaseItemID(id, nameHint)
     id = tonumber(id) or 0
     if id == 0 then return 0 end
     if not self.upgradeToBase then
@@ -2448,7 +2536,33 @@ function LootCollector:GetBaseItemID(id)
             end
         end
     end
-    return self.upgradeToBase[id] or id
+    local mapped = self.upgradeToBase[id]
+    if mapped then return mapped end
+    if self:_IsKnownWorldforgedBase(id) then return id end
+
+    local name = ExtractItemNameFromHint(nameHint)
+    local reqLevel
+    local cached = self.itemInfoCache and self.itemInfoCache[id]
+    if cached then
+        name = name or cached[1]
+        reqLevel = cached[5]
+    end
+    if not name or reqLevel == nil then
+        local n, _, _, _, minLevel = GetItemInfo(id)
+        name = name or n
+        if reqLevel == nil then reqLevel = minLevel end
+    end
+    if reqLevel and reqLevel ~= 60 then
+        return id
+    end
+    if not name then return id end
+
+    local baseID = self:_ResolveBaseItemIDByName(name, reqLevel, id)
+    if baseID then
+        self.upgradeToBase[id] = baseID
+        return baseID
+    end
+    return id
 end
 
 -- Phase 0 is the first level-60 upgrade. The bundled table is sparse for
