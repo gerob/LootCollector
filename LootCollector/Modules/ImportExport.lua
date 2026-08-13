@@ -501,6 +501,9 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
             end
             
             if existing then
+                if L.LockDiscoveryToCoordAuthority then
+                    L:LockDiscoveryToCoordAuthority(existing)
+                end
                 existing.ls = math.max(tonumber(existing.ls) or 0, tonumber(d.lastSeen) or 0)
                 existing.mc = (tonumber(existing.mc) or 1) + (tonumber(d.mergeCount) or 1)
                 
@@ -567,6 +570,10 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
                 shortRecord.ac = math.random(2, 4)
                 shortRecord.at = currentTime
                 shortRecord.nd = nil
+
+                if L.LockDiscoveryToCoordAuthority then
+                    L:LockDiscoveryToCoordAuthority(shortRecord)
+                end
 
                 if not shortRecord.fp_votes and shortRecord.fp and shortRecord.t0 then
                     shortRecord.fp_votes = { [shortRecord.fp] = { score = 1, t0 = shortRecord.t0 } }

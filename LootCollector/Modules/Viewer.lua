@@ -2605,10 +2605,20 @@ local function RebuildDiscoveriesByGuid()
     end
 end
 
+-- Cached GetFilterStateHash: rebuild only when filters change or the
+-- filtered-result cache was dropped (lastFilterState == nil).
+local _filterHashDirty = true
+local _cachedFilterHash = nil
+local _filterHashFingerprint = nil
+local _hashParts = {}
+local _filterEntries = {}
+local FLAT_FILTER_KEYS = { zone = true, source = true, quality = true, looted = true, vendorType = true }
+
 local function InvalidateViewerFilterCache()
     Cache.filteredResults = {}
     Cache.lastFilterState = nil
     Cache.uniqueValuesValid = false
+    _filterHashDirty = true
     if Viewer.InvalidateArrowFilterCache then
         Viewer:InvalidateArrowFilterCache()
     end
@@ -2871,6 +2881,126 @@ function Viewer:ProcessScanQueueBatch()
     self:ProcessCacheBuildChunk()
 end
 
+-- Hoisted filter closures (allocated once). Per-pass flags live in _filterEvalCtx.
+local _filterEvalCtx = {
+    isCoARealm = false,
+    hideBagsOn = false,
+    isVendorView = false,
+}
+
+local filterPredicates = {
+    mainFilter = function(data)
+        local Constants = L:GetModule("Constants", true)
+        -- Vendors are exempt from the forbidden-zone check: special
+        -- vendors legitimately stand inside capital cities.
+        if not data.isUndiscovered and not data.isVendor and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(data.discovery.c, data.discovery.z, data.discovery.fp) then
+            return false
+        end
+
+        -- CoA realms removed Librams/Idols/Totems entirely: hide any
+        -- relic row (discovered or undiscovered) as soon as its equip
+        -- slot is known from item data.
+        if _filterEvalCtx.isCoARealm and data.equipLoc == "INVTYPE_RELIC" then
+            return false
+        end
+
+        -- "Hide Bags" (map filter) now also applies to the list.
+        if _filterEvalCtx.hideBagsOn and data.equipLoc == "INVTYPE_BAG" then
+            return false
+        end
+
+        if Viewer.currentFilter == "eq" then
+            return not data.isMystic and not data.isVendor
+        elseif Viewer.currentFilter == "ms" then
+            return data.isMystic and not data.isVendor
+        elseif Viewer.currentFilter == "bmv" then
+            return data.isVendor
+        end
+        return false
+    end,
+
+    searchFilter = function(data)
+        -- Live free-text search removed; chips (deepSearchFilters) handle search.
+        return true
+    end,
+
+    -- Search chips: name OR zone OR tooltip; rows AND together.
+    deepSearchFilter = function(data)
+        return Viewer:MatchesDeepFilterOnRow(data)
+    end,
+
+    columnFilters = {
+        eq = {
+            slot = function(data)
+                if size(Viewer.columnFilters.eq.slot) == 0 then return true end
+                local slotValue = data.equipLoc and _G[data.equipLoc] or ""
+                return Viewer.columnFilters.eq.slot[slotValue] ~= nil
+            end,
+            type = function(data)
+                return DiscoveryMatchesTypeFilter(data, Viewer.columnFilters.eq.type)
+            end,
+        },
+        ms = {
+            class = function(data)
+                if size(Viewer.columnFilters.ms.class) == 0 then return true end
+                local classValue = ""
+                if data.cl and data.cl ~= "cl" then
+                    local classToken = CLASS_ABBREVIATIONS_REVERSE[data.cl]
+                    if classToken then
+                        classValue = _G.LOCALIZED_CLASS_NAMES_MALE[classToken] or _G.LOCALIZED_CLASS_NAMES_FEMALE[classToken] or ""
+                    end
+                end
+                if classValue == "" then classValue = data.characterClass or "" end
+                return Viewer.columnFilters.ms.class[classValue] ~= nil
+            end,
+        },
+        vendorType = function(data)
+            if size(Viewer.columnFilters.vendorType) == 0 then return true end
+            local typeMap = { ["BM"] = "Blackmarket", ["MS"] = "Mystic Enchants" }
+            local vType = data.vendorType or (data.discovery and data.discovery.vendorType)
+            if not vType and data.discovery and data.discovery.g then
+                if data.discovery.g:find("BM-", 1, true) then vType = "BM"
+                elseif data.discovery.g:find("MS-", 1, true) then vType = "MS" end
+            end
+            local typeName = typeMap[vType] or vType or "Unknown"
+            return Viewer.columnFilters.vendorType[typeName] ~= nil
+        end,
+        zone = function(data)
+            if size(Viewer.columnFilters.zone) == 0 then return true end
+            local zoneValue = GetLocalizedZoneName(data.discovery)
+            return Viewer.columnFilters.zone[zoneValue] ~= nil
+        end,
+        source = function(data)
+            if _filterEvalCtx.isVendorView then return true end
+            if size(Viewer.columnFilters.source) == 0 then return true end
+            local source     = data.discovery.src or "unknown"
+            local sourceValue= SOURCE_NAMES[source] or source
+            return Viewer.columnFilters.source[sourceValue] ~= nil
+        end,
+        quality = function(data)
+            if _filterEvalCtx.isVendorView then return true end
+            if size(Viewer.columnFilters.quality) == 0 then return true end
+            local _, _, quality = GetItemInfoSafe(data.discovery.il, data.discovery.i)
+            if not quality then
+                return Viewer.columnFilters.quality["Unknown"] ~= nil
+            end
+            local qualityValue = QUALITY_NAMES[quality] or ("Quality " .. tostring(quality))
+            return Viewer.columnFilters.quality[qualityValue] ~= nil
+        end,
+        looted = function(data)
+            if _filterEvalCtx.isVendorView then return true end
+            if size(Viewer.columnFilters.looted) == 0 then return true end
+            local lootedValue = Viewer:IsLootedByChar(data.guid) and "Looted" or "Not Looted"
+            return Viewer.columnFilters.looted[lootedValue] ~= nil
+        end,
+        duplicates = function(data)
+            if _filterEvalCtx.isVendorView then return true end
+            if not Viewer.columnFilters.duplicates then return true end
+            return Cache.duplicateItems[data.discovery.i] and Cache.duplicateItems[data.discovery.i] > 1
+        end,
+    },
+}
+
 function Viewer:GetFilteredDiscoveries()
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -2911,121 +3041,9 @@ function Viewer:GetFilteredDiscoveries()
     local isVendorView = (self.currentFilter == "bmv")
 
     local CoreMod = L:GetModule("Core", true)
-    local isCoARealm = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
-    local hideBagsOn = L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.hideBags
-
-    local filterPredicates = {
-        mainFilter = function(data)
-            local Constants = L:GetModule("Constants", true)
-            -- Vendors are exempt from the forbidden-zone check: special
-            -- vendors legitimately stand inside capital cities.
-            if not data.isUndiscovered and not data.isVendor and Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(data.discovery.c, data.discovery.z, data.discovery.fp) then
-                return false
-            end
-
-            -- CoA realms removed Librams/Idols/Totems entirely: hide any
-            -- relic row (discovered or undiscovered) as soon as its equip
-            -- slot is known from item data.
-            if isCoARealm and data.equipLoc == "INVTYPE_RELIC" then
-                return false
-            end
-
-            -- "Hide Bags" (map filter) now also applies to the list.
-            if hideBagsOn and data.equipLoc == "INVTYPE_BAG" then
-                return false
-            end
-
-            if self.currentFilter == "eq" then
-                return not data.isMystic and not data.isVendor
-            elseif self.currentFilter == "ms" then
-                return data.isMystic and not data.isVendor
-            elseif self.currentFilter == "bmv" then
-                return data.isVendor
-            end
-            return false
-        end,
-
-        searchFilter = function(data)
-            -- Live free-text search removed; chips (deepSearchFilters) handle search.
-            return true
-        end,
-
-        -- Search chips: name OR zone OR tooltip; rows AND together.
-        deepSearchFilter = function(data)
-            return self:MatchesDeepFilterOnRow(data)
-        end,
-
-        columnFilters = {
-            eq = {
-                slot = function(data)
-                    if size(self.columnFilters.eq.slot) == 0 then return true end
-                    local slotValue = data.equipLoc and _G[data.equipLoc] or ""
-                    return self.columnFilters.eq.slot[slotValue] ~= nil
-                end,
-                type = function(data)
-                    return DiscoveryMatchesTypeFilter(data, self.columnFilters.eq.type)
-                end,
-            },
-            ms = {
-                class = function(data)
-                    if size(self.columnFilters.ms.class) == 0 then return true end
-                    local classValue = ""
-                    if data.cl and data.cl ~= "cl" then
-                        local classToken = CLASS_ABBREVIATIONS_REVERSE[data.cl]
-                        if classToken then
-                            classValue = _G.LOCALIZED_CLASS_NAMES_MALE[classToken] or _G.LOCALIZED_CLASS_NAMES_FEMALE[classToken] or ""
-                        end
-                    end
-                    if classValue == "" then classValue = data.characterClass or "" end
-                    return self.columnFilters.ms.class[classValue] ~= nil
-                end,
-            },
-            vendorType = function(data)
-                if size(self.columnFilters.vendorType) == 0 then return true end
-                local typeMap = { ["BM"] = "Blackmarket", ["MS"] = "Mystic Enchants" }
-                local vType = data.vendorType or (data.discovery and data.discovery.vendorType)
-                if not vType and data.discovery and data.discovery.g then
-                    if data.discovery.g:find("BM-", 1, true) then vType = "BM"
-                    elseif data.discovery.g:find("MS-", 1, true) then vType = "MS" end
-                end
-                local typeName = typeMap[vType] or vType or "Unknown"
-                return self.columnFilters.vendorType[typeName] ~= nil
-            end,
-            zone = function(data)
-                if size(self.columnFilters.zone) == 0 then return true end
-                local zoneValue = GetLocalizedZoneName(data.discovery)
-                return self.columnFilters.zone[zoneValue] ~= nil
-            end,
-            source = function(data)
-                if isVendorView then return true end
-                if size(self.columnFilters.source) == 0 then return true end
-                local source     = data.discovery.src or "unknown"
-                local sourceValue= SOURCE_NAMES[source] or source
-                return self.columnFilters.source[sourceValue] ~= nil
-            end,
-            quality = function(data)
-                if isVendorView then return true end
-                if size(self.columnFilters.quality) == 0 then return true end
-                local _, _, quality = GetItemInfoSafe(data.discovery.il, data.discovery.i)
-                if not quality then
-                    return self.columnFilters.quality["Unknown"] ~= nil
-                end
-                local qualityValue = QUALITY_NAMES[quality] or ("Quality " .. tostring(quality))
-                return self.columnFilters.quality[qualityValue] ~= nil
-            end,
-            looted = function(data)
-                if isVendorView then return true end
-                if size(self.columnFilters.looted) == 0 then return true end
-                local lootedValue = Viewer:IsLootedByChar(data.guid) and "Looted" or "Not Looted"
-                return self.columnFilters.looted[lootedValue] ~= nil
-            end,
-            duplicates = function(data)
-                if isVendorView then return true end
-                if not self.columnFilters.duplicates then return true end
-                return Cache.duplicateItems[data.discovery.i] and Cache.duplicateItems[data.discovery.i] > 1
-            end,
-        },
-    }
+    _filterEvalCtx.isVendorView = isVendorView
+    _filterEvalCtx.isCoARealm = CoreMod and CoreMod.IsConfirmedCoARealm and CoreMod:IsConfirmedCoARealm()
+    _filterEvalCtx.hideBagsOn = L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.hideBags
 
     for i = 1, totalToFilter do
         local data = discoveriesToFilter[i]
@@ -3222,82 +3240,119 @@ function Viewer:GetFilteredDiscoveries()
     return Cache.filteredResults
 end
 
+local _fpParts = {}
+local _dsfScratch = {}
+
+local function BuildFilterHashFingerprint(self)
+    local dsf = self.deepSearchFilters
+    local hideBags = L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.hideBags
+    local wfPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
+    wipe(_fpParts)
+    _fpParts[1] = self.currentFilter or ""
+    _fpParts[2] = self.sortColumn or ""
+    _fpParts[3] = tostring(self.sortAscending)
+    _fpParts[4] = tostring(self.minReqLevel)
+    _fpParts[5] = tostring(self.maxReqLevel)
+    _fpParts[6] = tostring(self.lastSeenSortState or "off")
+    _fpParts[7] = tostring(self.lootedFilterState)
+    _fpParts[8] = tostring(self.collectedMEFilterState)
+    _fpParts[9] = tostring(self.favoritesFilterState)
+    _fpParts[10] = (L.db and L.db.profile and L.db.profile.perCharacterFavorites) and "c" or "p"
+    _fpParts[11] = tostring(dsf and #dsf or 0)
+    _fpParts[12] = (self.columnFilters and self.columnFilters.duplicates) and "1" or "0"
+    _fpParts[13] = tostring(wfPhase)
+    _fpParts[14] = hideBags and "1" or "0"
+    local n = 14
+    if dsf then
+        for i = 1, #dsf do
+            n = n + 1
+            _fpParts[n] = dsf[i]
+        end
+    end
+    return _tconcat(_fpParts, "|")
+end
+
 function Viewer:GetFilterStateHash()
-    local hashParts = {
-        self.currentFilter,
-        self.sortColumn,
-        tostring(self.sortAscending),
-        tostring(self.minReqLevel),
-        tostring(self.maxReqLevel),
-        tostring(self.lastSeenSortState or "off")
-    }
+    local fp = BuildFilterHashFingerprint(self)
+    if not _filterHashDirty and Cache.lastFilterState ~= nil and _cachedFilterHash and fp == _filterHashFingerprint then
+        return _cachedFilterHash
+    end
+
+    wipe(_hashParts)
+    _hashParts[1] = self.currentFilter
+    _hashParts[2] = self.sortColumn
+    _hashParts[3] = tostring(self.sortAscending)
+    _hashParts[4] = tostring(self.minReqLevel)
+    _hashParts[5] = tostring(self.maxReqLevel)
+    _hashParts[6] = tostring(self.lastSeenSortState or "off")
 
     -- columnFilters mixes two shapes: eq/ms are double-nested
     -- (eq.slot = {value=true}), while zone/source/quality/looted/vendorType
     -- are flat maps (zone = {value=true}). The old loop assumed everything
     -- was double-nested, so the flat filters NEVER contributed to the hash
     -- and stale cached results could be served after changing them.
-    local FLAT_FILTER_KEYS = { zone = true, source = true, quality = true, looted = true, vendorType = true }
-
-    local filterEntries = {}
+    wipe(_filterEntries)
     for filterType, filters in pairs(self.columnFilters) do
         if FLAT_FILTER_KEYS[filterType] then
             if type(filters) == "table" and size(filters) > 0 then
                 local sortedValues = keys(filters)
                 _tsort(sortedValues)
-                _tinsert(filterEntries, concatStrings(filterType, ":", _tconcat(sortedValues, ",")))
+                _tinsert(_filterEntries, concatStrings(filterType, ":", _tconcat(sortedValues, ",")))
             end
         elseif type(filters) == "table" then
             for column, values in pairs(filters) do
                 if type(values) == "table" and size(values) > 0 then
                     local sortedValues = keys(values)
                     _tsort(sortedValues)
-                    _tinsert(filterEntries, concatStrings(filterType, ":", column, ":", _tconcat(sortedValues, ",")))
+                    _tinsert(_filterEntries, concatStrings(filterType, ":", column, ":", _tconcat(sortedValues, ",")))
                 end
             end
         elseif filterType == "duplicates" and filters then
-            _tinsert(filterEntries, "duplicates:true")
+            _tinsert(_filterEntries, "duplicates:true")
         end
     end
     
     if self.lootedFilterState ~= nil then
-        _tinsert(filterEntries, "looted:" .. tostring(self.lootedFilterState))
+        _tinsert(_filterEntries, "looted:" .. tostring(self.lootedFilterState))
     end
     if self.collectedMEFilterState ~= nil then
-        _tinsert(filterEntries, "collectedME:" .. tostring(self.collectedMEFilterState))
+        _tinsert(_filterEntries, "collectedME:" .. tostring(self.collectedMEFilterState))
     end
     if self.favoritesFilterState == true then
-        _tinsert(filterEntries, "favorites:true")
+        _tinsert(_filterEntries, "favorites:true")
     end
     if L.db and L.db.profile and L.db.profile.perCharacterFavorites then
-        _tinsert(filterEntries, "favoritesScope:char")
+        _tinsert(_filterEntries, "favoritesScope:char")
     else
-        _tinsert(filterEntries, "favoritesScope:profile")
+        _tinsert(_filterEntries, "favoritesScope:profile")
     end
     if self.deepSearchFilters and #self.deepSearchFilters > 0 then
         -- Order among rows doesn't change the result set (all AND), so sort for
         -- a stable cache key.
-        local dsf = {}
-        for i = 1, #self.deepSearchFilters do dsf[i] = string.lower(self.deepSearchFilters[i]) end
-        _tsort(dsf)
-        _tinsert(filterEntries, concatStrings("deepx:", _tconcat(dsf, "|")))
+        wipe(_dsfScratch)
+        for i = 1, #self.deepSearchFilters do _dsfScratch[i] = string.lower(self.deepSearchFilters[i]) end
+        _tsort(_dsfScratch)
+        _tinsert(_filterEntries, concatStrings("deepx:", _tconcat(_dsfScratch, "|")))
     end
     
     -- Belt-and-suspenders: the phase menu already force-clears the caches,
     -- but include the phase in the hash so no future phase-changing code
     -- path can ever be served a stale filtered list.
     local wfPhase = L.db and L.db.profile and L.db.profile.viewer and L.db.profile.viewer.worldforgedPhase or 0
-    _tinsert(filterEntries, "wfphase:" .. tostring(wfPhase))
+    _tinsert(_filterEntries, "wfphase:" .. tostring(wfPhase))
 
     if L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.hideBags then
-        _tinsert(filterEntries, "hidebags:1")
+        _tinsert(_filterEntries, "hidebags:1")
     end
 
-    local hash = _tconcat(hashParts, "|")
-    if size(filterEntries) > 0 then
-        hash = concatStrings(hash, "|", _tconcat(filterEntries, "|"))
+    local hash = _tconcat(_hashParts, "|")
+    if #_filterEntries > 0 then
+        hash = concatStrings(hash, "|", _tconcat(_filterEntries, "|"))
     end
 
+    _cachedFilterHash = hash
+    _filterHashFingerprint = fp
+    _filterHashDirty = false
     return hash
 end
 
@@ -8069,6 +8124,7 @@ end
 function Viewer:InvalidateFilterCache()
     Cache.filteredResults = {}
     Cache.lastFilterState = nil
+    _filterHashDirty = true
 end
 
 -- Debounced filter invalidation + refresh. Used when row data heals in
@@ -8082,6 +8138,7 @@ function Viewer:ScheduleFilterInvalidation()
         Viewer._invalidateTimer = nil
         Cache.filteredResults = {}
         Cache.lastFilterState = nil
+        _filterHashDirty = true
         if Viewer.window and Viewer.window:IsShown() then
             Viewer:RefreshData()
         end

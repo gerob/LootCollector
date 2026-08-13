@@ -337,11 +337,17 @@ if L:IsPaused() then return end
     local vendorType = isMSVendor and "MS" or specialVendorType
     local now = time()
     
-    local px, py = GetPlayerMapPosition("player")
-    px = px or 0; py = py or 0
+    local cPos, mapID, px, py
+    if L.GetPlayerZoneMapPosition then
+        cPos, mapID, px, py = L:GetPlayerZoneMapPosition()
+    else
+        if SetMapToCurrentZone then SetMapToCurrentZone() end
+        px, py = GetPlayerMapPosition("player")
+        px = px or 0; py = py or 0
+        mapID = GetCurrentMapAreaID()
+        cPos = GetCurrentMapContinent() or 0
+    end
 
-    SetMapToCurrentZone()
-    local mapID = GetCurrentMapAreaID()
     local ZoneList = L:GetModule("ZoneList", true)
     local zoneInfo = ZoneList and ZoneList.MapDataByID[mapID]
 
@@ -351,7 +357,7 @@ if L:IsPaused() then return end
         z = mapID
         iz = 0
     else 
-        c = GetCurrentMapContinent() or 0
+        c = cPos or 0
         z = mapID
         iz = mapID
     end
@@ -443,12 +449,17 @@ function Detect:OnLootOpened()
     self._ctx.lastLootOpenedAt = time()
     lastLootContext.openedAt = time()
 
-    local px, py = GetPlayerMapPosition("player")
+    local cPos, mapID, px, py
+    if L.GetPlayerZoneMapPosition then
+        cPos, mapID, px, py = L:GetPlayerZoneMapPosition()
+    else
+        if SetMapToCurrentZone then SetMapToCurrentZone() end
+        px, py = GetPlayerMapPosition("player")
+        mapID = GetCurrentMapAreaID()
+        cPos = GetCurrentMapContinent() or 0
+    end
     lastLootContext.x = px or 0
     lastLootContext.y = py or 0
-    
-    SetMapToCurrentZone() 
-    local mapID = GetCurrentMapAreaID()
     lastLootContext.mapID = mapID
     
     local ZoneList = L:GetModule("ZoneList", true)
@@ -459,7 +470,7 @@ function Detect:OnLootOpened()
         lastLootContext.z = mapID 
         lastLootContext.iz = 0   
     else 
-        lastLootContext.c = GetCurrentMapContinent() or 0
+        lastLootContext.c = cPos or 0
         lastLootContext.z = mapID  
         lastLootContext.iz = mapID 
     end
@@ -625,9 +636,15 @@ function Detect:OnChatMsgLoot(_, msg)
         c, z, iz = lastLootContext.c, lastLootContext.z, lastLootContext.iz
         x_val, y_val = lastLootContext.x, lastLootContext.y
     else
-        c = GetCurrentMapContinent() or 0
-        SetMapToCurrentZone()
-        local mapID = GetCurrentMapAreaID()
+        local cPos, mapID, px, py
+        if L.GetPlayerZoneMapPosition then
+            cPos, mapID, px, py = L:GetPlayerZoneMapPosition()
+        else
+            if SetMapToCurrentZone then SetMapToCurrentZone() end
+            mapID = GetCurrentMapAreaID()
+            cPos = GetCurrentMapContinent() or 0
+            px, py = GetPlayerMapPosition("player")
+        end
         local ZoneList = L:GetModule("ZoneList", true)
         local zoneInfo = ZoneList and ZoneList.MapDataByID[mapID]
 
@@ -636,11 +653,11 @@ function Detect:OnChatMsgLoot(_, msg)
             z = mapID
             iz = 0
         else
+            c = cPos or 0
             z = mapID
             iz = mapID
         end
         
-        local px, py = GetPlayerMapPosition("player")
         x_val, y_val = px or 0, py or 0
     end
     
@@ -751,9 +768,15 @@ function Detect:ProcessPotentialDiscovery(link, sourceHint, looterName)
     if src == "world_loot" and (nowTime - lastLootContext.openedAt) <= LOOT_VALIDITY_WINDOW then
         c, z, iz, px, py = lastLootContext.c, lastLootContext.z, lastLootContext.iz, lastLootContext.x, lastLootContext.y
     else
-        c = GetCurrentMapContinent() or 0
-        SetMapToCurrentZone()
-        local mapID = GetCurrentMapAreaID()
+        local cPos, mapID, px2, py2
+        if L.GetPlayerZoneMapPosition then
+            cPos, mapID, px2, py2 = L:GetPlayerZoneMapPosition()
+        else
+            if SetMapToCurrentZone then SetMapToCurrentZone() end
+            mapID = GetCurrentMapAreaID()
+            cPos = GetCurrentMapContinent() or 0
+            px2, py2 = GetPlayerMapPosition("player")
+        end
         local ZoneList = L:GetModule("ZoneList", true)
         local zoneInfo = ZoneList and ZoneList.MapDataByID[mapID]
 
@@ -762,12 +785,12 @@ function Detect:ProcessPotentialDiscovery(link, sourceHint, looterName)
             z = mapID
             iz = 0
         else
+            c = cPos or 0
             z = mapID
             iz = mapID
         end
         
-        px, py = GetPlayerMapPosition("player")
-        px = px or 0; py = py or 0
+        px, py = px2 or 0, py2 or 0
     end
 
     if Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(c, z, looterName) then

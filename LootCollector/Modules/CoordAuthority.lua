@@ -1,0 +1,171 @@
+-- Maintainer-verified Worldforged coordinates.
+-- Bump CoordAuthorityRevision whenever you add or change a row so login re-applies.
+-- Players' SavedVariables are snapped on login; public DISC cannot override these xy.
+
+local L = LootCollector
+
+L.CoordAuthorityRevision = 1
+L.CoordAuthority = {
+    [410154] = { [24] = { c = 2, x = 0.6156, y = 0.6831 } }, -- Plaguebloom Spear, Eastern Plaguelands
+}
+
+function LootCollector:GetCoordAuthorityEntry(itemID, zoneID)
+    itemID = tonumber(itemID)
+    zoneID = tonumber(zoneID)
+    if not itemID or not zoneID or type(self.CoordAuthority) ~= "table" then
+        return nil
+    end
+    local byItem = self.CoordAuthority[itemID]
+    if not byItem and self.GetBaseItemID then
+        local base = self:GetBaseItemID(itemID)
+        if base and base ~= itemID then
+            byItem = self.CoordAuthority[base]
+        end
+    end
+    if not byItem then return nil end
+    return byItem[zoneID]
+end
+
+function LootCollector:LockDiscoveryToCoordAuthority(rec)
+    if type(rec) ~= "table" then return false end
+    local entry = self:GetCoordAuthorityEntry(rec.i, rec.z)
+    if not entry then return false end
+    rec.xy = rec.xy or {}
+    rec.xy.x = self:Round4(entry.x)
+    rec.xy.y = self:Round4(entry.y)
+    if entry.c then
+        rec.c = tonumber(entry.c) or rec.c
+    end
+    return true
+end
+
+-- Always record in the player's current zone map, then restore whatever
+-- the world map was showing (open or closed).
+function LootCollector:GetPlayerZoneMapPosition()
+    local sc = GetCurrentMapContinent and GetCurrentMapContinent() or 0
+    local sz = GetCurrentMapZone and GetCurrentMapZone() or 0
+    local sdl = GetCurrentMapDungeonLevel and GetCurrentMapDungeonLevel() or 0
+    if SetMapToCurrentZone then SetMapToCurrentZone() end
+    local px, py = GetPlayerMapPosition("player")
+    local mapID = GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
+    local c = GetCurrentMapContinent and GetCurrentMapContinent() or 0
+    if SetMapZoom then SetMapZoom(sc, sz) end
+    if SetDungeonMapLevel and sdl then SetDungeonMapLevel(sdl) end
+    return c, mapID, px or 0, py or 0
+end
+
+function LootCollector:FormatCoordAuthoritySnippet(itemID, zoneID, c, x, y, itemName)
+    itemID = tonumber(itemID) or 0
+    zoneID = tonumber(zoneID) or 0
+    c = tonumber(c) or 0
+    x = self:Round4(x or 0)
+    y = self:Round4(y or 0)
+    local comment = itemName and (" -- " .. tostring(itemName)) or ""
+    return string.format(
+        "    [%d] = { [%d] = { c = %d, x = %.4f, y = %.4f } },%s",
+        itemID, zoneID, c, x, y, comment
+    )
+end
+
+local function ResolveSetCoordsRecord(msg)
+    local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not db then return nil, "Discovery database not ready." end
+
+    local itemID = tonumber(msg)
+    if not itemID and msg and msg ~= "" then
+        itemID = tonumber(msg:match("item:(%d+)"))
+    end
+
+    if itemID then
+        local queryBase = (L.GetBaseItemID and L:GetBaseItemID(itemID)) or itemID
+        local _, mapID = L:GetPlayerZoneMapPosition()
+        local matches, zoneMatches = {}, {}
+        for guid, d in pairs(db) do
+            if type(d) == "table" and d.i and not d.vendorType then
+                local diBase = (L.GetBaseItemID and L:GetBaseItemID(d.i)) or d.i
+                if d.i == itemID or diBase == queryBase then
+                    table.insert(matches, d)
+                    if tonumber(d.z) == tonumber(mapID) then
+                        table.insert(zoneMatches, d)
+                    end
+                end
+            end
+        end
+        local pool = (#zoneMatches > 0) and zoneMatches or matches
+        if #pool == 0 then
+            return nil, "No local discovery for item " .. tostring(itemID) .. "."
+        end
+        table.sort(pool, function(a, b)
+            local amc, bmc = tonumber(a.mc) or 1, tonumber(b.mc) or 1
+            if amc ~= bmc then return amc > bmc end
+            return (tonumber(a.ls) or 0) > (tonumber(b.ls) or 0)
+        end)
+        return pool[1]
+    end
+
+    local Viewer = L:GetModule("Viewer", true)
+    local row = Viewer and Viewer.selectedRow
+    local data = row and (row.discoveryData or row)
+    local guid = data and (data.guid or (data.discovery and data.discovery.g))
+    if guid and db[guid] then
+        return db[guid]
+    end
+    return nil, "Select a Discoveries row or pass /lcsetcoords <itemID>."
+end
+
+SLASH_LOOTCOLLECTORSETCOORDS1 = "/lcsetcoords"
+SlashCmdList["LOOTCOLLECTORSETCOORDS"] = function(msg)
+    msg = tostring(msg or ""):match("^%s*(.-)%s*$") or ""
+    if msg == "help" then
+        print("|cff00ff00LootCollector:|r /lcsetcoords [itemID] - snap a pin to your position and print a CoordAuthority snippet.")
+        return
+    end
+
+    local rec, err = ResolveSetCoordsRecord(msg)
+    if not rec then
+        print("|cffff7f00LootCollector:|r " .. tostring(err or "No discovery selected."))
+        return
+    end
+    if rec.vendorType then
+        print("|cffff7f00LootCollector:|r /lcsetcoords is for Worldforged pins, not vendors.")
+        return
+    end
+
+    local c, mapID, px, py = L:GetPlayerZoneMapPosition()
+    if rec.z and tonumber(rec.z) ~= tonumber(mapID) then
+        print(string.format(
+            "|cffff7f00LootCollector:|r Stand in the pin's zone to snap it (pin z=%s, you are z=%s).",
+            tostring(rec.z), tostring(mapID)
+        ))
+        return
+    end
+    if (px == 0 and py == 0) or not mapID or mapID == 0 then
+        print("|cffff7f00LootCollector:|r Could not read your map position. Close loading screens and try again.")
+        return
+    end
+
+    rec.xy = rec.xy or {}
+    rec.xy.x = L:Round4(px)
+    rec.xy.y = L:Round4(py)
+    rec.c = tonumber(c) or rec.c
+    rec.ls = time()
+    L.DataHasChanged = true
+
+    local Map = L:GetModule("Map", true)
+    if Map then
+        Map.cacheIsDirty = true
+        if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then Map:Update() end
+        if Map.UpdateMinimap then Map:UpdateMinimap() end
+    end
+    local Viewer = L:GetModule("Viewer", true)
+    if Viewer and Viewer.NotifyDatabaseChanged then
+        Viewer:NotifyDatabaseChanged()
+    end
+    L:SendMessage("LootCollector_DiscoveriesUpdated", "update", rec.g, rec)
+
+    local itemID = (L.GetBaseItemID and L:GetBaseItemID(rec.i)) or rec.i
+    local itemName = rec.il and rec.il:match("%[(.+)%]") or select(1, GetItemInfo(rec.i))
+    print("|cff00ff00LootCollector:|r Snapped pin to " .. string.format("%.2f, %.2f", rec.xy.x * 100, rec.xy.y * 100) .. ".")
+    print("|cffaaaaaaPaste into CoordAuthority.lua and bump CoordAuthorityRevision:|r")
+    print(L:FormatCoordAuthoritySnippet(itemID, rec.z, rec.c, rec.xy.x, rec.xy.y, itemName))
+end

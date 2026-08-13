@@ -27,6 +27,7 @@ Core._isSBCached = nil
 
 Core.ZoneIndex = {}
 Core.ZoneIndexBuilt = false
+-- Processed by Core._indexTicker (starts hidden). Show the ticker after insert.
 Core.IndexQueue = {}
 
 local SCAN_BUDGET_MS   = 4       
@@ -1326,12 +1327,26 @@ function Core:DeduplicateItems(mysticScrollsKeepOldest)
                     end
                     
                     if anchor.xy and d.xy then
-                        local oldX, oldY = anchor.xy.x, anchor.xy.y
-                        anchor.xy.x = L:Round4((oldX * 0.8) + (d.xy.x * 0.2))
-                        anchor.xy.y = L:Round4((oldY * 0.8) + (d.xy.y * 0.2))
-                        
-                        if oldX ~= anchor.xy.x or oldY ~= anchor.xy.y then
-                            refinedCount = refinedCount + 1
+                        local auth = L.GetCoordAuthorityEntry and L:GetCoordAuthorityEntry(anchor.i, anchor.z)
+                        if auth then
+                            if L.LockDiscoveryToCoordAuthority then
+                                L:LockDiscoveryToCoordAuthority(anchor)
+                            end
+                        else
+                            local dist = L:ComputeDistance(
+                                d.c, d.z, d.xy.x, d.xy.y,
+                                anchor.c, anchor.z, anchor.xy.x, anchor.xy.y
+                            )
+                            local radius = GetClusterRadius(anchor.dt)
+                            if dist and dist <= radius then
+                                local oldX, oldY = anchor.xy.x, anchor.xy.y
+                                anchor.xy.x = L:Round4((oldX * 0.8) + (d.xy.x * 0.2))
+                                anchor.xy.y = L:Round4((oldY * 0.8) + (d.xy.y * 0.2))
+                                
+                                if oldX ~= anchor.xy.x or oldY ~= anchor.xy.y then
+                                    refinedCount = refinedCount + 1
+                                end
+                            end
                         end
                     end
                     
@@ -2034,6 +2049,100 @@ function Core:FixMismappedZones()
     end
 end
 
+function Core:ApplyCoordAuthority()
+    local rev = tonumber(L.CoordAuthorityRevision) or 0
+    if not (L.db and L.db.global) then return 0, 0 end
+    if (tonumber(L.db.global.coordAuthorityRevision) or 0) >= rev then
+        return 0, 0
+    end
+
+    local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not db then
+        L.db.global.coordAuthorityRevision = rev
+        return 0, 0
+    end
+
+    local Constants = L:GetModule("Constants", true)
+    local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+
+    local groups = {}
+    for guid, d in pairs(db) do
+        if type(d) == "table" and d.i and d.z and not d.vendorType and d.dt ~= BM then
+            local entry = L.GetCoordAuthorityEntry and L:GetCoordAuthorityEntry(d.i, d.z)
+            if entry then
+                local base = (L.GetBaseItemID and L:GetBaseItemID(d.i)) or d.i
+                local key = tostring(base) .. ":" .. tostring(d.z)
+                if not groups[key] then
+                    groups[key] = { entry = entry, recs = {} }
+                end
+                table.insert(groups[key].recs, d)
+            end
+        end
+    end
+
+    local snapped, collapsed = 0, 0
+    for _, group in pairs(groups) do
+        local recs = group.recs
+        table.sort(recs, function(a, b)
+            local amc, bmc = tonumber(a.mc) or 1, tonumber(b.mc) or 1
+            if amc ~= bmc then return amc > bmc end
+            return (tonumber(a.ls) or 0) > (tonumber(b.ls) or 0)
+        end)
+        local keep = recs[1]
+        local oldX = keep.xy and keep.xy.x
+        local oldY = keep.xy and keep.xy.y
+        if L.LockDiscoveryToCoordAuthority then
+            L:LockDiscoveryToCoordAuthority(keep)
+        end
+        if keep.xy and (keep.xy.x ~= oldX or keep.xy.y ~= oldY) then
+            snapped = snapped + 1
+            L:SendMessage("LootCollector_DiscoveriesUpdated", "update", keep.g, keep)
+        end
+
+        for i = 2, #recs do
+            local extra = recs[i]
+            if extra and extra.g and keep.g and extra.g ~= keep.g then
+                if L.RemapLootedGuid then
+                    L:RemapLootedGuid(extra.g, keep.g)
+                end
+                keep.mc = (tonumber(keep.mc) or 1) + (tonumber(extra.mc) or 1)
+                if extra.fp_votes then
+                    keep.fp_votes = keep.fp_votes or {}
+                    for voter, vData in pairs(extra.fp_votes) do
+                        if not keep.fp_votes[voter] then
+                            keep.fp_votes[voter] = vData
+                        else
+                            keep.fp_votes[voter].score = (keep.fp_votes[voter].score or 0) + (vData.score or 0)
+                        end
+                    end
+                end
+                keep.ls = math.max(tonumber(keep.ls) or 0, tonumber(extra.ls) or 0)
+                self:RemoveDiscoveryByGuid(extra.g, "Collapsed extra Worldforged pin onto verified coordinates.", true)
+                collapsed = collapsed + 1
+            end
+        end
+    end
+
+    L.db.global.coordAuthorityRevision = rev
+    L.DataHasChanged = true
+
+    if snapped > 0 or collapsed > 0 then
+        self:InvalidateLookupIndices()
+        local Map = L:GetModule("Map", true)
+        if Map then
+            Map.cacheIsDirty = true
+            if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then Map:Update() end
+            if Map.UpdateMinimap then Map:UpdateMinimap() end
+        end
+        local Viewer = L:GetModule("Viewer", true)
+        if Viewer and Viewer.NotifyDatabaseChanged then
+            Viewer:NotifyDatabaseChanged()
+        end
+    end
+
+    return snapped, collapsed
+end
+
 function Core:PerformOnLoginMaintenance()
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -2182,6 +2291,18 @@ function Core:PerformOnLoginMaintenance()
                 L._debug("Core", "Pruned " .. cleared .. " stale NEW flags")
             end
         end
+    end
+
+    local snapped, collapsed = self:ApplyCoordAuthority()
+    if (snapped > 0 or collapsed > 0) and not hideMsgs then
+        local parts = {}
+        if snapped > 0 then
+            table.insert(parts, string.format("snapped %d pin(s) to verified coordinates", snapped))
+        end
+        if collapsed > 0 then
+            table.insert(parts, string.format("collapsed %d extra spawn(s)", collapsed))
+        end
+        print("|cff00ff00LootCollector:|r " .. table.concat(parts, ", ") .. ".")
     end
     
     if pTime then L:ProfileStop("Core:PerformOnLoginMaintenance", pTime) end 
@@ -2745,19 +2866,26 @@ function Core:OnInitialize()
     
     local INDEX_BATCH_SIZE = 50
     local indexTicker = CreateFrame("Frame")
-    indexTicker:SetScript("OnUpdate", function()
-        if #Core.IndexQueue > 0 then
-            local processed = 0
-            while processed < INDEX_BATCH_SIZE and #Core.IndexQueue > 0 do
-                local entry = table.remove(Core.IndexQueue, 1)
-                local guid, zoneID = entry.g, tonumber(entry.z) or 0
-                
-                if Core.ZoneIndexBuilt then
-                     if not Core.ZoneIndex[zoneID] then Core.ZoneIndex[zoneID] = {} end
-                     table.insert(Core.ZoneIndex[zoneID], guid)
-                end
-                processed = processed + 1
+    indexTicker:Hide()
+    Core._indexTicker = indexTicker
+    indexTicker:SetScript("OnUpdate", function(self)
+        if #Core.IndexQueue == 0 then
+            self:Hide()
+            return
+        end
+        local processed = 0
+        while processed < INDEX_BATCH_SIZE and #Core.IndexQueue > 0 do
+            local entry = table.remove(Core.IndexQueue, 1)
+            local guid, zoneID = entry.g, tonumber(entry.z) or 0
+            
+            if Core.ZoneIndexBuilt then
+                 if not Core.ZoneIndex[zoneID] then Core.ZoneIndex[zoneID] = {} end
+                 table.insert(Core.ZoneIndex[zoneID], guid)
             end
+            processed = processed + 1
+        end
+        if #Core.IndexQueue == 0 then
+            self:Hide()
         end
     end)
     
@@ -3147,6 +3275,9 @@ function Core:HandleLocalLoot(discovery)
             fp_votes = { [finderName] = { score = 1, t0 = t0 } },
             s_flag = s_flag,		
         }
+        if L.LockDiscoveryToCoordAuthority then
+            L:LockDiscoveryToCoordAuthority(rec)
+        end
 
         rec.mid = L:ComputeCanonicalDiscoveryMid(rec)
         db[guid] = rec
@@ -3167,11 +3298,20 @@ function Core:HandleLocalLoot(discovery)
         local oldY = (rec.xy and type(rec.xy) == "table" and rec.xy.y) or 0
         local dist = L:ComputeDistance(c, z, x, y, rec.c, rec.z, oldX, oldY)
         
-        local radius = GetClusterRadius(rec.dt)
-        if dist and dist <= radius and dist > 0.5 then
-            L._debug("Core-Refine", "Local loot coordinate refinement via EMA.")
-            rec.xy.x = L:Round4((oldX * 0.8) + (x * 0.2))
-            rec.xy.y = L:Round4((oldY * 0.8) + (y * 0.2))
+        if L.LockDiscoveryToCoordAuthority and L:LockDiscoveryToCoordAuthority(rec) then
+            -- Verified coords: ignore this loot's xy.
+        else
+            local radius = GetClusterRadius(rec.dt)
+            if dist and dist <= radius and dist > 0.5 then
+                L._debug("Core-Refine", "Local loot coordinate refinement via EMA.")
+                rec.xy.x = L:Round4((oldX * 0.8) + (x * 0.2))
+                rec.xy.y = L:Round4((oldY * 0.8) + (y * 0.2))
+            elseif dist and dist > radius then
+                L._debug("Core-Refine", "Local loot far from stored pin; replacing coordinates.")
+                rec.xy = rec.xy or {}
+                rec.xy.x = x
+                rec.xy.y = y
+            end
         end
         
         if finderName and finderName ~= "" then
@@ -3809,6 +3949,9 @@ function Core:_ProcessItemDiscovery(d, options, op, t0)
             fp_votes = { [finderName] = { score = (isAU and 1000 or 1), t0 = t0 } },
             s_flag = s_flag,		
         }
+        if L.LockDiscoveryToCoordAuthority then
+            L:LockDiscoveryToCoordAuthority(rec)
+        end
 
         db[guid] = rec
         
@@ -3850,13 +3993,19 @@ function Core:_ProcessItemDiscovery(d, options, op, t0)
         local oldY = (rec.xy and type(rec.xy) == "table" and rec.xy.y) or 0
         local dist = L:ComputeDistance(d.c, d.z, d.xy.x, d.xy.y, rec.c, rec.z, oldX, oldY)
         
-        local radius = GetClusterRadius(rec.dt)
-        if dist and dist <= radius and dist > 0.5 then
-            if op == "DISC" then
-                L._debug("Core-Refine", "Network loot coordinate refinement via EMA.")
-                rec.xy.x = L:Round4((oldX * 0.8) + (d.xy.x * 0.2))
-                rec.xy.y = L:Round4((oldY * 0.8) + (d.xy.y * 0.2))
+        if L.LockDiscoveryToCoordAuthority and L:LockDiscoveryToCoordAuthority(rec) then
+            if rec.xy and (rec.xy.x ~= oldX or rec.xy.y ~= oldY) then
                 changed = true
+            end
+        else
+            local radius = GetClusterRadius(rec.dt)
+            if dist and dist <= radius and dist > 0.5 then
+                if op == "DISC" then
+                    L._debug("Core-Refine", "Network loot coordinate refinement via EMA.")
+                    rec.xy.x = L:Round4((oldX * 0.8) + (d.xy.x * 0.2))
+                    rec.xy.y = L:Round4((oldY * 0.8) + (d.xy.y * 0.2))
+                    changed = true
+                end
             end
         end
 
@@ -4344,7 +4493,7 @@ function Core:UnindexDiscovery(guid, rec)
     self._dbDiscoveriesCount = math.max(0, (self._dbDiscoveriesCount or 1) - 1)
 end
 
-function Core:RemoveDiscoveryByGuid(guid, reason)
+function Core:RemoveDiscoveryByGuid(guid, reason, quiet)
     local discoveries = L:GetDiscoveriesDB()
     if not guid or not discoveries then return end
 
@@ -4353,7 +4502,9 @@ function Core:RemoveDiscoveryByGuid(guid, reason)
         self:UnindexDiscovery(guid, rec)
         discoveries[guid] = nil
         
-        print(string.format("|cff00ff00LootCollector:|r %s", reason or ("Discovery " .. guid .. " removed.")))
+        if not quiet then
+            print(string.format("|cff00ff00LootCollector:|r %s", reason or ("Discovery " .. guid .. " removed.")))
+        end
         
         L:SendMessage("LootCollector_DiscoveriesUpdated", "remove", guid, nil)
         

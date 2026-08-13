@@ -30,6 +30,7 @@ Modules\Constants.lua
 Modules\Scanner.lua
 Modules\WorldforgedList.lua
 Modules\WorldforgedUpgrades.lua
+Modules\CoordAuthority.lua
 
 # Data and resolution helpers early
 Modules\ZoneList.lua

@@ -323,6 +323,7 @@ local dbDefaults = {
         lootedArchive = {},
         -- High-water mark for sudden-drop detection on login.
         lootedHighWater = {},
+        coordAuthorityRevision = 0,
     },
 }
 
@@ -1879,6 +1880,21 @@ function LootCollector:OnInitialize()
     end
 
     self.db = LibStub("AceDB-3.0"):New("LootCollectorDB_Asc", dbDefaults, true)
+
+    -- Drop the in-session item-cache queue before AceDB serializes on logout.
+    -- The queue can be thousands of IDs and is rebuilt as needed next login.
+    if self.db.RegisterCallback then
+        self.db.RegisterCallback(self, "OnDatabaseShutdown", function()
+            if LootCollector.db and LootCollector.db.global then
+                LootCollector.db.global.cacheQueue = {}
+                local Core = LootCollector:GetModule("Core", true)
+                if Core then
+                    if Core._queueSet then wipe(Core._queueSet) end
+                    Core._queueSetBuilt = false
+                end
+            end
+        end)
+    end
 
     if _G.LootCollectorDB_Asc then
         local rawDB = _G.LootCollectorDB_Asc

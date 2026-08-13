@@ -2654,7 +2654,14 @@ function Map:EnsureMinimapTicker()
         Map._mmElapsed = (Map._mmElapsed or 0) + elapsed
         Map._mmFastElapsed = (Map._mmFastElapsed or 0) + elapsed
 
-        local runFast = Map._mmFastElapsed >= 0.03
+        -- GetPlayerLocation calls SetMapToCurrentZone every tick while the world
+        -- map is closed. Keep 30ms only when the map is open (cheap path) or
+        -- the player is moving; otherwise 250ms is enough for standing still.
+        local mapOpen = WorldMapFrame and WorldMapFrame:IsVisible()
+        local moving = (GetUnitSpeed and GetUnitSpeed("player") or 0) > 0
+        local fastInterval = (mapOpen or moving) and 0.03 or 0.25
+
+        local runFast = Map._mmFastElapsed >= fastInterval
         local runSlow = Map._mmElapsed >= Map._mmInterval
 
         if not runFast and not runSlow then return end
