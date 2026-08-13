@@ -150,16 +150,9 @@ StaticPopupDialogs["LOOTCOLLECTOR_CLEAR_LOOTED_CONFIRM"] = {
 	button1 = "Yes, Clear History",
 	button2 = "Cancel",
 	OnAccept = function(self, data)
-		if not (L and L.db and L.db.char) then return end
-		L.db.char.looted = {}
-		-- Keep lootedBackup + global.lootedArchive so Merge can restore.
-		print("|cff00ff00LootCollector:|r Looted history cleared for this character (backup and archive kept).")
-		
-		local Map = L:GetModule("Map", true)
-		if Map and Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then
-			Map:Update()
+		if LootCollector.ClearLiveLootedHistory then
+			LootCollector:ClearLiveLootedHistory()
 		end
-		
 		if data and data.refreshFunc then
 			data.refreshFunc()
 		end

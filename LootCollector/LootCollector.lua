@@ -165,6 +165,35 @@ StaticPopupDialogs["LOOTCOLLECTOR_OPTIONAL_DB_UPDATE"] = {
   hideOnEscape = 1,
 }
 
+StaticPopupDialogs["LOOTCOLLECTOR_PRESTIGE_CLEAR_LOOTED"] = {
+  text = "Your level dropped from %s to %s.\n\nThis usually means you prestiged, or you made a new character with the same name (Hardcore).\n\nClear looted marks for |cff00ff00this character|r so Worldforged pins are not still greyed out?\n\n|cffaaaaaaBackup and archive are kept. Do not Merge Looted Backup unless you want the old greys back.|r",
+  button1 = "Yes, Clear Looted",
+  button2 = "Keep Looted Marks",
+  OnAccept = function(self, data)
+    if LootCollector.ClearLiveLootedHistory then
+      LootCollector:ClearLiveLootedHistory()
+    end
+    if data and data.afterLevel then
+      LootCollector:RememberPlayerLevel(data.afterLevel)
+    end
+  end,
+  OnCancel = function(self, data)
+    if data and data.afterLevel then
+      LootCollector:RememberPlayerLevel(data.afterLevel)
+    end
+  end,
+  OnHide = function(self)
+    local data = self.data
+    if data and data.afterLevel then
+      LootCollector:RememberPlayerLevel(data.afterLevel)
+    end
+  end,
+  timeout = 0,
+  whileDead = 1,
+  hideOnEscape = 1,
+  showAlert = true,
+}
+
 StaticPopupDialogs["LOOTCOLLECTOR_WELCOME"] = {
   text = "|cffffff00LootCollector quick start|r\n\n" ..
     "• Open Discoveries: minimap button or |cffffffff/lcv|r\n" ..
@@ -311,7 +340,8 @@ local dbDefaults = {
         paused = false,      
         autoPauseInBG = true,
         autoPauseInRaidInstance = true,
-        autoPauseInRaidGroup = true,  
+        autoPauseInRaidGroup = true,
+        lastSeenLevel = nil,
     },
     global = { 
         realms = {}, 
@@ -773,6 +803,98 @@ function LootCollector:GetLootedLayerCounts()
     local backup = _countLootedKeys(self.db and self.db.char and self.db.char.lootedBackup)
     local archive = _countLootedKeys(self:GetLootedArchive())
     return live, backup, archive
+end
+
+function LootCollector:ClearLiveLootedHistory()
+    if not (self.db and self.db.char) then return false end
+    self.db.char.looted = {}
+    print("|cff00ff00LootCollector:|r Looted history cleared for this character (backup and archive kept).")
+
+    local Map = self:GetModule("Map", true)
+    if Map then
+        Map.cacheIsDirty = true
+        if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then
+            Map:Update()
+        end
+        if Map.UpdateMinimap then Map:UpdateMinimap() end
+    end
+
+    local Viewer = self:GetModule("Viewer", true)
+    if Viewer then
+        if Viewer.InvalidateFilterCache then Viewer:InvalidateFilterCache() end
+        if Viewer.window and Viewer.window:IsShown() and Viewer.RefreshData then
+            Viewer:RefreshData()
+        end
+    end
+    return true
+end
+
+local _LC_POPUPS_BLOCKING_PRESTIGE = {
+    "LOOTCOLLECTOR_WELCOME",
+    "LOOTCOLLECTOR_OPTIONAL_DB_UPDATE",
+    "LOOTCOLLECTOR_MIGRATION_RELOAD",
+    "LOOTCOLLECTOR_PRESTIGE_CLEAR_LOOTED",
+}
+
+local function _IsLootCollectorPopupVisible()
+    if not StaticPopup_Visible then return false end
+    for i = 1, #_LC_POPUPS_BLOCKING_PRESTIGE do
+        if StaticPopup_Visible(_LC_POPUPS_BLOCKING_PRESTIGE[i]) then
+            return true
+        end
+    end
+    return false
+end
+
+function LootCollector:RememberPlayerLevel(level)
+    if not (self.db and self.db.char) then return end
+    level = tonumber(level)
+    if not level or level < 1 then return end
+    self.db.char.lastSeenLevel = level
+end
+
+function LootCollector:CheckPrestigeLevelDrop()
+    if self.LEGACY_MODE_ACTIVE then return end
+    if not (self.db and self.db.char) then return end
+
+    local current = tonumber(UnitLevel and UnitLevel("player"))
+    if not current or current < 1 then return end
+
+    local stored = tonumber(self.db.char.lastSeenLevel)
+    if not stored then
+        self.db.char.lastSeenLevel = current
+        return
+    end
+
+    local live = _countLootedKeys(self.db.char.looted)
+    if current <= 5 and stored > current and live > 0 then
+        if StaticPopup_Visible and StaticPopup_Visible("LOOTCOLLECTOR_PRESTIGE_CLEAR_LOOTED") then
+            return
+        end
+        StaticPopup_Show(
+            "LOOTCOLLECTOR_PRESTIGE_CLEAR_LOOTED",
+            tostring(stored),
+            tostring(current),
+            { afterLevel = current }
+        )
+        return
+    end
+
+    self.db.char.lastSeenLevel = current
+end
+
+function LootCollector:SchedulePrestigeLevelCheck()
+    if self._prestigeCheckScheduled then return end
+    self._prestigeCheckScheduled = true
+    self:ScheduleAfter(3.0, function()
+        if _IsLootCollectorPopupVisible() then
+            LootCollector:ScheduleAfter(3.0, function()
+                LootCollector:CheckPrestigeLevelDrop()
+            end)
+            return
+        end
+        LootCollector:CheckPrestigeLevelDrop()
+    end)
 end
 
 function LootCollector:UpdateLootedHighWater()
@@ -2239,12 +2361,22 @@ function LootCollector:OnEnable()
                 LootCollector:MaybeShowWelcomeTips()
             end)
         end
+        self:SchedulePrestigeLevelCheck()
     end)
     
     
     self:RegisterEvent("ZONE_CHANGED_NEW_AREA", "EvaluateAutoPause")
     self:RegisterEvent("RAID_ROSTER_UPDATE", "EvaluateAutoPause")
     self:RegisterEvent("PARTY_MEMBERS_CHANGED", "EvaluateAutoPause")
+    self:RegisterEvent("PLAYER_LEVEL_UP", function(_, newLevel)
+        local level = tonumber(newLevel) or (UnitLevel and UnitLevel("player"))
+        local stored = LootCollector.db and LootCollector.db.char and tonumber(LootCollector.db.char.lastSeenLevel)
+        if stored and level and level < stored then
+            LootCollector:CheckPrestigeLevelDrop()
+        else
+            LootCollector:RememberPlayerLevel(level)
+        end
+    end)
 end
 
 function LootCollector:OnDisable()
