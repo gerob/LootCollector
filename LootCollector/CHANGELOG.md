@@ -1,3 +1,20 @@
+## Version 1.0.5
+
+### Sharing defaults
+- **New users:** public channel sync **on**, Auto-Pause Shield **on** at **5000 msgs/min**.
+- **Existing users:** keep their saved on/off. A one-time Enable/Not now prompt if public sync was off.
+
+### Decay / Fade
+- Last seen **30d FADING**, **90d STALE**, **120d remove**. Report as Gone ACK votes **5 / 6 / 7**.
+- Discoveries **Fade: All / Hide / Only**. Filter Map applies Fade to map, minimap, and Arrow.
+
+### Map & minimap
+- **Custom LC icon** on the world-map filter button and minimap button.
+
+### Arrow / TomTom
+- **Skip / Clear** buttons under the TomTom arrow (session skip; Skip works for auto-track and Navigate here). `/lcarrow clearskip` still works.
+- **Auto-track resume** after `/reload` and login (no longer waits on `PLAYER_LOGIN`).
+
 ## Version 1.0.4r-beta
 
 ### Onboarding & Discoveries

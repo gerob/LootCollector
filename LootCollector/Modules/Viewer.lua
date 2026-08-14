@@ -4781,6 +4781,12 @@ function Viewer:CreateWindow()
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT", 0, -2)
         GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
+Version 1.0.5:
+- Public channel on for new users; Auto-Pause Shield at 5000 msgs/min; existing keep on/off.
+- Decay FADING/STALE/remove; Fade All/Hide/Only; Filter Map applies Fade.
+- Custom LC icon on map filter button and minimap button.
+- Skip/Clear under TomTom arrow; auto-track resumes after /reload and login.
+
 Version 1.0.4r-beta:
 - Welcome tips; empty Discoveries Starter DB CTA; Sync hover tooltip.
 - Zone Summary map badges; Magnify-safe map filter button; Settings cleanup.
