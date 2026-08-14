@@ -4889,19 +4889,48 @@ function Core:ProcessAckVote(mid, sender)
     local DELETION_THRESHOLD_FADING = Constants and Constants.DELETION_THRESHOLD_FADING or 5
 
     L._debug("Core-Ack", string.format("New VoteCount: %d. Thresholds: Fade=%d, Stale=%d, Rem=%d", voteCount, DELETION_THRESHOLD_FADING, DELETION_THRESHOLD_STALE, DELETION_THRESHOLD_REMOVE))
-    
+
+    local STATUS_FADING = Constants and Constants.STATUS and Constants.STATUS.FADING or "FADING"
+    local STATUS_STALE = Constants and Constants.STATUS and Constants.STATUS.STALE or "STALE"
+    local statusChanged = false
+
     if voteCount >= DELETION_THRESHOLD_REMOVE then
         L._debug("Core-Ack", "THRESHOLD REACHED: REMOVE")
         self:RemoveDiscoveryByGuid(rec.g, string.format("Discovery %s removed by consensus (%d votes).", rec.il or "item", voteCount))
+        if pTime then L:ProfileStop("Core:ProcessAckVote", pTime) end
+        return
+    elseif voteCount >= DELETION_THRESHOLD_STALE then
+        if rec.s ~= STATUS_STALE then
+            rec.s = STATUS_STALE
+            rec.st = time()
+            statusChanged = true
+            L._debug("Core-Ack", "THRESHOLD REACHED: STALE")
+        end
+    elseif voteCount >= DELETION_THRESHOLD_FADING then
+        if rec.s ~= STATUS_STALE and rec.s ~= STATUS_FADING then
+            rec.s = STATUS_FADING
+            rec.st = time()
+            statusChanged = true
+            L._debug("Core-Ack", "THRESHOLD REACHED: FADING")
+        end
     else
         L._debug("Core-Ack", "No threshold reached. Status remains: " .. tostring(rec.s))
-    end    
-    
-    L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
-    local Map = L:GetModule("Map", true)
-    if Map and Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then
-        Map:Update()
     end
+
+    if statusChanged then
+        L.DataHasChanged = true
+        L:SendMessage("LootCollector_DiscoveriesUpdated", "update", guid, rec)
+        local Map = L:GetModule("Map", true)
+        if Map then
+            Map.cacheIsDirty = true
+            if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then
+                Map:Update()
+            end
+            if Map.UpdateMinimap then Map:UpdateMinimap() end
+        end
+    end
+
+    L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
     
     if pTime then L:ProfileStop("Core:ProcessAckVote", pTime) end 
 end

@@ -58,6 +58,20 @@ function Decay:StartChunkedScan()
     self:ProcessNextChunk()
 end
 
+local function GetDecayThresholds()
+    local fadeDays, staleDays, removeDays = FADE_DAYS, STALE_DAYS, REMOVE_DAYS
+    local decay = L.db and L.db.profile and L.db.profile.decay
+    if type(decay) == "table" then
+        fadeDays = tonumber(decay.fadeAfterDays) or fadeDays
+        staleDays = tonumber(decay.staleAfterDays) or staleDays
+        removeDays = tonumber(decay.removeAfterDays) or removeDays
+    end
+    if fadeDays < 1 then fadeDays = 1 end
+    if staleDays <= fadeDays then staleDays = fadeDays + 1 end
+    if removeDays <= staleDays then removeDays = staleDays + 1 end
+    return fadeDays, staleDays, removeDays
+end
+
 function Decay:ProcessNextChunk()
     if not self._scanInProgress then return end
 
@@ -70,9 +84,10 @@ function Decay:ProcessNextChunk()
 
     local db = L:GetDiscoveriesDB()
     local tnow = time()
-    local fadeSecs = FADE_DAYS * 86400
-    local staleSecs = STALE_DAYS * 86400
-    local removeSecs = REMOVE_DAYS * 86400
+    local fadeDays, staleDays, removeDays = GetDecayThresholds()
+    local fadeSecs = fadeDays * 86400
+    local staleSecs = staleDays * 86400
+    local removeSecs = removeDays * 86400
 
     local k = self._scanKey
     
@@ -86,16 +101,28 @@ function Decay:ProcessNextChunk()
         if k ~= nil and db[k] == nil then k = nil end
         
         while true do
+            local d
             k, d = next(db, k)
             if not k then break end 
             
-            if type(d) == "table" and d.ls then
-                local age = tnow - (tonumber(d.ls) or 0)
-                local prev = d.s or STATUS_UNCONFIRMED
-
-                if not d.onHold then
+            if type(d) == "table" and not d.onHold and not d.vendorType then
+                local lastSeen = tonumber(d.ls) or tonumber(d.t0) or 0
+                if lastSeen > 0 then
+                    local age = tnow - lastSeen
                     if age >= removeSecs then
                         table.insert(guidsToRemove, k)
+                    elseif age >= staleSecs then
+                        if d.s ~= STATUS_STALE then
+                            d.s = STATUS_STALE
+                            d.st = tnow
+                            self._scanChangedCount = self._scanChangedCount + 1
+                        end
+                    elseif age >= fadeSecs then
+                        if d.s ~= STATUS_STALE and d.s ~= STATUS_FADING then
+                            d.s = STATUS_FADING
+                            d.st = tnow
+                            self._scanChangedCount = self._scanChangedCount + 1
+                        end
                     end
                 end
             end
@@ -162,12 +189,16 @@ function Decay:ProcessNextChunk()
     if self._scanKey == nil and self._tombstoneScanKey == nil then
         self._scanInProgress = false
         if self._scanChangedCount > 0 or self._scanRemovedCount > 0 or self._tombstonePurgedCount > 0 then
+            if self._scanChangedCount > 0 then
+                L.DataHasChanged = true
+            end
             local Map = L:GetModule("Map", true)
             if Map then
                 Map.cacheIsDirty = true
                 if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then Map:Update() end
                 if Map.UpdateMinimap then Map:UpdateMinimap() end
             end
+            L:SendMessage("LootCollector_DiscoveriesUpdated", "bulk", nil, nil)
             L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
         end
         return
@@ -187,7 +218,8 @@ SlashCmdList["LootCollectorDECAY"] = function(msg)
             print("|cff00ff00LootCollector:|r Background decay scan started.")
         end
     elseif sub == "show" then 
-        print(string.format("|cff00ff00LootCollector:|r fade=%d days, stale=%d days, remove=%d days", FADE_DAYS, STALE_DAYS, REMOVE_DAYS))
+        local fadeDays, staleDays, removeDays = GetDecayThresholds()
+        print(string.format("|cff00ff00LootCollector:|r fade=%d days, stale=%d days, remove=%d days", fadeDays, staleDays, removeDays))
     else 
         print("|cffff7f00Usage:|r /lcdecay [scan|show]") 
     end

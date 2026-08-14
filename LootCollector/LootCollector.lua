@@ -324,7 +324,7 @@ local dbDefaults = {
         viewerLiveFilters = false,
         lastVersionToastAt = 0,
         ignoreZones = {},
-        decay = { fadeAfterDays  = 30, staleAfterDays = 90, },
+        decay = { fadeAfterDays = 30, staleAfterDays = 90, removeAfterDays = 120, },
 	    debugMode = false,
 	    mdebugMode = false,
 	    idebugMode = false,
@@ -1334,7 +1334,7 @@ function LootCollector:DiscoveryPassesFilters(d)
     if not d or f.hideAll then return false end
 
     -- When Filter Map is ON, Viewer owns overlapping dimensions (slots, usable-by,
-    -- rarity, looted, collected ME). Skip those map knobs so they cannot fight Viewer.
+    -- rarity, looted, collected ME, fade/stale). Skip those map knobs so they cannot fight Viewer.
     local skipOverlap = f.applyViewerFiltersOnMap
 
     local dt = d and (d.dt or (Constants and Constants.DISCOVERY_TYPE.UNKNOWN) or 0)
@@ -1344,8 +1344,8 @@ function LootCollector:DiscoveryPassesFilters(d)
 
     local s = self:GetDiscoveryStatus(d)
     if (s == STATUS_UNCONFIRMED and f.hideUnconfirmed) or
-       (s == STATUS_FADING and f.hideFaded) or
-       (s == STATUS_STALE and f.hideStale) then
+       (not skipOverlap and s == STATUS_FADING and f.hideFaded) or
+       (not skipOverlap and s == STATUS_STALE and f.hideStale) then
         return false
     end
     if not skipOverlap and f.hideLooted and d.g and self:IsLootedByChar(d.g) then

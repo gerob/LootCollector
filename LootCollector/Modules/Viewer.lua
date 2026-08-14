@@ -138,6 +138,22 @@ Viewer.lootedFilterState = nil
 Viewer.collectedMEFilterState = nil 
 Viewer.hasUncachedData = false
 Viewer.lastSeenSortState = "off"
+-- nil = show all, "hide" = hide FADING/STALE, "only" = only FADING/STALE
+Viewer.fadeFilterState = nil
+
+local function DiscoveryIsFadingOrStale(discovery)
+    local s = discovery and discovery.s
+    return s == "FADING" or s == "STALE"
+end
+
+local function PassesFadeFilter(discovery)
+    local state = Viewer.fadeFilterState
+    if not state then return true end
+    local fading = DiscoveryIsFadingOrStale(discovery)
+    if state == "hide" then return not fading end
+    if state == "only" then return fading end
+    return true
+end
 
 -- Dev troubleshooting: pending-update ring buffer (session-only; off by default)
 Viewer._pendingTraceEnabled = false
@@ -773,7 +789,7 @@ function Viewer:EnsureDeepFiltersLoaded()
 end
 
 -- Viewer filters that should gate map pins when Filter Map is ON.
--- Date sort is Viewer-only and excluded.
+-- Date sort is Viewer-only and excluded. Fade All/Hide/Only is included.
 function Viewer:HasViewerFiltersForMap()
     self:EnsureDeepFiltersLoaded()
     if self.deepSearchFilters and #self.deepSearchFilters > 0 then return true end
@@ -790,6 +806,7 @@ function Viewer:HasViewerFiltersForMap()
     if self.collectedMEFilterState ~= nil then return true end
     if self.columnFilters.duplicates then return true end
     if self.favoritesFilterState == true then return true end
+    if self.fadeFilterState then return true end
     return false
 end
 
@@ -999,6 +1016,10 @@ function Viewer:DiscoveryPassesViewerFilters(d)
         if not self.columnFilters.vendorType[typeName] then return false end
     end
 
+    if not isVendor and not PassesFadeFilter(d) then
+        return false
+    end
+
     return true
 end
 
@@ -1019,6 +1040,7 @@ function Viewer:ClearDiscoveriesFilters()
     self.favoritesFilterState = nil
     self.hasUncachedData = false
     self.lastSeenSortState = "off"
+    self.fadeFilterState = nil
 
     self.searchTerm = ""
     if self.searchBox then self.searchBox:SetText("") end
@@ -1747,6 +1769,10 @@ GetFilteredDatasetForUniqueValues = function(context)
                 local isLooted = Viewer:IsLootedByChar(data.guid)
                 if Viewer.lootedFilterState == true and not isLooted then passed = false end
                 if Viewer.lootedFilterState == false and isLooted then passed = false end
+            end
+
+            if passed and Viewer.fadeFilterState and not data.isVendor then
+                if not PassesFadeFilter(data.discovery) then passed = false end
             end
 
             if passed and Viewer.collectedMEFilterState ~= nil then
@@ -3136,6 +3162,10 @@ function Viewer:GetFilteredDiscoveries()
                 if Viewer.lootedFilterState == false and isLooted then passed = false end
             end
 
+            if passed and Viewer.fadeFilterState and not isVendorView then
+                if not PassesFadeFilter(data.discovery) then passed = false end
+            end
+
             if passed and Viewer.favoritesFilterState == true and not isVendorView then
                 if not (data.discovery.i and L:GetFavoritesDB()[data.discovery.i]) then passed = false end
             end
@@ -3262,7 +3292,8 @@ local function BuildFilterHashFingerprint(self)
     _fpParts[12] = (self.columnFilters and self.columnFilters.duplicates) and "1" or "0"
     _fpParts[13] = tostring(wfPhase)
     _fpParts[14] = hideBags and "1" or "0"
-    local n = 14
+    _fpParts[15] = tostring(self.fadeFilterState)
+    local n = 15
     if dsf then
         for i = 1, #dsf do
             n = n + 1
@@ -3314,6 +3345,9 @@ function Viewer:GetFilterStateHash()
     
     if self.lootedFilterState ~= nil then
         _tinsert(_filterEntries, "looted:" .. tostring(self.lootedFilterState))
+    end
+    if self.fadeFilterState then
+        _tinsert(_filterEntries, "fade:" .. tostring(self.fadeFilterState))
     end
     if self.collectedMEFilterState ~= nil then
         _tinsert(_filterEntries, "collectedME:" .. tostring(self.collectedMEFilterState))
@@ -3479,6 +3513,7 @@ function Viewer:HasActiveFilters()
     
     if self.lastSeenSortState and self.lastSeenSortState ~= "off" then return true end
     if self.favoritesFilterState == true then return true end
+    if self.fadeFilterState then return true end
 
     return false
 end
@@ -3856,6 +3891,7 @@ function Viewer:CaptureFilterPresetSnapshot()
         favoritesFilterState = self.favoritesFilterState,
         collectedMEFilterState = self.collectedMEFilterState,
         lastSeenSortState = self.lastSeenSortState or "off",
+        fadeFilterState = self.fadeFilterState,
         minReqLevel = minReq,
         maxReqLevel = maxReq,
     }
@@ -3910,6 +3946,7 @@ function Viewer:ApplyFilterSnapshot(snap)
     self.favoritesFilterState = snap.favoritesFilterState
     self.collectedMEFilterState = snap.collectedMEFilterState
     self.lastSeenSortState = snap.lastSeenSortState or "off"
+    self.fadeFilterState = snap.fadeFilterState
     local minReq = tonumber(snap.minReqLevel)
     local maxReq = tonumber(snap.maxReqLevel)
     self._applyingReqLevelPreset = true
@@ -4219,6 +4256,19 @@ function Viewer:UpdateFilterButtonStates()
         end
     end
 
+    if self.fadeFilterBtn then
+        if self.fadeFilterState == "hide" then
+            setButtonTextColor(self.fadeFilterBtn, 1, 0.8, 0.2)
+            self.fadeFilterBtn:SetText("Fade: Hide")
+        elseif self.fadeFilterState == "only" then
+            setButtonTextColor(self.fadeFilterBtn, 1, 0.8, 0.2)
+            self.fadeFilterBtn:SetText("Fade: Only")
+        else
+            setButtonTextColor(self.fadeFilterBtn, 1, 1, 1)
+            self.fadeFilterBtn:SetText("Fade: All")
+        end
+    end
+
     if self.duplicatesFilterBtn then
         local duplicatesActive = self.columnFilters.duplicates
         if duplicatesActive then
@@ -4261,6 +4311,7 @@ function Viewer:UpdateFilterButtonStates()
     if self.lootedFilterBtn then self.lootedFilterBtn:SetShown(showNormalFilters) end
     if self.collectedMEFilterBtn then self.collectedMEFilterBtn:SetShown(showNormalFilters and not hideEnchantFilter) end
     if self.lsFilterBtn then self.lsFilterBtn:SetShown(showNormalFilters) end
+    if self.fadeFilterBtn then self.fadeFilterBtn:SetShown(showNormalFilters) end
     if self.duplicatesFilterBtn then self.duplicatesFilterBtn:SetShown(showDuplicates) end
     if self.presetsFilterBtn then
         setButtonTextColor(self.presetsFilterBtn, 1, 1, 1)
@@ -4299,6 +4350,7 @@ function Viewer:UpdateFilterButtonStates()
         local quickBtns = {
             self.lootedFilterBtn,
             self.lsFilterBtn,
+            self.fadeFilterBtn,
         }
         for _, btn in ipairs(quickBtns) do
             if btn and btn:IsShown() then
@@ -5827,9 +5879,9 @@ beta-0.8.6r:
         end)
     end)
 
-    -- Top strip (tab row): Looted / Date
+    -- Top strip (tab row): Looted / Date / Fade
     local quickFiltersFrame = CreateFrame("Frame", "LootCollectorQuickFiltersFrame", window, "BackdropTemplate")
-    quickFiltersFrame:SetSize(200, 24)
+    quickFiltersFrame:SetSize(280, 24)
     quickFiltersFrame:SetFrameStrata(FRAME_STRATA)
     quickFiltersFrame:SetFrameLevel(FRAME_LEVEL + 1)
     quickFiltersFrame:SetPoint("LEFT", bmvBtn, "RIGHT", 20, 0)
@@ -6014,6 +6066,28 @@ beta-0.8.6r:
         Viewer:UpdateFilterButtonStates()
     end)
     lsFilterBtn:RegisterForClicks("LeftButtonUp")
+
+    local fadeFilterBtn = CreateFlatFilterBtn(quickFiltersFrame, "Fade: All", 78, lsFilterBtn, "RIGHT", 3)
+    fadeFilterBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Show or hide fading and stale discoveries.")
+        GameTooltip:AddLine("All: show every pin. Hide: drop fading/stale. Only: fading/stale only.", 1, 1, 1, true)
+        GameTooltip:AddLine("Turn Filter Map ON to apply this to map and minimap pins.", 0.8, 0.8, 0.8, true)
+        GameTooltip:Show()
+    end)
+    fadeFilterBtn:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
+    fadeFilterBtn:SetScript("OnClick", function(self, button)
+        if Viewer.fadeFilterState == nil then Viewer.fadeFilterState = "hide"
+        elseif Viewer.fadeFilterState == "hide" then Viewer.fadeFilterState = "only"
+        else Viewer.fadeFilterState = nil end
+        Viewer.currentPage = 1
+        Cache.filteredResults = {}
+        Cache.lastFilterState = nil
+        Viewer:RefreshData()
+        Viewer:UpdateClearAllButton()
+        Viewer:UpdateFilterButtonStates()
+    end)
+    fadeFilterBtn:RegisterForClicks("LeftButtonUp")
     
     self.sourceFilterBtn = sourceFilterBtn
     self.qualityFilterBtn = qualityFilterBtn
@@ -6028,6 +6102,7 @@ beta-0.8.6r:
     self.duplicatesFilterBtn = duplicatesFilterBtn
     self.presetsFilterBtn = presetsFilterBtn
     self.lsFilterBtn = lsFilterBtn
+    self.fadeFilterBtn = fadeFilterBtn
     self.quickFiltersFrame = quickFiltersFrame
 
     -- Search row sits below the dropdown filter row
@@ -6572,7 +6647,7 @@ beta-0.8.6r:
     
     self.interactiveElements = {
         equipmentBtn, mysticBtn, bmvBtn,
-        searchBox, sourceFilterBtn, qualityFilterBtn, statsFilterBtn, typeFilterBtn, lootedFilterBtn, duplicatesFilterBtn, presetsFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn,
+        searchBox, sourceFilterBtn, qualityFilterBtn, statsFilterBtn, typeFilterBtn, lootedFilterBtn, duplicatesFilterBtn, presetsFilterBtn, vendorTypeFilterBtn, collectedMEFilterBtn, lsFilterBtn, fadeFilterBtn,
         nameHeader, levelHeader, slotHeader, typeHeader, classHeader, zoneHeader,  foundByHeader,
         vendorNameHeader, vendorPriceHeader, vendorZoneHeader, vendorContinentHeader, vendorTypeHeader,
         clearAllBtn, prevBtn, nextBtn, items25Btn, items50Btn, items100Btn, items500Btn, itemsAllBtn,
@@ -7970,6 +8045,12 @@ function Viewer:UpdateRows()
                     end
                     if data.isNew then
                         itemName = itemName .. " |cffff7f00[NEW]|r"
+                    end
+                    local status = discovery.s
+                    if status == STATUS_FADING then
+                        itemName = itemName .. " |cffff7f00[FADING]|r"
+                    elseif status == STATUS_STALE then
+                        itemName = itemName .. " |cff9d9d9d[STALE]|r"
                     end
                     
                     local icon = data.displayItemID and GetItemIcon(data.displayItemID) or nil
