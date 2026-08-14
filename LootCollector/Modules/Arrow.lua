@@ -144,26 +144,165 @@ end
 function Arrow:ClearSessionSkipList()
     wipe(self.sessionSkipList)
     print("|cff00ff00LootCollector:|r Session skip list has been cleared.")
-    self:UpdateArrow(true) 
+    self:UpdateArrow(true)
+    self:UpdateSkipBar()
+end
+
+function Arrow:HasSkipableTarget()
+    if not self.enabled then return false end
+    local target = self.manualTarget or self.currentTarget
+    return target and target.g and true or false
 end
 
 function Arrow:SkipNearest()
-    if self.enabled and self.currentTarget and not self.manualTarget then
-        local guid = self.currentTarget.g
-        if guid then
-            self.sessionSkipList[guid] = true            
-            print(string.format("|cff00ff00LootCollector:|r Skipped tracking of: %s", self.currentTarget.il or "discovery"))
-            self:UpdateArrow(true) 
-        end
-    else
+    -- UpdateArrow no-ops while DropDownList1 is shown (TomTom / EasyMenu).
+    if CloseDropDownMenus then CloseDropDownMenus() end
+
+    local target = self.manualTarget or self.currentTarget
+    local guid = target and target.g
+    if not self.enabled or not guid then
         print("|cffff7f00LootCollector:|r No active target to skip.")
+        return
     end
+
+    self.sessionSkipList[guid] = true
+    print(string.format("|cff00ff00LootCollector:|r Skipped tracking of: %s", target.il or "discovery"))
+
+    if self.manualTarget and self.manualTarget.g == guid then
+        self.manualTarget = nil
+    end
+    if self.currentTarget and self.currentTarget.g == guid then
+        self.currentTarget = nil
+    end
+    if self.lastTrackedTarget and self.lastTrackedTarget.g == guid then
+        self.lastTrackedTarget = nil
+    end
+    self._scanKey = nil
+    self:UpdateArrow(true)
+    self:UpdateSkipBar()
 end
 
 local function IsAutoTrackEnabled()
     local f = L.GetFilters and L:GetFilters()
     if f then return f.autoTrackNearest and true or false end
     return L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.autoTrackNearest and true or false
+end
+
+local function MakeSkipBarButton(parent, label, onClick, tooltip)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetHeight(16)
+    local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fs:SetPoint("CENTER", 0, 0)
+    fs:SetText(label)
+    b:SetFontString(fs)
+    b:SetWidth(math.max(44, (fs:GetStringWidth() or 32) + 10))
+    b:SetHighlightFontObject(GameFontHighlightSmall)
+    b:SetScript("OnClick", onClick)
+    b:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText(tooltip, nil, nil, nil, nil, true)
+        GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    return b
+end
+
+function Arrow:EnsureSkipBar()
+    local parent = _G.TomTomCrazyArrow
+    if not parent then return nil end
+
+    if self.skipBar and self.skipBar:GetParent() == parent then
+        return self.skipBar
+    end
+
+    local bar = CreateFrame("Frame", "LootCollectorArrowSkipBar", parent)
+    bar:SetHeight(20)
+    bar:SetWidth(108)
+    bar:SetPoint("TOP", parent, "BOTTOM", 0, -40)
+    bar:SetFrameStrata(parent:GetFrameStrata() or "HIGH")
+    bar:SetFrameLevel((parent:GetFrameLevel() or 1) + 8)
+    bar:EnableMouse(true)
+    if bar.SetBackdrop then
+        bar:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 12,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 },
+        })
+        bar:SetBackdropColor(0, 0, 0, 0.75)
+        bar:SetBackdropBorderColor(0.90, 0.80, 0.50, 0.9)
+    end
+
+    local skip = MakeSkipBarButton(bar, "Skip", function()
+        Arrow:SkipNearest()
+    end, "Skip this item for this session. Arrow picks the next nearest match.")
+    skip:SetPoint("LEFT", bar, "LEFT", 6, 0)
+
+    local clear = MakeSkipBarButton(bar, "Clear", function()
+        Arrow:ClearSessionSkipList()
+    end, "Clear the session skip list.")
+    clear:SetPoint("RIGHT", bar, "RIGHT", -6, 0)
+
+    bar.skipBtn = skip
+    bar.clearBtn = clear
+    bar:Hide()
+    self.skipBar = bar
+    return bar
+end
+
+function Arrow:UpdateSkipBar()
+    local bar = self:EnsureSkipBar()
+    if not bar then return end
+    local crazy = _G.TomTomCrazyArrow
+    if crazy and crazy:IsShown() and self.enabled and self:HasSkipableTarget() then
+        bar:Show()
+    else
+        bar:Hide()
+    end
+end
+
+function Arrow:TryResumeAutoTrack()
+    if L.LEGACY_MODE_ACTIVE then return false end
+    if not IsAutoTrackEnabled() then return false end
+    if L.IsPaused and L:IsPaused() then return false end
+    if not IsTomTomAvailable() then return false end
+    if not self.enabled then
+        self:Show()
+    else
+        self:UpdateArrow(true)
+        self:StartUpdates()
+    end
+    self:UpdateSkipBar()
+    return self.enabled and true or false
+end
+
+function Arrow:ScheduleAutoTrackResume()
+    if self._autoTrackResumePending then return end
+    if not IsAutoTrackEnabled() then return end
+    self._autoTrackResumePending = true
+    local attempts = 0
+    local function tick()
+        attempts = attempts + 1
+        if not IsAutoTrackEnabled() then
+            self._autoTrackResumePending = nil
+            return
+        end
+        local started = self:TryResumeAutoTrack()
+        if started or attempts >= 10 then
+            self._autoTrackResumePending = nil
+            return
+        end
+        if L.ScheduleAfter then
+            L:ScheduleAfter(2.0, tick)
+        end
+    end
+    if L.ScheduleAfter then
+        L:ScheduleAfter(1.5, tick)
+    else
+        tick()
+    end
 end
 
 function Arrow:OnPlayerLootedItem(event, itemID, c, z, x, y)
@@ -201,17 +340,20 @@ function Arrow:OnPlayerLootedItem(event, itemID, c, z, x, y)
     end
 end
 
-function Arrow:OnPlayerLogin()
-    L._debug("Arrow", "OnPlayerLogin() event received.")
-    if IsAutoTrackEnabled() then
-        self:Show()
-    end
+function Arrow:OnPlayerEnteringWorld()
+    self:ScheduleAutoTrackResume()
+end
+
+function Arrow:OnEnable()
+    if L.LEGACY_MODE_ACTIVE then return end
+    self:ScheduleAutoTrackResume()
 end
 
 function Arrow:OnInitialize()
     if L.LEGACY_MODE_ACTIVE then return end
     self:RegisterMessage("LOOTCOLLECTOR_PLAYER_LOOTED_ITEM", "OnPlayerLootedItem")
-    self:RegisterEvent("PLAYER_LOGIN", "OnPlayerLogin")
+    self:RegisterEvent("PLAYER_ENTERING_WORLD", "OnPlayerEnteringWorld")
+    self:ScheduleAutoTrackResume()
 end
 
 function Arrow:StartUpdates() 
@@ -266,6 +408,7 @@ function Arrow:NavigateTo(discovery)
     self:RememberTrackedTarget(discovery)
     self:UpdateArrow(true)
     self:StartUpdates()
+    self:UpdateSkipBar()
 end
 
 function Arrow:Show() 
@@ -290,7 +433,8 @@ function Arrow:Show()
     end
 
     self:UpdateArrow(true)
-    self:StartUpdates() 
+    self:StartUpdates()
+    self:UpdateSkipBar()
 end
 
 function Arrow:Hide() 
@@ -307,7 +451,8 @@ function Arrow:Hide()
     self._scanKey=nil
     self._invalidWaypointTicks=nil
     self:StopUpdates()
-    self:ClearTomTomWaypoint() 
+    self:ClearTomTomWaypoint()
+    if self.skipBar then self.skipBar:Hide() end
 end
 
 function Arrow:Toggle() 
@@ -642,6 +787,7 @@ function Arrow:UpdateArrow(forceUpdate)
         if self.tomtomUID then
             self:ClearTomTomWaypoint()
         end
+        self:UpdateSkipBar()
         return
     end
 
@@ -681,6 +827,7 @@ function Arrow:UpdateArrow(forceUpdate)
     if self.manualTarget or self.currentTarget then
         self:RememberTrackedTarget(self.manualTarget or self.currentTarget)
     end
+    self:UpdateSkipBar()
 end
 
 function Arrow:ClearTarget()
@@ -688,7 +835,8 @@ function Arrow:ClearTarget()
     self.currentTarget = nil
     self.manualTarget = nil
     self.lastTrackedTarget = nil
-    self._ttMissingTicks = 0 
+    self._ttMissingTicks = 0
+    if self.skipBar then self.skipBar:Hide() end
 end
 
 function Arrow:CanNavigateRecord(rec)
