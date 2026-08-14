@@ -2453,7 +2453,41 @@ end
 
 local function ExtractItemNameFromHint(hint)
     if type(hint) ~= "string" or hint == "" then return nil end
-    return hint:match("%[(.-)%]")
+    local fromLink = hint:match("%[(.-)%]")
+    if fromLink then return fromLink end
+    if not hint:find("|Hitem:", 1, true) then
+        return hint
+    end
+    return nil
+end
+
+-- StarterDB lists verified zones per base item. No entry means unrestricted.
+-- An entry whose zone is missing means the pin is off-list and must be dropped.
+function LootCollector:IsStarterDBZoneAllowed(itemID, zoneID)
+    itemID = tonumber(itemID)
+    zoneID = tonumber(zoneID)
+    if not itemID or not zoneID then return true end
+    local allowed = self.StarterDBItemZones and self.StarterDBItemZones[itemID]
+    if not allowed then return true end
+    return allowed[zoneID] == true or allowed[tostring(zoneID)] == true
+end
+
+function LootCollector:_ResolveStarterDBBaseByName(name, incomingID)
+    if not name or name == "" or not self.StarterDBItemZones or not self.itemInfoCache then
+        return nil
+    end
+    local key = string.lower(name)
+    incomingID = tonumber(incomingID)
+    for id in pairs(self.StarterDBItemZones) do
+        local bid = tonumber(id)
+        if bid and bid ~= incomingID then
+            local cached = self.itemInfoCache[bid] or self.itemInfoCache[id]
+            if cached and cached[1] and string.lower(cached[1]) == key then
+                return bid
+            end
+        end
+    end
+    return nil
 end
 
 function LootCollector:_IndexWfBaseName(index, name, itemID)
@@ -2497,6 +2531,15 @@ function LootCollector:_EnsureWfBaseNameIndex()
             end
         end
     end
+    if self.StarterDBItemZones and self.itemInfoCache then
+        for id in pairs(self.StarterDBItemZones) do
+            local bid = tonumber(id) or id
+            local cached = self.itemInfoCache[bid] or self.itemInfoCache[id]
+            if cached and cached[1] then
+                self:_IndexWfBaseName(index, cached[1], bid)
+            end
+        end
+    end
     self._wfBaseNameIndex = index
     return index
 end
@@ -2505,6 +2548,12 @@ function LootCollector:_ResolveBaseItemIDByName(name, incomingReqLevel, incoming
     if not name or name == "" then return nil end
     local index = self:_EnsureWfBaseNameIndex()
     local baseID = index[string.lower(name)]
+    if not baseID or baseID == incomingID then
+        baseID = self:_ResolveStarterDBBaseByName(name, incomingID)
+        if baseID and index then
+            self:_IndexWfBaseName(index, name, baseID)
+        end
+    end
     if not baseID or baseID == incomingID then return nil end
 
     if incomingReqLevel then

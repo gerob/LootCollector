@@ -427,7 +427,7 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
     local Constants = L:GetModule("Constants", true)
     
 	local disc = parsed.discoveries or {}
-	local applied = {total = 0, bm_total = 0, overlays = 0, profilelists = 0, skippedCity = 0, skippedCoA = 0}
+	local applied = {total = 0, bm_total = 0, overlays = 0, profilelists = 0, skippedCity = 0, skippedCoA = 0, skippedZone = 0}
 	
 	local db = L:GetDiscoveriesDB()
     local bm_db = L:GetVendorsDB()
@@ -468,7 +468,10 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
         elseif Constants and Constants.IsForbiddenZone and Constants:IsForbiddenZone(d.continent, d.zoneID, d.foundBy_player) then
             applied.skippedCity = applied.skippedCity + 1
         else
-            local itemID = L:GetBaseItemID(d.itemID)
+            local itemID = L:GetBaseItemID(d.itemID, d.itemLink)
+            if L.IsStarterDBZoneAllowed and not L:IsStarterDBZoneAllowed(itemID, d.zoneID) then
+                applied.skippedZone = applied.skippedZone + 1
+            else
             local itemLink = d.itemLink
             if itemLink and type(itemLink) == "string" then
                 itemLink = itemLink:gsub("item:%d+", "item:" .. itemID)
@@ -478,16 +481,27 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
             local y = d.coords and d.coords.y or 0
             local newGuid = L:GenerateGUID(d.continent, d.zoneID, iz, itemID, x, y)
             
+            local WF_TYPE = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+            local MS_TYPE_IMP = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
+            local rowDt = tonumber(d.discoveryType) or 0
+            local isWF = (rowDt ~= MS_TYPE_IMP) and (rowDt == 0 or not WF_TYPE or rowDt == WF_TYPE)
+
             local existing, existingGuid = db[newGuid], newGuid
             if not existing then
                 for g, ex in pairs(db) do
                     if ex.i == itemID and ex.c == d.continent and ex.z == d.zoneID then
-                        local dist = L:ComputeDistance(d.continent, d.zoneID, x, y, ex.c, ex.z, ex.xy.x, ex.xy.y)
-                        local radius = GetClusterRadius(ex.dt)
-                        if dist and dist <= radius then
+                        if isWF then
                             existing = ex
                             existingGuid = g
                             break
+                        else
+                            local dist = L:ComputeDistance(d.continent, d.zoneID, x, y, ex.c, ex.z, ex.xy.x, ex.xy.y)
+                            local radius = GetClusterRadius(ex.dt)
+                            if dist and dist <= radius then
+                                existing = ex
+                                existingGuid = g
+                                break
+                            end
                         end
                     end
                 end
@@ -575,6 +589,7 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
                 db[newGuid] = shortRecord
                 guidMap[oldGuid] = newGuid
                 applied.total = applied.total + 1
+            end
             end
         end
 	end
@@ -909,10 +924,16 @@ function ImportExport:ApplyImportString(importString, mode, withOverlays, skipBl
     if res.profilelists > 0 then
         msg = msg .. string.format(" Merged %d player list entries.", res.profilelists)
     end
+    if res.skippedZone and res.skippedZone > 0 then
+        msg = msg .. string.format(" Skipped %d off-StarterDB-zone pin(s).", res.skippedZone)
+    end
     print(msg)
 
     
     local Core = L:GetModule("Core", true)
+    if Core and Core.SweepOffStarterZoneDiscoveries then
+        Core:SweepOffStarterZoneDiscoveries()
+    end
     if Core and Core.RemapLootedHistoryV6 then
         Core:RemapLootedHistoryV6()
     end

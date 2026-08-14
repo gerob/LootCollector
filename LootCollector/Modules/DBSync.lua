@@ -310,6 +310,24 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
         finalQ = 7 
     end
 
+    if not isVendor then
+        i = tonumber(i) or 0
+        if L.GetBaseItemID then
+            i = L:GetBaseItemID(i, itemName)
+        end
+        if L.IsStarterDBZoneAllowed and not L:IsStarterDBZoneAllowed(i, z) then
+            return
+        end
+        if L.LockDiscoveryToCoordAuthority then
+            local snapped = { i = i, z = z, c = c, xy = { x = x, y = y } }
+            if L:LockDiscoveryToCoordAuthority(snapped) then
+                x = snapped.xy.x
+                y = snapped.xy.y
+                c = snapped.c or c
+            end
+        end
+    end
+
     if isVendor then
         target_db = L:GetVendorsDB()
         if not target_db then return end
@@ -324,6 +342,8 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
     local now = time()
     local existing = target_db[guid]
     
+    local MS_TYPE = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
+    local isWF = (not isVendor) and (not dt or not MS_TYPE or dt ~= MS_TYPE)
     
     if not existing then
         local CLUSTER_YARDS = 100
@@ -340,6 +360,12 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
                     if dist and dist <= CLUSTER_YARDS then
                         existing = ex; guid = g; break
                     end
+                end
+            elseif isWF then
+                if ex.i == i and ex.c == c and ex.z == z then
+                    existing = ex
+                    guid = g
+                    break
                 end
             else
                 if ex.i == i and ex.c == c and ex.z == z then
@@ -397,6 +423,10 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
             at = now, nd = nil,
         }
         
+        if not isVendor and L.LockDiscoveryToCoordAuthority then
+            L:LockDiscoveryToCoordAuthority(newRecord)
+        end
+
         local Comm = L:GetModule("Comm", true)
         if Comm and Comm._computeMid then newRecord.mid = Comm._computeMid(newRecord) end
         
@@ -415,6 +445,9 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
         
         L.DataHasChanged = true
     else
+        if not isVendor and L.LockDiscoveryToCoordAuthority then
+            L:LockDiscoveryToCoordAuthority(existing)
+        end
         if (not existing.il) and il then existing.il = il end
         if (existing.q or 0) == 0 and q and q > 0 then existing.q = q end
         if (existing.dt or 0) == 0 and dt and dt > 0 then existing.dt = dt end

@@ -1,4 +1,11 @@
 -- Maintainer-verified Worldforged coordinates.
+-- This table is the only supported way to move high-mc pins. Do not
+-- auto-harvest community mc into authority.
+--
+-- Loop: stand on the spawn → /lcsetcoords → paste the printed Lua row →
+-- bump CoordAuthorityRevision → release. Prioritize /lcdiag rows that
+-- are HIGH_MC and whose GUID xy differs from stored xy.
+--
 -- Bump CoordAuthorityRevision whenever you add or change a row so login re-applies.
 -- Players' SavedVariables are snapped on login; public DISC cannot override these xy.
 
@@ -149,6 +156,8 @@ SlashCmdList["LOOTCOLLECTORSETCOORDS"] = function(msg)
     msg = tostring(msg or ""):match("^%s*(.-)%s*$") or ""
     if msg == "help" then
         print("|cff00ff00LootCollector:|r /lcsetcoords [itemID] - snap a pin to your position and print a CoordAuthority snippet.")
+        print("|cffaaaaaaMaintainer loop: stand on the spawn, run this, paste the Lua row, bump CoordAuthorityRevision, release.|r")
+        print("|cffaaaaaaPrioritize /lcdiag HIGH_MC rows where GUID xy differs from stored xy. Do not harvest community mc.|r")
         return
     end
 

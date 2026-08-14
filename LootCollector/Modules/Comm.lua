@@ -1031,6 +1031,11 @@ function Comm:buildWireV5DISC(discovery)
         fp = fp_val,
     }
 
+    local itemName = discovery and discovery.il and discovery.il:match("%[(.-)%]")
+    if itemName and itemName ~= "" then
+        w.n = itemName
+    end
+
     w.mid = L:ComputeCanonicalDiscoveryMid(w)
     w.seq = _nextSeq()
     
@@ -1096,6 +1101,11 @@ function Comm:buildWireV5CONF(discovery)
         src = srcvalue,
         fp = fp_val,
     }
+
+    local itemName = discovery and discovery.il and discovery.il:match("%[(.-)%]")
+    if itemName and itemName ~= "" then
+        w.n = itemName
+    end
 
     w.mid = L:ComputeCanonicalDiscoveryMid(w)
     w.seq = _nextSeq()
@@ -2227,6 +2237,7 @@ local function _normalizeForCore(tbl, sender, Comm)
         op = tbl.op,
         i = itemID,
         il = tbl.l or select(2, GetItemInfo(itemID or 0)),
+        n = tbl.n,
         q = tonumber(tbl.q) or 1,
         c = tonumber(tbl.c) or 0,
         z = tonumber(tbl.z) or 0,

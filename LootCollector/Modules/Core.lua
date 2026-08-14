@@ -2052,22 +2052,45 @@ end
 
 -- One-shot: after upgrade IDs remap to base, drop pins whose zone is not
 -- in StarterDB for that base. Do not merge their mc into the real spawn.
-function Core:PurgeOffStarterZoneDiscoveries()
-    if not (L.db and L.db.global) then return 0 end
-    if L.db.global.offStarterZonePurgeV1 then return 0 end
+function Core:IsOffStarterZoneRecord(d)
+    if type(d) ~= "table" or not d.i or not d.z or d.vendorType then
+        return false
+    end
+    local Constants = L:GetModule("Constants", true)
+    local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+    if d.dt == BM then return false end
+    if WF and d.dt and d.dt ~= WF then return false end
+    local base = (L.GetBaseItemID and L:GetBaseItemID(d.i, d.il)) or d.i
+    if not (L.StarterDBItemZones and L.StarterDBItemZones[base]) then
+        return false
+    end
+    if L.IsStarterDBZoneAllowed then
+        return not L:IsStarterDBZoneAllowed(base, d.z)
+    end
+    local allowed = L.StarterDBItemZones[base]
+    local z = tonumber(d.z)
+    return not (z and (allowed[z] or allowed[tostring(z)]))
+end
+
+-- Scan/remove off-StarterDB-zone pins. Login uses the one-shot wrapper
+-- below; ingest/remap calls this directly so a later ID remap can still
+-- delete the bad guid.
+function Core:SweepOffStarterZoneDiscoveries(opts)
+    opts = opts or {}
     if not (L.StarterDBItemZones and next(L.StarterDBItemZones)) then
         return 0
     end
 
     local discoveries = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
     if not discoveries then
-        L.db.global.offStarterZonePurgeV1 = true
         return 0
     end
 
     local Constants = L:GetModule("Constants", true)
     local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
     local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+    local onlyGuid = opts.onlyGuid
 
     local keepByBase = {}
     local toRemove = {}
@@ -2078,13 +2101,16 @@ function Core:PurgeOffStarterZoneDiscoveries()
             if allowed then
                 local z = tonumber(d.z)
                 local inStarter = z and (allowed[z] or allowed[tostring(z)])
+                if L.IsStarterDBZoneAllowed then
+                    inStarter = L:IsStarterDBZoneAllowed(base, d.z)
+                end
                 if inStarter then
                     local cur = keepByBase[base]
                     local mc = tonumber(d.mc) or 1
                     if not cur or mc > (tonumber(cur.mc) or 1) then
                         keepByBase[base] = d
                     end
-                else
+                elseif (not onlyGuid) or guid == onlyGuid then
                     table.insert(toRemove, guid)
                 end
             end
@@ -2105,11 +2131,22 @@ function Core:PurgeOffStarterZoneDiscoveries()
         end
     end
 
-    L.db.global.offStarterZonePurgeV1 = true
     if removed > 0 then
         self:InvalidateLookupIndices()
         L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
     end
+    return removed
+end
+
+function Core:PurgeOffStarterZoneDiscoveries()
+    if not (L.db and L.db.global) then return 0 end
+    if L.db.global.offStarterZonePurgeV1 then return 0 end
+    if not (L.StarterDBItemZones and next(L.StarterDBItemZones)) then
+        return 0
+    end
+
+    local removed = self:SweepOffStarterZoneDiscoveries()
+    L.db.global.offStarterZonePurgeV1 = true
     return removed
 end
 
@@ -2812,6 +2849,23 @@ function Core:OnGetItemInfoReceived(itemID, success)
 
     if itemID then
         self:UpdateItemRecordFromCache(itemID)
+        if success then
+            local name = select(1, GetItemInfo(itemID))
+            if name and L._wfBaseNameIndex and L._IndexWfBaseName then
+                if (L.StarterDBItemZones and L.StarterDBItemZones[itemID])
+                    or (L._IsKnownWorldforgedBase and L:_IsKnownWorldforgedBase(itemID)) then
+                    L:_IndexWfBaseName(L._wfBaseNameIndex, name, itemID)
+                end
+            end
+            local base = L.GetBaseItemID and L:GetBaseItemID(itemID, name)
+            local starterByName = name and L._ResolveStarterDBBaseByName and L:_ResolveStarterDBBaseByName(name, itemID)
+            if self.SweepOffStarterZoneDiscoveries
+                and ((L.StarterDBItemZones and L.StarterDBItemZones[itemID])
+                    or (base and base ~= itemID)
+                    or starterByName) then
+                self:SweepOffStarterZoneDiscoveries()
+            end
+        end
 
         local Map = L:GetModule("Map", true)
         if Map and Map.RefreshPinIconsForItem then
@@ -3130,12 +3184,10 @@ function Core:HandleLocalLoot(discovery)
         end
     end
 
-    if not isSpecialVendorDiscovery and L.StarterDBItemZones and L.StarterDBItemZones[itemID] then
-        if not L.StarterDBItemZones[itemID][discovery.z] then
-            L._debug("Core-Block", "Blocked local discovery because itemID=" .. tostring(itemID) .. " has a different verified zone in Starter DB.")
-            if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
-            return
-        end
+    if not isSpecialVendorDiscovery and L.IsStarterDBZoneAllowed and not L:IsStarterDBZoneAllowed(itemID, discovery.z) then
+        L._debug("Core-Block", "Blocked local discovery because itemID=" .. tostring(itemID) .. " has a different verified zone in Starter DB.")
+        if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
+        return
     end
     
     
@@ -4229,7 +4281,7 @@ function Core:AddDiscovery(d, options)
         if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
         return nil 
     end
-    itemID = L:GetBaseItemID(itemID, d.il)
+    itemID = L:GetBaseItemID(itemID, d.il or d.n)
     d.i = itemID
     if d.il and type(d.il) == "string" then
         d.il = d.il:gsub("item:%d+", "item:" .. itemID)
@@ -4343,12 +4395,10 @@ function Core:AddDiscovery(d, options)
         end
     end
     
-    if L.StarterDBItemZones and L.StarterDBItemZones[itemID] then
-        if not L.StarterDBItemZones[itemID][z] then
-            L._debug("Core-Block", "Blocked incoming discovery because itemID=" .. tostring(itemID) .. " has a different verified zone in Starter DB (incoming zone=" .. tostring(z) .. ").")
-            if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
-            return nil
-        end
+    if L.IsStarterDBZoneAllowed and not L:IsStarterDBZoneAllowed(itemID, z) then
+        L._debug("Core-Block", "Blocked incoming discovery because itemID=" .. tostring(itemID) .. " has a different verified zone in Starter DB (incoming zone=" .. tostring(z) .. ").")
+        if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
+        return nil
     end
     
     if self:IsInsideAOETombstone(c, z, tonumber(d.iz) or 0, d.dt, d.xy and d.xy.x or 0, d.xy and d.xy.y or 0) then
@@ -4362,7 +4412,7 @@ function Core:AddDiscovery(d, options)
     end
 
     if options.isNetwork then
-        if not (d.xy and d.c and d.z and (d.il or d.i)) then 
+        if not (d.xy and d.c and d.z and (d.il or d.i or d.n)) then 
             if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
             return nil 
         end
@@ -4383,24 +4433,52 @@ function Core:AddDiscovery(d, options)
     end
 
     local isBlackmarket = Constants and Constants.DISCOVERY_TYPE and d.dt == Constants.DISCOVERY_TYPE.BLACKMARKET
+    local knownBase = (L._IsKnownWorldforgedBase and L:_IsKnownWorldforgedBase(itemID))
+        or (L.StarterDBItemZones and L.StarterDBItemZones[itemID] ~= nil)
 
-    if options.isNetwork then
-        if not isBlackmarket and not self:IsItemFullyCached(itemID) then
-            local firstDelay = math.random(5, 25)
-            self:QueueItemForCaching(itemID)
+    -- Uncached unknown upgrade IDs must not land as mc=1 before name→base.
+    -- Defer until GetItemInfo; remap + StarterDB run on the retry.
+    if options.isNetwork and not isBlackmarket and not self:IsItemFullyCached(itemID) then
+        local firstDelay = math.random(5, 25)
+        self:QueueItemForCaching(itemID)
 
-            L:ScheduleAfter(firstDelay, function()
-                if self:IsItemFullyCached(itemID) then
-                    self:AddDiscovery(d, options)
-                else
-                    SafeCacheItemRequest(itemID)
-                    L:ScheduleAfter(5, function()
-                        if self:IsItemFullyCached(itemID) then self:AddDiscovery(d, options) end
-                    end)
-                end
-            end)
-            if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
-            return nil
+        L:ScheduleAfter(firstDelay, function()
+            if self:IsItemFullyCached(itemID) then
+                self:AddDiscovery(d, options)
+            else
+                SafeCacheItemRequest(itemID)
+                L:ScheduleAfter(5, function()
+                    if self:IsItemFullyCached(itemID) then self:AddDiscovery(d, options) end
+                end)
+            end
+        end)
+        if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
+        return nil
+    end
+
+    if not isBlackmarket and not knownBase then
+        local nameHint = d.n
+        if not nameHint and d.il and type(d.il) == "string" then
+            nameHint = d.il:match("%[(.-)%]")
+        end
+        if not nameHint then
+            nameHint = select(1, GetItemInfo(itemID))
+        end
+        local starterBase = nameHint and L._ResolveStarterDBBaseByName and L:_ResolveStarterDBBaseByName(nameHint, itemID)
+        if not starterBase and nameHint and L._ResolveBaseItemIDByName then
+            starterBase = L:_ResolveBaseItemIDByName(nameHint, nil, itemID)
+        end
+        if starterBase and starterBase ~= itemID then
+            itemID = starterBase
+            d.i = itemID
+            if d.il and type(d.il) == "string" then
+                d.il = d.il:gsub("item:%d+", "item:" .. itemID)
+            end
+            if L.IsStarterDBZoneAllowed and not L:IsStarterDBZoneAllowed(itemID, z) then
+                L._debug("Core-Block", "Blocked incoming discovery because itemID=" .. tostring(itemID) .. " has a different verified zone in Starter DB (incoming zone=" .. tostring(z) .. ").")
+                if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
+                return nil
+            end
         end
     end
 
@@ -4431,6 +4509,9 @@ function Core:AddDiscovery(d, options)
         return res
     else
         local res = self:_ProcessItemDiscovery(d, options, op, t0)
+        if res and self.SweepOffStarterZoneDiscoveries then
+            self:SweepOffStarterZoneDiscoveries({ onlyGuid = res })
+        end
         if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
         return res
     end
@@ -5490,6 +5571,7 @@ SlashCmdList["LOOTCOLLECTORDIAG"] = function(msg)
     msg = tostring(msg or ""):match("^%s*(.-)%s*$") or ""
     if msg == "" or msg == "help" then
         print("|cff00ff00LootCollector:|r /lcdiag <itemID|itemLink> - dump c/z/iz/xy/mc for one item")
+        print("|cffaaaaaa/lclowmc [maxMc] - list Worldforged pins with mc < maxMc (default 5)|r")
         return
     end
     local itemID = tonumber(msg)
@@ -5501,4 +5583,95 @@ SlashCmdList["LOOTCOLLECTORDIAG"] = function(msg)
         return
     end
     CoreMod:DiagnoseItemCoords(itemID)
+end
+
+-- Test helper: list Worldforged pins whose merge count is below a threshold.
+-- Usage: /lclowmc [maxMc]   (default maxMc=5 means mc < 5)
+local LOWMC_PRINT_CAP = 50
+
+function Core:ListLowMcWorldforged(maxMc)
+    maxMc = tonumber(maxMc) or 5
+    if maxMc < 1 then maxMc = 5 end
+
+    local discoveries = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not discoveries then
+        print("|cffff7f00LootCollector:|r Discovery database not ready.")
+        return 0
+    end
+
+    local Constants = L:GetModule("Constants", true)
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+    local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+    local MS = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
+
+    local rows = {}
+    for guid, d in pairs(discoveries) do
+        if type(d) == "table" and d.i and not d.vendorType and d.dt ~= BM and d.dt ~= MS
+            and (not WF or not d.dt or d.dt == WF) then
+            local mc = tonumber(d.mc) or 1
+            if mc < maxMc then
+                table.insert(rows, { guid = guid, d = d, mc = mc })
+            end
+        end
+    end
+
+    table.sort(rows, function(a, b)
+        if a.mc ~= b.mc then return a.mc < b.mc end
+        local ia, ib = tonumber(a.d.i) or 0, tonumber(b.d.i) or 0
+        if ia ~= ib then return ia < ib end
+        return tostring(a.guid) < tostring(b.guid)
+    end)
+
+    print(string.format(
+        "|cff00ff00LootCollector:|r Worldforged pins with mc < %d: %d",
+        maxMc, #rows
+    ))
+    if #rows == 0 then
+        return 0
+    end
+
+    local shown = math.min(#rows, LOWMC_PRINT_CAP)
+    for i = 1, shown do
+        local row = rows[i]
+        local d = row.d
+        local c = tonumber(d.c) or 0
+        local z = tonumber(d.z) or 0
+        local iz = tonumber(d.iz) or 0
+        local x = d.xy and tonumber(d.xy.x) or 0
+        local y = d.xy and tonumber(d.xy.y) or 0
+        local zoneName = (L.ResolveZoneDisplay and L.ResolveZoneDisplay(c, z, iz)) or "Unknown"
+        local name = (d.il and d.il:match("%[(.-)%]")) or select(1, GetItemInfo(d.i)) or "?"
+        local fp = tostring(d.fp or d.o or "?")
+        print(string.format(
+            "  %d  %s  %s  %.1f, %.1f  %s  mc=%d",
+            tonumber(d.i) or 0, name, zoneName, x * 100, y * 100, fp, row.mc
+        ))
+    end
+    if #rows > shown then
+        print(string.format("|cffaaaaaa... %d more|r", #rows - shown))
+    end
+    return #rows
+end
+
+SLASH_LOOTCOLLECTORLOWMC1 = "/lclowmc"
+SlashCmdList["LOOTCOLLECTORLOWMC"] = function(msg)
+    local CoreMod = L:GetModule("Core", true)
+    if not (CoreMod and CoreMod.ListLowMcWorldforged) then
+        print("|cffff7f00LootCollector:|r Core diagnostics not available.")
+        return
+    end
+    msg = tostring(msg or ""):match("^%s*(.-)%s*$") or ""
+    if msg == "help" then
+        print("|cff00ff00LootCollector:|r /lclowmc [maxMc] - list Worldforged pins with mc < maxMc (default 5)")
+        return
+    end
+    local maxMc = 5
+    if msg ~= "" then
+        maxMc = tonumber(msg)
+        if not maxMc then
+            print("|cffff7f00LootCollector:|r Usage: /lclowmc [maxMc]")
+            return
+        end
+    end
+    CoreMod:ListLowMcWorldforged(maxMc)
 end
