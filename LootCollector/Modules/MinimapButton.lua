@@ -31,11 +31,13 @@ local function CreateMinimapButton()
     button:SetHeight(31)
     button:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     
-    local icon = button:CreateTexture(nil, "BACKGROUND")
+    local icon = button:CreateTexture(nil, "ARTWORK")
     icon:SetWidth(26)
     icon:SetHeight(26)
     icon:SetPoint("CENTER", button, "CENTER", 0, 1)
-    icon:SetTexture("Interface\\AddOns\\LootCollector\\media\\MinimapIcon")
+    icon:SetTexture("Interface\\AddOns\\LootCollector\\media\\LCicon.tga")
+    icon:SetTexCoord(0, 1, 0, 1)
+    icon:SetVertexColor(1, 1, 1, 1)
     button.icon = icon
 
     local lcText = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")

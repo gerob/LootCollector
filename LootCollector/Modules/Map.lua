@@ -2049,10 +2049,13 @@ function Map:EnsureFilterUI()
     FilterButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     FilterButton:SetPushedTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Down")
     
-    local icon = FilterButton:CreateTexture(nil, "BACKGROUND")
-    icon:SetSize(20, 20)
-    icon:SetPoint("CENTER", FilterButton, "CENTER", 0, 0)
-    icon:SetTexture("Interface\\Icons\\ability_rogue_rollthebones05")
+    local icon = FilterButton:CreateTexture(nil, "ARTWORK")
+    icon:SetWidth(20)
+    icon:SetHeight(20)
+    icon:SetPoint("CENTER", FilterButton, "CENTER", 2, 0)
+    icon:SetTexture("Interface\\AddOns\\LootCollector\\media\\LCicon.tga")
+    icon:SetTexCoord(0, 1, 0, 1)
+    icon:SetVertexColor(1, 1, 1, 1)
     FilterButton.icon = icon
     
     local border = FilterButton:CreateTexture(nil, "OVERLAY")
