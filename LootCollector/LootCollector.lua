@@ -198,7 +198,7 @@ StaticPopupDialogs["LOOTCOLLECTOR_WELCOME"] = {
   text = "|cffffff00LootCollector quick start|r\n\n" ..
     "• Open Discoveries: minimap button or |cffffffff/lcv|r\n" ..
     "• Filter Map: apply your Discoveries filters to map/minimap pins\n" ..
-    "• Sync: |cffffffff/lc|r → Behavior & Sharing → Sharing Controls → Enable Sharing + Enable Public Channel Sync\n" ..
+    "• Sync: public channel is on by default. The shield pauses it above 5000 msgs/min. Change under |cffffffff/lc|r → Behavior & Sharing → Sharing Controls\n" ..
     "• Empty Discoveries? Merge Starter Database (Import/Export), or use the button on the empty list\n\n" ..
     "Re-enable this tip anytime: |cffffffff/lc|r → Behavior & Sharing → Show welcome tips on login.",
   button1 = "Got it",
@@ -222,6 +222,38 @@ StaticPopupDialogs["LOOTCOLLECTOR_WELCOME"] = {
   OnHide = function(self)
     if self.CheckBox then
       self.CheckBox:SetChecked(false)
+    end
+  end,
+  timeout = 0,
+  whileDead = 1,
+  hideOnEscape = 1,
+  preferredIndex = 3,
+}
+
+StaticPopupDialogs["LOOTCOLLECTOR_PUBLIC_CHANNEL_PROMPT"] = {
+  text = "|cffffff00LootCollector: Public Channel Sync|r\n\n" ..
+    "Your public channel sync is off, so pins only update from what you find locally (or party/guild/whisper/import).\n\n" ..
+    "Turn it on to receive confirms, coordinate fixes, and fade/stale votes from other players. The Auto-Pause Shield leaves the channel if traffic exceeds 5000 msgs/min, then rejoins after 5 minutes.\n\n" ..
+    "You can change this later: |cffffffff/lc|r → Behavior & Sharing → Sharing Controls.",
+  button1 = "Enable Sync",
+  button2 = "Not now",
+  OnAccept = function()
+    local p = LootCollector.db and LootCollector.db.profile
+    if not p then return end
+    p.sharing = p.sharing or {}
+    p.sharing.publicChannelEnabled = true
+    p.sharing.autoPauseEnabled = true
+    p.sharing.autoPauseThreshold = 5000
+    p.promptedPublicChannelSync = true
+    local Comm = LootCollector:GetModule("Comm", true)
+    if Comm and LootCollector.channelReady and Comm.EnsureChannelJoined then
+      Comm:EnsureChannelJoined()
+    end
+    print("|cff00ff00LootCollector:|r Public channel sync enabled. Shield threshold is 5000 msgs/min.")
+  end,
+  OnCancel = function()
+    if LootCollector.db and LootCollector.db.profile then
+      LootCollector.db.profile.promptedPublicChannelSync = true
     end
   end,
   timeout = 0,
@@ -295,7 +327,9 @@ local dbDefaults = {
             rejectGuildSync = false,
             rejectWhisperSync = false,
             ackOnChannel = true,
-            publicChannelEnabled = false,
+            publicChannelEnabled = true,
+            autoPauseEnabled = true,
+            autoPauseThreshold = 5000,
             blockList = {},
             whiteList = {},
         },
@@ -323,6 +357,7 @@ local dbDefaults = {
         filterPresets = {},
         viewerLiveFilters = false,
         lastVersionToastAt = 0,
+        promptedPublicChannelSync = false,
         ignoreZones = {},
         decay = { fadeAfterDays = 30, staleAfterDays = 90, removeAfterDays = 120, },
 	    debugMode = false,
@@ -831,6 +866,7 @@ end
 
 local _LC_POPUPS_BLOCKING_PRESTIGE = {
     "LOOTCOLLECTOR_WELCOME",
+    "LOOTCOLLECTOR_PUBLIC_CHANNEL_PROMPT",
     "LOOTCOLLECTOR_OPTIONAL_DB_UPDATE",
     "LOOTCOLLECTOR_MIGRATION_RELOAD",
     "LOOTCOLLECTOR_PRESTIGE_CLEAR_LOOTED",
@@ -2318,6 +2354,28 @@ function LootCollector:MaybeShowWelcomeTips()
     StaticPopup_Show("LOOTCOLLECTOR_WELCOME")
 end
 
+function LootCollector:MaybeShowPublicChannelPrompt()
+    if self.LEGACY_MODE_ACTIVE then return end
+    if not (self.db and self.db.profile) then return end
+    local p = self.db.profile
+    if p.promptedPublicChannelSync then return end
+    local sharing = p.sharing or {}
+    if sharing.enabled == false then return end
+    if sharing.publicChannelEnabled then return end
+    if StaticPopup_Visible and (
+        StaticPopup_Visible("LOOTCOLLECTOR_WELCOME") or
+        StaticPopup_Visible("LOOTCOLLECTOR_PUBLIC_CHANNEL_PROMPT") or
+        StaticPopup_Visible("LOOTCOLLECTOR_OPTIONAL_DB_UPDATE") or
+        StaticPopup_Visible("LOOTCOLLECTOR_MIGRATION_RELOAD")
+    ) then
+        self:ScheduleAfter(3.0, function()
+            LootCollector:MaybeShowPublicChannelPrompt()
+        end)
+        return
+    end
+    StaticPopup_Show("LOOTCOLLECTOR_PUBLIC_CHANNEL_PROMPT")
+end
+
 function LootCollector:IsZoneIgnored()
     if not (self.db and self.db.profile and self.db.profile.ignoreZones) then return false end
     local zoneName = GetRealZoneText()
@@ -2359,6 +2417,9 @@ function LootCollector:OnEnable()
             self._welcomeTipsScheduled = true
             self:ScheduleAfter(2.5, function()
                 LootCollector:MaybeShowWelcomeTips()
+            end)
+            self:ScheduleAfter(8.0, function()
+                LootCollector:MaybeShowPublicChannelPrompt()
             end)
         end
         self:SchedulePrestigeLevelCheck()

@@ -182,7 +182,7 @@ local function ensureDefaults()
 	if p.sharing.whiteList == nil then p.sharing.whiteList = {} end
 	if p.sharing.seenVersions == nil then p.sharing.seenVersions = {} end
 	if p.sharing.blockedVersions == nil then p.sharing.blockedVersions = {} end
-	if p.sharing.autoPauseEnabled == nil then p.sharing.autoPauseEnabled = false end
+	if p.sharing.autoPauseEnabled == nil then p.sharing.autoPauseEnabled = true end
 	if p.sharing.autoPauseThreshold == nil then p.sharing.autoPauseThreshold = 5000 end
 	if p.autoCache == nil then p.autoCache = true end
 
@@ -1146,7 +1146,7 @@ local function buildOptions()
 						type = "toggle",
 						name = "Enable Public Channel Sync",
 						order = 10.5,
-						desc = "Join the global custom channel and sync discoveries with other players on the server.|n|cffff0000WARNING: On highly populated realms (e.g. CoA), this channel gets heavily spammed, which can cause significant game stuttering/lag!|r",
+						desc = "Join the global custom channel and sync discoveries with other players on the server.|nThe Auto-Pause Shield is on by default at 5000 msgs/min and will leave the channel briefly if traffic spikes.|n|cffff0000WARNING: On highly populated realms (e.g. CoA), this channel can still cause stuttering if you raise or disable the shield.|r",
 						disabled = function()
 							return not L.db.profile.sharing.enabled
 						end,
