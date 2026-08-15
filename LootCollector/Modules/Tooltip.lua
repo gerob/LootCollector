@@ -634,19 +634,38 @@ local function OnTooltipSetItem(tooltip)
     inHandler = false
 end
 
+local function AttachTooltipHook(tip)
+    if not tip or tip._LCWFHooked then return end
+
+    local function apply()
+        if tip.GetScript and tip:GetScript("OnTooltipSetItem") and tip.HookScript then
+            tip:HookScript("OnTooltipSetItem", OnTooltipSetItem)
+        elseif tip.SetScript then
+            -- 3.3.5 HookScript errors if the script slot is empty.
+            tip:SetScript("OnTooltipSetItem", OnTooltipSetItem)
+        else
+            return
+        end
+        tip._LCWFHooked = true
+    end
+
+    if not pcall(apply) and tip.SetScript then
+        pcall(function()
+            tip:SetScript("OnTooltipSetItem", OnTooltipSetItem)
+            tip._LCWFHooked = true
+        end)
+    end
+end
+
 local function HookTooltips()
     DebugPrint(printPrefix .. "Hooking tooltips...")
 
     local tooltips = { GameTooltip, ItemRefTooltip, ShoppingTooltip1, ShoppingTooltip2, WorldMapTooltip }
 
     for _, tip in pairs(tooltips) do
-        if tip and tip.HookScript then
-            pcall(function()
-                tip:HookScript("OnTooltipSetItem", OnTooltipSetItem)
-            end)
-            if tip.GetName then
-                DebugPrint(printPrefix .. "Hooked: " .. (tip:GetName() or "unknown"))
-            end
+        AttachTooltipHook(tip)
+        if tip and tip._LCWFHooked and tip.GetName then
+            DebugPrint(printPrefix .. "Hooked: " .. (tip:GetName() or "unknown"))
         end
     end
 
@@ -668,7 +687,8 @@ end
 
 function Tooltip:OnEnable()
     ensureProfileDefaults()
-    self:RegisterEvent("PLAYER_LOGIN", function()
+    HookTooltips()
+    self:RegisterEvent("PLAYER_ENTERING_WORLD", function()
         HookTooltips()
     end)
 end
