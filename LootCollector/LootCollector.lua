@@ -2172,8 +2172,9 @@ function LootCollector:OnInitialize()
 end
 
 function LootCollector:InitializeStarterDBLookup()
-    if self.StarterDBItemZones then return end
-    self.StarterDBItemZones = {}
+    if self.StarterDBCoords then return end
+    self.StarterDBItemZones = self.StarterDBItemZones or {}
+    self.StarterDBCoords = {}
     
     local loaded = LoadAddOn("LootCollector_StarterDB")
     if loaded and _G.LootCollector_OptionalDB_Data and type(_G.LootCollector_OptionalDB_Data) == "table" then
@@ -2192,8 +2193,30 @@ function LootCollector:InitializeStarterDBLookup()
                             if ok and type(tbl) == "table" and tbl.discoveries then
                                 for _, d in pairs(tbl.discoveries) do
                                     if d.itemID and d.zoneID then
-                                        self.StarterDBItemZones[d.itemID] = self.StarterDBItemZones[d.itemID] or {}
-                                        self.StarterDBItemZones[d.itemID][d.zoneID] = true
+                                        local itemID = tonumber(d.itemID)
+                                        local zoneID = tonumber(d.zoneID)
+                                        if itemID and zoneID then
+                                            self.StarterDBItemZones[itemID] = self.StarterDBItemZones[itemID] or {}
+                                            self.StarterDBItemZones[itemID][zoneID] = true
+                                            local x = d.coords and tonumber(d.coords.x)
+                                            local y = d.coords and tonumber(d.coords.y)
+                                            if x and y and x > 0 and y > 0 and x <= 1 and y <= 1 then
+                                                self.StarterDBCoords[itemID] = self.StarterDBCoords[itemID] or {}
+                                                local prev = self.StarterDBCoords[itemID][zoneID]
+                                                local mc = tonumber(d.mergeCount) or 1
+                                                local ZoneList = self:GetModule("ZoneList", true)
+                                                local zInfo = ZoneList and ZoneList.MapDataByID and ZoneList.MapDataByID[zoneID]
+                                                local c = (zInfo and tonumber(zInfo.continentID)) or tonumber(d.continent)
+                                                if not prev or mc >= (prev.mc or 0) then
+                                                    self.StarterDBCoords[itemID][zoneID] = {
+                                                        c = c,
+                                                        x = x,
+                                                        y = y,
+                                                        mc = mc,
+                                                    }
+                                                end
+                                            end
+                                        end
                                     end
                                 end
                             end

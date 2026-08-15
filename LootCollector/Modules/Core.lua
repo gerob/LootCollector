@@ -541,6 +541,20 @@ local function FindWorldforgedInZone(continent, zoneID, itemID, db)
     return nil
 end
 
+function Core:GetWorldforgedInZone(continent, zoneID, itemID)
+    local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not db then return nil end
+    local rec = FindWorldforgedInZone(continent, zoneID, itemID, db)
+    if rec then return rec end
+    if L.GetBaseItemID then
+        local base = L:GetBaseItemID(itemID)
+        if base and base ~= itemID then
+            rec = FindWorldforgedInZone(continent, zoneID, base, db)
+        end
+    end
+    return rec
+end
+
 local function FindNearbyDiscovery(continent, zoneID, itemID, x, y, db)
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -3388,6 +3402,30 @@ function Core:HandleLocalLoot(discovery)
             rec = FindNearbyDiscovery(c, z, itemID, x, y, db)
         end
     end
+
+    local isWF = (dt == Constants.DISCOVERY_TYPE.WORLDFORGED)
+    local spawnPickup = discovery.spawnPickup and true or false
+
+    -- WF pin create/move/mc only from channel + BoP Okay that granted this WF.
+    -- Bag echoes and later mob loot can still mark looted if the pin exists.
+    if isWF and not spawnPickup then
+        if rec then
+            rec.ls = max(tonumber(rec.ls) or 0, t0)
+            if L.db and L.db.char then
+                if L.MarkLooted then
+                    L:MarkLooted(rec.g)
+                else
+                    L.db.char.looted = L.db.char.looted or {}
+                    L.db.char.looted[rec.g] = time()
+                end
+            end
+            local MapEarly = L:GetModule("Map", true)
+            if MapEarly then MapEarly.cacheIsDirty = true end
+            L.DataHasChanged = true
+        end
+        if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
+        return
+    end
     
     if not rec then
         rec = {
@@ -3397,6 +3435,7 @@ function Core:HandleLocalLoot(discovery)
             t0 = t0, ls = t0, s = Constants.STATUS.UNCONFIRMED, st = t0, cl = cl,
             q = quality or 0, dt = dt, it = it, ist = ist,
             src = src_numeric,
+            mc = 1,
             av = L.Version or discovery.av,
             fp_votes = { [finderName] = { score = 1, t0 = t0 } },
             s_flag = s_flag,		
@@ -3433,11 +3472,22 @@ function Core:HandleLocalLoot(discovery)
                 rec.xy.x = L:Round4((oldX * 0.8) + (x * 0.2))
                 rec.xy.y = L:Round4((oldY * 0.8) + (y * 0.2))
             elseif dist and dist > radius then
-                L._debug("Core-Refine", "Local loot far from stored pin; replacing coordinates.")
-                rec.xy = rec.xy or {}
-                rec.xy.x = x
-                rec.xy.y = y
+                if isWF and spawnPickup then
+                    L._debug("Core-Refine", "WF spawn pickup far from stored pin; updating coordinates.")
+                    rec.xy = rec.xy or {}
+                    rec.xy.x = x
+                    rec.xy.y = y
+                elseif not isWF then
+                    L._debug("Core-Refine", "Local loot far from stored pin; replacing coordinates.")
+                    rec.xy = rec.xy or {}
+                    rec.xy.x = x
+                    rec.xy.y = y
+                end
             end
+        end
+
+        if isWF and spawnPickup then
+            rec.mc = math.min((tonumber(rec.mc) or 1) + 1, 1000)
         end
         
         if finderName and finderName ~= "" then
@@ -3479,9 +3529,11 @@ function Core:HandleLocalLoot(discovery)
     
     L.DataHasChanged = true
     
+    local bx = (rec.xy and tonumber(rec.xy.x)) or x
+    local by = (rec.xy and tonumber(rec.xy.y)) or y
     local norm = {
         i = itemID, il = colored or discovery.il, q = quality or 1,
-        c = c, z = z, iz = iz, xy = { x = x, y = y }, t0 = t0,
+        c = rec.c or c, z = rec.z or z, iz = rec.iz or iz, xy = { x = bx, y = by }, t0 = t0,
         dt = dt, it = it, ist = ist, cl = cl,
         src = src_numeric,
         s = s_flag, fp = payload_fp,
@@ -5590,6 +5642,180 @@ function Core:DiagnoseItemCoords(itemID)
     return #matches
 end
 
+function Core:RestoreStarterCoords(onlyItemID)
+    if L.InitializeStarterDBLookup then
+        L:InitializeStarterDBLookup()
+    end
+    local coords = L.StarterDBCoords
+    if not coords or not next(coords) then
+        print("|cffff7f00LootCollector:|r StarterDB coordinates are not loaded. Enable LootCollector_StarterDB and /reload.")
+        return 0
+    end
+
+    local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not db then
+        print("|cffff7f00LootCollector:|r Discovery database not ready.")
+        return 0
+    end
+
+    onlyItemID = tonumber(onlyItemID)
+    local onlyBase = onlyItemID and L.GetBaseItemID and L:GetBaseItemID(onlyItemID) or onlyItemID
+
+    local Constants = L:GetModule("Constants", true)
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+    local confirmed = Constants and Constants.STATUS and Constants.STATUS.CONFIRMED or "CONFIRMED"
+    local radius = (Constants and Constants.CLUSTER_YARDS_WF) or 100
+    local snapped, seeded = 0, 0
+    local ZoneList = L:GetModule("ZoneList", true)
+    local function ContinentForZone(zoneID, fallback)
+        local zInfo = ZoneList and ZoneList.MapDataByID and ZoneList.MapDataByID[tonumber(zoneID)]
+        if zInfo and zInfo.continentID then
+            return tonumber(zInfo.continentID)
+        end
+        fallback = tonumber(fallback)
+        if fallback and fallback > 0 then return fallback end
+        return nil
+    end
+
+    local function GuidItemID(guid)
+        if type(guid) ~= "string" then return nil end
+        return tonumber(guid:match("^%d+%-%d+%-%d+%-(%d+)%-"))
+    end
+
+    local lootedIDs = {}
+    local lootedGuidsByItem = {}
+    local char = L.db and L.db.char
+    local function noteLooted(guid, ts)
+        local id = GuidItemID(guid)
+        if not id then return end
+        lootedIDs[id] = true
+        if L.GetBaseItemID then
+            local base = L:GetBaseItemID(id)
+            if base then lootedIDs[base] = true end
+        end
+        lootedGuidsByItem[id] = lootedGuidsByItem[id] or {}
+        lootedGuidsByItem[id][#lootedGuidsByItem[id] + 1] = { guid = guid, ts = ts }
+    end
+    if char and char.looted then
+        for guid, ts in pairs(char.looted) do noteLooted(guid, ts) end
+    end
+    if char and char.lootedBackup then
+        for guid, ts in pairs(char.lootedBackup) do noteLooted(guid, ts) end
+    end
+
+    local havePin = {}
+    for guid, rec in pairs(db) do
+        if type(rec) == "table" and rec.i and rec.z and (not WF or not rec.dt or rec.dt == WF) then
+            local itemID = tonumber(rec.i)
+            local base = (L.GetBaseItemID and L:GetBaseItemID(itemID)) or itemID
+            local zoneID = tonumber(rec.z)
+            if itemID and zoneID then
+                havePin[itemID .. ":" .. zoneID] = rec
+                havePin[base .. ":" .. zoneID] = rec
+            end
+            if not (L.GetCoordAuthorityEntry and L:GetCoordAuthorityEntry(rec.i, rec.z)) then
+                local starter = (coords[itemID] and coords[itemID][zoneID])
+                    or (coords[base] and coords[base][zoneID])
+                if starter and starter.x and starter.y
+                    and starter.x > 0 and starter.y > 0
+                    and starter.x <= 1 and starter.y <= 1 then
+                    rec.xy = rec.xy or {}
+                    local oldX = tonumber(rec.xy.x) or 0
+                    local oldY = tonumber(rec.xy.y) or 0
+                    local dist = L.ComputeDistance and L:ComputeDistance(
+                        rec.c, rec.z, oldX, oldY,
+                        rec.c, rec.z, starter.x, starter.y
+                    )
+                    if dist and dist > radius then
+                        rec.xy.x = L:Round4(starter.x)
+                        rec.xy.y = L:Round4(starter.y)
+                        local zoneC = ContinentForZone(zoneID, rec.c)
+                        if zoneC then rec.c = zoneC end
+                        snapped = snapped + 1
+                    end
+                end
+            end
+        end
+    end
+
+    local function shouldSeed(itemID)
+        if itemID <= 0 then return false end
+        if onlyItemID then
+            return itemID == onlyItemID or itemID == onlyBase
+        end
+        return lootedIDs[itemID] == true
+    end
+
+    for itemID, byZone in pairs(coords) do
+        itemID = tonumber(itemID)
+        if itemID and shouldSeed(itemID) and type(byZone) == "table" then
+            for zoneID, starter in pairs(byZone) do
+                zoneID = tonumber(zoneID)
+                if zoneID and starter and starter.x and starter.y then
+                    local existing = havePin[itemID .. ":" .. zoneID]
+                    if not existing then
+                        local x = L:Round4(starter.x)
+                        local y = L:Round4(starter.y)
+                        if x > 0 and y > 0 and x <= 1 and y <= 1 then
+                            local c = ContinentForZone(zoneID, starter.c)
+                            if c then
+                                local guid = L:GenerateGUID(c, zoneID, 0, itemID, x, y)
+                                if not db[guid] then
+                                    local name, link = GetItemInfo(itemID)
+                                    local rec = {
+                                        g = guid, c = c, z = zoneID, iz = 0, i = itemID,
+                                        il = link,
+                                        xy = { x = x, y = y },
+                                        t0 = time(), ls = time(),
+                                        s = confirmed,
+                                        mc = tonumber(starter.mc) or 1,
+                                        dt = WF,
+                                        fp = UnitName("player"),
+                                        o = "StarterDB",
+                                    }
+                                    if name and not rec.il then
+                                        rec.il = string.format("|Hitem:%d:0:0:0:0:0:0:0:0|h[%s]|h", itemID, name)
+                                    end
+                                    rec.mid = L:ComputeCanonicalDiscoveryMid(rec)
+                                    db[guid] = rec
+                                    if self.AddToZoneIndex then
+                                        self:AddToZoneIndex(guid, zoneID)
+                                    end
+                                    local remapList = lootedGuidsByItem[itemID] or lootedGuidsByItem[onlyBase or 0]
+                                    if remapList and L.RemapLootedGuid then
+                                        for _, row in ipairs(remapList) do
+                                            if row.guid ~= guid then
+                                                L:RemapLootedGuid(row.guid, guid)
+                                            end
+                                        end
+                                    elseif L.MarkLooted then
+                                        L:MarkLooted(guid)
+                                    end
+                                    seeded = seeded + 1
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local Map = L:GetModule("Map", true)
+    if Map then Map.cacheIsDirty = true end
+    if snapped > 0 or seeded > 0 then
+        L.DataHasChanged = true
+        L:SendMessage("LootCollector_DiscoveriesUpdated", "bulk", nil, nil)
+        print(string.format(
+            "|cff00ff00LootCollector:|r StarterDB restore: snapped %d drifted pin(s), re-seeded %d missing pin(s). mc and looted flags were kept.",
+            snapped, seeded
+        ))
+    else
+        print("|cff00ff00LootCollector:|r No drifted or missing StarterDB Worldforged pins to restore. For one item: /lcrestorestarter 410161")
+    end
+    return snapped + seeded
+end
+
 SLASH_LOOTCOLLECTORDIAG1 = "/lcdiag"
 SlashCmdList["LOOTCOLLECTORDIAG"] = function(msg)
     local CoreMod = L:GetModule("Core", true)
@@ -5612,6 +5838,21 @@ SlashCmdList["LOOTCOLLECTORDIAG"] = function(msg)
         return
     end
     CoreMod:DiagnoseItemCoords(itemID)
+end
+
+SLASH_LOOTCOLLECTORRESTORESTARTER1 = "/lcrestorestarter"
+SlashCmdList["LOOTCOLLECTORRESTORESTARTER"] = function(msg)
+    local CoreMod = L:GetModule("Core", true)
+    if not (CoreMod and CoreMod.RestoreStarterCoords) then
+        print("|cffff7f00LootCollector:|r Core restore is not available.")
+        return
+    end
+    msg = tostring(msg or ""):match("^%s*(.-)%s*$") or ""
+    local itemID = tonumber(msg)
+    if not itemID and msg ~= "" then
+        itemID = tonumber(msg:match("item:(%d+)"))
+    end
+    CoreMod:RestoreStarterCoords(itemID)
 end
 
 -- Test helper: list Worldforged pins whose merge count is below a threshold.

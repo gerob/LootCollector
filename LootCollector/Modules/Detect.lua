@@ -44,10 +44,16 @@ Detect._ctx = {
   lastBuybackAt = nil,
 }
 local LOOT_VALIDITY_WINDOW = 20
-local ITEM_EXPECTATION_WINDOW = 9.0 
+local ITEM_EXPECTATION_WINDOW = 9.0
+local CHANNEL_STAMP_WINDOW = 15.0
+local BIND_CONFIRM_WINDOW = 5.0
 
 Detect._expectingItemUntil = 0
 Detect._expectedItemLink = nil
+Detect._lastChannelAt = 0
+Detect._channelContext = nil
+Detect._pendingBindItemID = nil
+Detect._pendingBindUntil = 0
 
 function Detect:Debug(msg, ...) return end
 
@@ -445,10 +451,7 @@ SlashCmdList["LCVENDORCHECK"] = function()
     end
 end
 
-function Detect:OnLootOpened()
-    self._ctx.lastLootOpenedAt = time()
-    lastLootContext.openedAt = time()
-
+local function CapturePlayerLootPosition()
     local cPos, mapID, px, py
     if L.GetPlayerZoneMapPosition then
         cPos, mapID, px, py = L:GetPlayerZoneMapPosition()
@@ -458,22 +461,88 @@ function Detect:OnLootOpened()
         mapID = GetCurrentMapAreaID()
         cPos = GetCurrentMapContinent() or 0
     end
-    lastLootContext.x = px or 0
-    lastLootContext.y = py or 0
-    lastLootContext.mapID = mapID
-    
     local ZoneList = L:GetModule("ZoneList", true)
     local zoneInfo = ZoneList and ZoneList.MapDataByID[mapID]
-
+    local ctx = {
+        x = px or 0,
+        y = py or 0,
+        mapID = mapID,
+    }
     if zoneInfo then
-        lastLootContext.c = zoneInfo.continentID
-        lastLootContext.z = mapID 
-        lastLootContext.iz = 0   
-    else 
-        lastLootContext.c = cPos or 0
-        lastLootContext.z = mapID  
-        lastLootContext.iz = mapID 
+        ctx.c = zoneInfo.continentID
+        ctx.z = mapID
+        ctx.iz = 0
+    else
+        ctx.c = cPos or 0
+        ctx.z = mapID
+        ctx.iz = mapID
     end
+    return ctx
+end
+
+function Detect:StampChannelPosition()
+    self._lastChannelAt = GetTime()
+    self._channelContext = CapturePlayerLootPosition()
+end
+
+function Detect:OnUnitSpellcastChannelStart(event, unit)
+    if unit and unit ~= "player" then return end
+    self:StampChannelPosition()
+end
+
+function Detect:OnUnitSpellcastStart(event, unit, spell)
+    if unit and unit ~= "player" then return end
+    local name = string.lower(tostring(spell or ""))
+    if name == "" then return end
+    if string.find(name, "opening", 1, true)
+        or string.find(name, "mining", 1, true)
+        or string.find(name, "herb", 1, true)
+        or string.find(name, "gather", 1, true)
+        or string.find(name, "loot", 1, true) then
+        self:StampChannelPosition()
+    end
+end
+
+function Detect:OnLootBindConfirm(event, slot)
+    slot = tonumber(slot)
+    if not slot then return end
+    local link = GetLootSlotLink and GetLootSlotLink(slot)
+    local itemID = ParseItemID(link)
+    if not itemID then return end
+    self._pendingBindItemID = itemID
+    self._pendingBindUntil = GetTime() + BIND_CONFIRM_WINDOW
+end
+
+function Detect:ClearPendingBind()
+    self._pendingBindItemID = nil
+    self._pendingBindUntil = 0
+end
+
+function Detect:IsSpawnPickup(link, isWF)
+    if not isWF or not link then return false end
+    local nowSession = GetTime()
+    local channelOk = self._lastChannelAt and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW
+    local bindOk = self._pendingBindItemID and self._pendingBindUntil and nowSession <= self._pendingBindUntil
+    local lootID = ParseItemID(link)
+    local sameItem = bindOk and lootID and lootID == self._pendingBindItemID
+    return channelOk and sameItem
+end
+
+function Detect:OnLootOpened()
+    self._ctx.lastLootOpenedAt = time()
+    lastLootContext.openedAt = time()
+
+    local ctx = CapturePlayerLootPosition()
+    local nowSession = GetTime()
+    if self._lastChannelAt and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW and self._channelContext then
+        ctx = self._channelContext
+    end
+    lastLootContext.x = ctx.x or 0
+    lastLootContext.y = ctx.y or 0
+    lastLootContext.mapID = ctx.mapID
+    lastLootContext.c = ctx.c
+    lastLootContext.z = ctx.z
+    lastLootContext.iz = ctx.iz
 end
 
 function Detect:OnLootClosed()
@@ -491,6 +560,9 @@ function Detect:OnInitialize()
   
   self:RegisterEvent("LOOT_OPENED", "OnLootOpened")
   self:RegisterEvent("LOOT_CLOSED", "OnLootClosed")
+  self:RegisterEvent("LOOT_BIND_CONFIRM", "OnLootBindConfirm")
+  self:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START", "OnUnitSpellcastChannelStart")
+  self:RegisterEvent("UNIT_SPELLCAST_START", "OnUnitSpellcastStart")
   
   self:RegisterEvent("BAG_UPDATE", "OnBagUpdate")
 
@@ -612,6 +684,12 @@ function Detect:OnChatMsgLoot(_, msg)
     end
 
     local isWF = self:IsWorldforged(link)
+    if isWF == false then
+        local lootID = ParseItemID(link)
+        if lootID and lootID == self._pendingBindItemID then
+            self:ClearPendingBind()
+        end
+    end
     if isWF and src == "quest_reward" then
         if lastLootContext.openedAt and (nowTime - lastLootContext.openedAt) <= LOOT_VALIDITY_WINDOW then
             src = "world_loot"
@@ -644,6 +722,14 @@ function Detect:OnChatMsgLoot(_, msg)
     if src == "world_loot" then
         c, z, iz = lastLootContext.c, lastLootContext.z, lastLootContext.iz
         x_val, y_val = lastLootContext.x, lastLootContext.y
+        local nowSession = GetTime()
+        if self._lastChannelAt and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW and self._channelContext then
+            c = self._channelContext.c
+            z = self._channelContext.z
+            iz = self._channelContext.iz
+            x_val = self._channelContext.x
+            y_val = self._channelContext.y
+        end
     else
         local cPos, mapID, px, py
         if L.GetPlayerZoneMapPosition then
@@ -709,7 +795,11 @@ function Detect:OnChatMsgLoot(_, msg)
     self._recent[link] = nowSession
 
     L._ddebug("Detect", "SUCCESS: Passing " .. tostring(link) .. " to Core:HandleLocalLoot.")
-    local discovery = { il = link, c = c, z = z, iz = iz, xy = { x = x_val, y = y_val }, t0 = nowTime, src = src, fp = looter }
+    local spawnPickup = self:IsSpawnPickup(link, isWF)
+    if spawnPickup then
+        self:ClearPendingBind()
+    end
+    local discovery = { il = link, c = c, z = z, iz = iz, xy = { x = x_val, y = y_val }, t0 = nowTime, src = src, fp = looter, spawnPickup = spawnPickup }
     local Core = L:GetModule("Core", true)
     if Core and Core.HandleLocalLoot then
         local itemID = tonumber(link:match("item:(%d+)"))
@@ -876,8 +966,27 @@ local function ProcessDirtyBags()
                     end
                 else
                     Detect._recent[link] = nowSession
-                    if qualifies then 
-                        Detect:ProcessPotentialDiscovery(link, "bag_update", UnitName("player"))
+                    if qualifies then
+                        local itemID = ParseItemID(link)
+                        local skipKnownWF = false
+                        if itemID and Detect:IsWorldforged(link) then
+                            local Core = L:GetModule("Core", true)
+                            local c = lastLootContext.c
+                            local z = lastLootContext.z
+                            if (not c or not z or c == 0) and L.GetPlayerZoneMapPosition then
+                                local cPos, mapID = L:GetPlayerZoneMapPosition()
+                                local ZoneList = L:GetModule("ZoneList", true)
+                                local zoneInfo = ZoneList and ZoneList.MapDataByID[mapID]
+                                c = zoneInfo and zoneInfo.continentID or cPos
+                                z = mapID
+                            end
+                            if Core and Core.GetWorldforgedInZone and Core:GetWorldforgedInZone(c, z, itemID) then
+                                skipKnownWF = true
+                            end
+                        end
+                        if not skipKnownWF then
+                            Detect:ProcessPotentialDiscovery(link, "bag_update", UnitName("player"))
+                        end
                     end
                 end
             end
