@@ -920,7 +920,7 @@ function Comm:EnsureChannelJoined()
        
     local id, name = GetChannelName(ch)
     if not (id and id > 0) then
-        JoinPermanentChannel(ch)
+        JoinChannelByName(ch)
     end
     
     if p.chatDebug then

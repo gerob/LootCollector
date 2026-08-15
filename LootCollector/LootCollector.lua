@@ -2383,10 +2383,14 @@ function LootCollector:IsZoneIgnored()
 end
 
 function LootCollector:DelayedChannelInit()
+    -- Leave immediately so a saved JoinPermanentChannel auto-join cannot
+    -- steal a low chat number before Ascension/Newcomers. Legacy name is
+    -- the old typo; also leave the live channel name.
     pcall(LeaveChannelByName, "BBLCC25")
+    pcall(LeaveChannelByName, self.chatChannel or "BBLC25C")
     local Comm = self:GetModule("Comm", true)
     if not Comm then return end
-    local DELAY_SECONDS = 12.0
+    local DELAY_SECONDS = 20.0
     self:ScheduleAfter(DELAY_SECONDS, function()
         LootCollector.channelReady = true
         if LootCollector.db and LootCollector.db.profile.sharing.enabled and not LootCollector:IsZoneIgnored() then
