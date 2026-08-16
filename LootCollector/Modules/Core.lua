@@ -1702,6 +1702,7 @@ function Core:RunManualDatabaseCleanup()
             if Map.UpdateMinimap then Map:UpdateMinimap() end
         end
     end
+    print("|cffaaaaaaLootCollector:|r To remove non-Worldforged pins and restore StarterDB locations: /lccleanpins")
 end
 
 function Core:RunAutomaticOnLoginCleanup()
@@ -2164,6 +2165,90 @@ function Core:PurgeOffStarterZoneDiscoveries()
     return removed
 end
 
+function Core:PurgeUntrackableDiscoveries()
+    local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not db then return 0, 0, 0 end
+    if not (L.IsTrackableDiscovery) then return 0, 0, 0 end
+
+    local Constants = L:GetModule("Constants", true)
+    local types = Constants and Constants.DISCOVERY_TYPE
+    local BM = types and types.BLACKMARKET
+    local WF = types and types.WORLDFORGED
+    local MS = types and types.MYSTIC_SCROLL
+
+    local keepByBase = {}
+    local toRemove = {}
+    for guid, d in pairs(db) do
+        if type(d) == "table" and not d.vendorType and d.dt ~= BM then
+            local name = d.n
+            if (not name or name == "") and d.il and type(d.il) == "string" then
+                name = d.il:match("%[(.-)%]")
+            end
+            if not name and d.i then
+                name = select(1, GetItemInfo(d.i))
+            end
+            if not L:IsTrackableDiscovery(d.i, name, d.dt, { il = d.il, vendorType = d.vendorType }) then
+                table.insert(toRemove, guid)
+            else
+                local base = (L.GetBaseItemID and L:GetBaseItemID(d.i, d.il or name)) or d.i
+                local mc = tonumber(d.mc) or 1
+                local cur = keepByBase[base]
+                if not cur or mc > (tonumber(cur.mc) or 1) then
+                    keepByBase[base] = d
+                end
+            end
+        end
+    end
+
+    local removed = 0
+    for _, guid in ipairs(toRemove) do
+        local d = db[guid]
+        if d then
+            local base = (L.GetBaseItemID and L:GetBaseItemID(d.i, d.il)) or d.i
+            local keep = keepByBase[base]
+            if keep and keep.g and keep.g ~= guid and L.RemapLootedGuid then
+                L:RemapLootedGuid(guid, keep.g)
+            end
+            self:RemoveDiscoveryByGuid(guid, nil, true)
+            removed = removed + 1
+        end
+    end
+
+    local remainingWF, remainingMS = 0, 0
+    for _, d in pairs(db) do
+        if type(d) == "table" and not d.vendorType and d.dt ~= BM then
+            if MS and d.dt == MS then
+                remainingMS = remainingMS + 1
+            elseif not WF or not d.dt or d.dt == WF then
+                remainingWF = remainingWF + 1
+            end
+        end
+    end
+
+    if removed > 0 then
+        self:InvalidateLookupIndices()
+        L.DataHasChanged = true
+        L:SendMessage("LOOTCOLLECTOR_DISCOVERY_LIST_UPDATED")
+        local Map = L:GetModule("Map", true)
+        if Map then Map.cacheIsDirty = true end
+    end
+    return removed, remainingWF, remainingMS
+end
+
+function Core:RepairInvalidDiscoveries()
+    local removed, remWF, remMS = self:PurgeUntrackableDiscoveries()
+    local restored = self:RestoreStarterCoords(nil, true) or 0
+    print(string.format(
+        "|cff00ff00LootCollector:|r Removed %d non-Worldforged pin(s). Restored %d StarterDB location(s).",
+        removed or 0, restored or 0
+    ))
+    print(string.format(
+        "|cff00ff00LootCollector:|r Remaining: %d Worldforged, %d Mystic Scroll. Looted flags were kept.",
+        remWF or 0, remMS or 0
+    ))
+    return removed, restored
+end
+
 function Core:ApplyCoordAuthority()
     local rev = tonumber(L.CoordAuthorityRevision) or 0
     if not (L.db and L.db.global) then return 0, 0 end
@@ -2285,6 +2370,23 @@ function Core:PerformOnLoginMaintenance()
     local purgedOffZone = self:PurgeOffStarterZoneDiscoveries()
     if purgedOffZone > 0 and not hideMsgs then
         print(string.format("|cff00ff00LootCollector:|r Removed %d pin(s) whose zone is not in Starter DB for that item.", purgedOffZone))
+    end
+
+    local realmBucket = L.db.global.realms and L.activeRealmKey and L.db.global.realms[L.activeRealmKey]
+    if realmBucket and not realmBucket.untrackablePurgeV1 then
+        local junkRemoved, remWF, remMS = self:PurgeUntrackableDiscoveries()
+        local restored = self:RestoreStarterCoords(nil, true) or 0
+        realmBucket.untrackablePurgeV1 = true
+        if not hideMsgs and ((junkRemoved or 0) > 0 or restored > 0) then
+            print(string.format(
+                "|cff00ff00LootCollector:|r Removed %d non-Worldforged pin(s). Restored %d StarterDB location(s).",
+                junkRemoved or 0, restored
+            ))
+            print(string.format(
+                "|cff00ff00LootCollector:|r Remaining: %d Worldforged, %d Mystic Scroll. Looted flags were kept.",
+                remWF or 0, remMS or 0
+            ))
+        end
     end
     self:FixLegacyVendorQuality()
 
@@ -3166,20 +3268,29 @@ function Core:HandleLocalLoot(discovery)
     end
     
     local dt = discovery.dt
-    if not dt then 
+    if not dt then
         local cachedName = name
         if not cachedName and discovery.il and type(discovery.il) == "string" then
             cachedName = discovery.il:match("%[(.-)%]")
         end
-        if cachedName then
-            if string.find(cachedName, "Mystic Scroll", 1, true) then
-                dt = Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
-            else
-                dt = Constants.DISCOVERY_TYPE.WORLDFORGED
-            end
+        if cachedName and string.find(cachedName, "Mystic Scroll", 1, true) then
+            dt = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
+        elseif L.IsTrackableDiscovery and L:IsTrackableDiscovery(itemID, cachedName, Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED, { il = discovery.il, vendorType = discovery.vendorType }) then
+            dt = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
         end
     end
     discovery.dt = dt
+
+    local isSpecialVendorDiscovery = (dt == (Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET))
+        or (discovery.vendorType ~= nil)
+
+    if not isSpecialVendorDiscovery then
+        if not (L.IsTrackableDiscovery and L:IsTrackableDiscovery(itemID, name, dt, { il = discovery.il, vendorType = discovery.vendorType })) then
+            L._debug("Core-Block", "Blocked local discovery: item is not Worldforged or Mystic Scroll: " .. tostring(itemID))
+            if pTime then L:ProfileStop("Core:HandleLocalLoot", pTime) end
+            return
+        end
+    end
 
     -- Mark looted before zone/spawn gates. Usability does not matter.
     if dt == (Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED)
@@ -3193,9 +3304,6 @@ function Core:HandleLocalLoot(discovery)
     -- gates for vendor-type discoveries or city vendors can never be
     -- recorded (this is why the Ring Vendor in the Mage Quarter was
     -- silently ignored).
-    local isSpecialVendorDiscovery = (dt == (Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET))
-        or (discovery.vendorType ~= nil)
-
     if not isSpecialVendorDiscovery and Constants and Constants.IsForbiddenZone then
         if Constants:IsForbiddenZone(discovery.c, discovery.z, discovery.fp) then
             L._debug("Core-Block", "Blocked local discovery from a forbidden zone: " .. tostring(discovery.il))
@@ -4420,14 +4528,13 @@ function Core:AddDiscovery(d, options)
         if not cachedName and d.il and type(d.il) == "string" then
             cachedName = d.il:match("%[(.-)%]")
         end
-        if cachedName then
-            if string.find(cachedName, "Mystic Scroll", 1, true) then 
-                dt = Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
-            else 
-                dt = Constants.DISCOVERY_TYPE.WORLDFORGED 
-            end
+        if cachedName and string.find(cachedName, "Mystic Scroll", 1, true) then
+            dt = Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
+        elseif L.IsTrackableDiscovery and L:IsTrackableDiscovery(itemID, cachedName, Constants.DISCOVERY_TYPE.WORLDFORGED, { il = d.il, vendorType = d.vendorType }) then
+            dt = Constants.DISCOVERY_TYPE.WORLDFORGED
         end
     end
+    d.dt = dt
     local isCoA = self.IsConfirmedCoARealm and self:IsConfirmedCoARealm()
     if isCoA then
         local MS_TYPE = Constants and Constants.DISCOVERY_TYPE.MYSTIC_SCROLL or 2
@@ -4546,6 +4653,24 @@ function Core:AddDiscovery(d, options)
                 if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
                 return nil
             end
+        end
+    end
+
+    if not isBlackmarket then
+        local cachedName = d.n
+        if not cachedName and d.il and type(d.il) == "string" then
+            cachedName = d.il:match("%[(.-)%]")
+        end
+        if not cachedName then
+            cachedName = select(1, GetItemInfo(itemID))
+        end
+        if not d.dt and L.IsTrackableDiscovery and L:IsTrackableDiscovery(itemID, cachedName, Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED, { il = d.il, vendorType = d.vendorType }) then
+            d.dt = Constants.DISCOVERY_TYPE.WORLDFORGED
+        end
+        if not (L.IsTrackableDiscovery and L:IsTrackableDiscovery(itemID, cachedName, d.dt, { il = d.il, vendorType = d.vendorType })) then
+            L._debug("Core-Block", "Blocked incoming discovery: item is not Worldforged or Mystic Scroll: " .. tostring(itemID))
+            if pTime then L:ProfileStop("Core:AddDiscovery", pTime) end
+            return nil
         end
     end
 
@@ -5657,19 +5782,23 @@ function Core:DiagnoseItemCoords(itemID)
     return #matches
 end
 
-function Core:RestoreStarterCoords(onlyItemID)
+function Core:RestoreStarterCoords(onlyItemID, quiet)
     if L.InitializeStarterDBLookup then
         L:InitializeStarterDBLookup()
     end
     local coords = L.StarterDBCoords
     if not coords or not next(coords) then
-        print("|cffff7f00LootCollector:|r StarterDB coordinates are not loaded. Enable LootCollector_StarterDB and /reload.")
+        if not quiet then
+            print("|cffff7f00LootCollector:|r StarterDB coordinates are not loaded. Enable LootCollector_StarterDB and /reload.")
+        end
         return 0
     end
 
     local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
     if not db then
-        print("|cffff7f00LootCollector:|r Discovery database not ready.")
+        if not quiet then
+            print("|cffff7f00LootCollector:|r Discovery database not ready.")
+        end
         return 0
     end
 
@@ -5821,12 +5950,16 @@ function Core:RestoreStarterCoords(onlyItemID)
     if snapped > 0 or seeded > 0 then
         L.DataHasChanged = true
         L:SendMessage("LootCollector_DiscoveriesUpdated", "bulk", nil, nil)
-        print(string.format(
-            "|cff00ff00LootCollector:|r StarterDB restore: snapped %d drifted pin(s), re-seeded %d missing pin(s). mc and looted flags were kept.",
-            snapped, seeded
-        ))
+        if not quiet then
+            print(string.format(
+                "|cff00ff00LootCollector:|r StarterDB restore: snapped %d drifted pin(s), re-seeded %d missing pin(s). mc and looted flags were kept.",
+                snapped, seeded
+            ))
+        end
     else
-        print("|cff00ff00LootCollector:|r No drifted or missing StarterDB Worldforged pins to restore. For one item: /lcrestorestarter 410161")
+        if not quiet then
+            print("|cff00ff00LootCollector:|r No drifted or missing StarterDB Worldforged pins to restore. For one item: /lcrestorestarter 410161")
+        end
     end
     return snapped + seeded
 end
@@ -5868,6 +6001,16 @@ SlashCmdList["LOOTCOLLECTORRESTORESTARTER"] = function(msg)
         itemID = tonumber(msg:match("item:(%d+)"))
     end
     CoreMod:RestoreStarterCoords(itemID)
+end
+
+SLASH_LOOTCOLLECTORCLEANPINS1 = "/lccleanpins"
+SlashCmdList["LOOTCOLLECTORCLEANPINS"] = function()
+    local CoreMod = L:GetModule("Core", true)
+    if not (CoreMod and CoreMod.RepairInvalidDiscoveries) then
+        print("|cffff7f00LootCollector:|r Core cleanup is not available.")
+        return
+    end
+    CoreMod:RepairInvalidDiscoveries()
 end
 
 -- Test helper: list Worldforged pins whose merge count is below a threshold.

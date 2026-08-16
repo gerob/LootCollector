@@ -2598,6 +2598,56 @@ function LootCollector:IsWorldforgedListItem(id)
     return set[baseID] == true
 end
 
+-- True for pins we are allowed to store: vendors, Mystic Scrolls on MS realms,
+-- or Worldforged (list, StarterDB, or tooltip). Not quality/Heroic/named-drop.
+-- opts: vendorType, il
+function LootCollector:IsTrackableDiscovery(itemID, name, dt, opts)
+    opts = opts or {}
+    local Constants = self:GetModule("Constants", true)
+    local types = Constants and Constants.DISCOVERY_TYPE
+    local BM = types and types.BLACKMARKET
+    local MS = types and types.MYSTIC_SCROLL
+
+    if opts.vendorType or (BM and dt == BM) then
+        return true
+    end
+
+    itemID = tonumber(itemID) or 0
+    if (not name or name == "") and opts.il and type(opts.il) == "string" then
+        name = opts.il:match("%[(.-)%]")
+    end
+    if (not name or name == "") and itemID > 0 then
+        name = select(1, GetItemInfo(itemID))
+    end
+    name = name or ""
+
+    local isMSName = name ~= "" and string.find(name, "Mystic Scroll", 1, true) ~= nil
+    if (MS and dt == MS) or isMSName then
+        if not (Constants and Constants.HasMysticScrolls and Constants:HasMysticScrolls()) then
+            return false
+        end
+        if self.ignoreList and self.ignoreList[name] then return false end
+        if self.sourceSpecificIgnoreList and self.sourceSpecificIgnoreList[name] then return false end
+        return isMSName
+    end
+
+    if itemID > 0 then
+        if self.IsWorldforgedListItem and self:IsWorldforgedListItem(itemID) then
+            return true
+        end
+        local base = (self.GetBaseItemID and self:GetBaseItemID(itemID, name ~= "" and name or opts.il)) or itemID
+        if self.StarterDBItemZones and (self.StarterDBItemZones[itemID] or self.StarterDBItemZones[base]) then
+            return true
+        end
+        local Scanner = self:GetModule("Scanner", true)
+        if Scanner and Scanner.GetItemData then
+            local data = Scanner:GetItemData(itemID, opts.il)
+            if data and data.isWF then return true end
+        end
+    end
+    return false
+end
+
 function LootCollector:_IsKnownWorldforgedBase(id)
     id = tonumber(id)
     if not id or id == 0 then return false end

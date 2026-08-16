@@ -326,6 +326,9 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
                 c = snapped.c or c
             end
         end
+        if L.IsTrackableDiscovery and not L:IsTrackableDiscovery(i, itemName, dt) then
+            return
+        end
     end
 
     if isVendor then

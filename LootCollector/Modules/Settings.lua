@@ -5,6 +5,21 @@ local Settings = L:NewModule("Settings", "AceConsole-3.0")
 local AceConfig = (LibStub and LibStub("AceConfig-3.0", true)) or nil
 local AceConfigDialog = (LibStub and LibStub("AceConfigDialog-3.0", true)) or nil
 
+StaticPopupDialogs["LOOTCOLLECTOR_CLEAN_INVALID"] = {
+	text = "Remove discoveries that are not Worldforged (or Mystic Scrolls on this realm) and restore StarterDB pin locations?\n\nLooted flags are kept. This does not override your database.",
+	button1 = "Remove",
+	button2 = "Cancel",
+	OnAccept = function()
+		local Core = L:GetModule("Core", true)
+		if Core and Core.RepairInvalidDiscoveries then
+			Core:RepairInvalidDiscoveries()
+		end
+	end,
+	timeout = 0,
+	whileDead = 1,
+	hideOnEscape = 1,
+}
+
 local function OpenCopyPopup(title, textToCopy)
     local f = _G["LootCollectorCopyPopup"]
     if not f then
@@ -1367,6 +1382,15 @@ local function buildOptions()
 						    if Constants and Constants.UpdateAllowedTypes then
 							  Constants:UpdateAllowedTypes()
 						    end
+						end,
+					},
+					removeInvalidDiscoveries = {
+						type = "execute",
+						name = "Remove invalid discoveries",
+						desc = "Deletes pins that are not Worldforged (or Mystic Scrolls on this realm), then restores StarterDB locations. Looted flags are kept. Does not override your database.",
+						order = 14.3,
+						func = function()
+							StaticPopup_Show("LOOTCOLLECTOR_CLEAN_INVALID")
 						end,
 					},
 					syncHeader = {

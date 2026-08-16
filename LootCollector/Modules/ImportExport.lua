@@ -427,7 +427,7 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
     local Constants = L:GetModule("Constants", true)
     
 	local disc = parsed.discoveries or {}
-	local applied = {total = 0, bm_total = 0, overlays = 0, profilelists = 0, skippedCity = 0, skippedCoA = 0, skippedZone = 0}
+	local applied = {total = 0, bm_total = 0, overlays = 0, profilelists = 0, skippedCity = 0, skippedCoA = 0, skippedZone = 0, skippedUntrackable = 0}
 	
 	local db = L:GetDiscoveriesDB()
     local bm_db = L:GetVendorsDB()
@@ -469,8 +469,15 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
             applied.skippedCity = applied.skippedCity + 1
         else
             local itemID = L:GetBaseItemID(d.itemID, d.itemLink)
+            local itemName = d.itemName
+            if type(d.itemLink) == "string" then
+                itemName = d.itemLink:match("%[(.-)%]") or itemName
+            end
             if L.IsStarterDBZoneAllowed and not L:IsStarterDBZoneAllowed(itemID, d.zoneID) then
                 applied.skippedZone = applied.skippedZone + 1
+            elseif (not isStarterDB) and L.IsTrackableDiscovery
+                and not L:IsTrackableDiscovery(itemID, itemName, d.discoveryType, { il = d.itemLink }) then
+                applied.skippedUntrackable = (applied.skippedUntrackable or 0) + 1
             else
             local itemLink = d.itemLink
             if itemLink and type(itemLink) == "string" then
@@ -932,6 +939,9 @@ function ImportExport:ApplyImportString(importString, mode, withOverlays, skipBl
     end
     if res.skippedZone and res.skippedZone > 0 then
         msg = msg .. string.format(" Skipped %d off-StarterDB-zone pin(s).", res.skippedZone)
+    end
+    if res.skippedUntrackable and res.skippedUntrackable > 0 then
+        msg = msg .. string.format(" Skipped %d non-Worldforged pin(s).", res.skippedUntrackable)
     end
     print(msg)
 
