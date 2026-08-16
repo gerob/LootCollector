@@ -2252,9 +2252,6 @@ end
 function Core:ApplyCoordAuthority()
     local rev = tonumber(L.CoordAuthorityRevision) or 0
     if not (L.db and L.db.global) then return 0, 0 end
-    if (tonumber(L.db.global.coordAuthorityRevision) or 0) >= rev then
-        return 0, 0
-    end
 
     local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
     if not db then
@@ -2262,10 +2259,48 @@ function Core:ApplyCoordAuthority()
         return 0, 0
     end
 
+    local needSnap = (tonumber(L.db.global.coordAuthorityRevision) or 0) < rev
     local Constants = L:GetModule("Constants", true)
     local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
 
+    local function mergeOnto(keep, extra)
+        if not (extra and extra.g and keep and keep.g and extra.g ~= keep.g) then
+            return false
+        end
+        if L.RemapLootedGuid then
+            L:RemapLootedGuid(extra.g, keep.g)
+        end
+        keep.mc = (tonumber(keep.mc) or 1) + (tonumber(extra.mc) or 1)
+        if extra.fp_votes then
+            keep.fp_votes = keep.fp_votes or {}
+            for voter, vData in pairs(extra.fp_votes) do
+                if not keep.fp_votes[voter] then
+                    keep.fp_votes[voter] = vData
+                else
+                    keep.fp_votes[voter].score = (keep.fp_votes[voter].score or 0) + (vData.score or 0)
+                end
+            end
+        end
+        keep.ls = math.max(tonumber(keep.ls) or 0, tonumber(extra.ls) or 0)
+        self:RemoveDiscoveryByGuid(extra.g, "Collapsed extra Worldforged pin onto verified coordinates.", true)
+        return true
+    end
+
+    local function firstAuthorityZone(zones)
+        local bestZ, bestE
+        for z, e in pairs(zones) do
+            z = tonumber(z)
+            if z and type(e) == "table" and e.x and e.y then
+                if not bestZ or z < bestZ then
+                    bestZ, bestE = z, e
+                end
+            end
+        end
+        return bestZ, bestE
+    end
+
     local groups = {}
+    local keepByBase = {}
     for guid, d in pairs(db) do
         if type(d) == "table" and d.i and d.z and not d.vendorType and d.dt ~= BM then
             local entry = L.GetCoordAuthorityEntry and L:GetCoordAuthorityEntry(d.i, d.z)
@@ -2276,57 +2311,118 @@ function Core:ApplyCoordAuthority()
                     groups[key] = { entry = entry, recs = {} }
                 end
                 table.insert(groups[key].recs, d)
+                local cur = keepByBase[base]
+                if not cur or (tonumber(d.mc) or 1) > (tonumber(cur.mc) or 1) then
+                    keepByBase[base] = d
+                end
             end
         end
     end
 
     local snapped, collapsed = 0, 0
-    for _, group in pairs(groups) do
-        local recs = group.recs
-        table.sort(recs, function(a, b)
-            local amc, bmc = tonumber(a.mc) or 1, tonumber(b.mc) or 1
-            if amc ~= bmc then return amc > bmc end
-            return (tonumber(a.ls) or 0) > (tonumber(b.ls) or 0)
-        end)
-        local keep = recs[1]
-        local oldX = keep.xy and keep.xy.x
-        local oldY = keep.xy and keep.xy.y
-        if L.LockDiscoveryToCoordAuthority then
-            L:LockDiscoveryToCoordAuthority(keep)
-        end
-        if keep.xy and (keep.xy.x ~= oldX or keep.xy.y ~= oldY) then
-            snapped = snapped + 1
-            L:SendMessage("LootCollector_DiscoveriesUpdated", "update", keep.g, keep)
-        end
+    if needSnap then
+        for _, group in pairs(groups) do
+            local recs = group.recs
+            table.sort(recs, function(a, b)
+                local amc, bmc = tonumber(a.mc) or 1, tonumber(b.mc) or 1
+                if amc ~= bmc then return amc > bmc end
+                return (tonumber(a.ls) or 0) > (tonumber(b.ls) or 0)
+            end)
+            local keep = recs[1]
+            local oldX = keep.xy and keep.xy.x
+            local oldY = keep.xy and keep.xy.y
+            if L.LockDiscoveryToCoordAuthority then
+                L:LockDiscoveryToCoordAuthority(keep)
+            end
+            if keep.xy and (keep.xy.x ~= oldX or keep.xy.y ~= oldY) then
+                snapped = snapped + 1
+                L:SendMessage("LootCollector_DiscoveriesUpdated", "update", keep.g, keep)
+            end
 
-        for i = 2, #recs do
-            local extra = recs[i]
-            if extra and extra.g and keep.g and extra.g ~= keep.g then
-                if L.RemapLootedGuid then
-                    L:RemapLootedGuid(extra.g, keep.g)
+            local base = (L.GetBaseItemID and L:GetBaseItemID(keep.i)) or keep.i
+            keepByBase[base] = keep
+
+            for i = 2, #recs do
+                if mergeOnto(keep, recs[i]) then
+                    collapsed = collapsed + 1
                 end
-                keep.mc = (tonumber(keep.mc) or 1) + (tonumber(extra.mc) or 1)
-                if extra.fp_votes then
-                    keep.fp_votes = keep.fp_votes or {}
-                    for voter, vData in pairs(extra.fp_votes) do
-                        if not keep.fp_votes[voter] then
-                            keep.fp_votes[voter] = vData
-                        else
-                            keep.fp_votes[voter].score = (keep.fp_votes[voter].score or 0) + (vData.score or 0)
-                        end
-                    end
-                end
-                keep.ls = math.max(tonumber(keep.ls) or 0, tonumber(extra.ls) or 0)
-                self:RemoveDiscoveryByGuid(extra.g, "Collapsed extra Worldforged pin onto verified coordinates.", true)
-                collapsed = collapsed + 1
             end
         end
     end
 
-    L.db.global.coordAuthorityRevision = rev
-    L.DataHasChanged = true
+    local wrong = {}
+    for guid, d in pairs(db) do
+        if type(d) == "table" and d.i and d.z and not d.vendorType and d.dt ~= BM then
+            local zones = L.GetCoordAuthorityZones and L:GetCoordAuthorityZones(d.i)
+            if zones and L.IsCoordAuthorityZoneAllowed and not L:IsCoordAuthorityZoneAllowed(d.i, d.z) then
+                table.insert(wrong, d)
+            end
+        end
+    end
+
+    for _, extra in ipairs(wrong) do
+        if extra.g and db[extra.g] then
+            local base = (L.GetBaseItemID and L:GetBaseItemID(extra.i)) or extra.i
+            local keep = keepByBase[base]
+            if keep and keep.g and db[keep.g] and keep.g ~= extra.g then
+                if mergeOnto(keep, extra) then
+                    collapsed = collapsed + 1
+                end
+            else
+                local zones = L.GetCoordAuthorityZones and L:GetCoordAuthorityZones(extra.i)
+                local authZ, entry
+                if zones then
+                    authZ, entry = firstAuthorityZone(zones)
+                end
+                if authZ and entry then
+                    local oldGuid = extra.g
+                    local oldZ = extra.z
+                    if self.RemoveFromZoneIndex then
+                        self:RemoveFromZoneIndex(oldGuid, oldZ)
+                    end
+                    db[oldGuid] = nil
+                    extra.z = authZ
+                    extra.c = tonumber(entry.c) or extra.c
+                    extra.xy = extra.xy or {}
+                    extra.xy.x = L:Round4(entry.x)
+                    extra.xy.y = L:Round4(entry.y)
+                    if L.LockDiscoveryToCoordAuthority then
+                        L:LockDiscoveryToCoordAuthority(extra)
+                    end
+                    local newGuid = L:GenerateGUID(extra.c, extra.z, extra.iz or 0, extra.i, extra.xy.x, extra.xy.y)
+                    local dest = db[newGuid]
+                    if dest and dest ~= extra then
+                        extra.g = oldGuid
+                        if L.RemapLootedGuid then
+                            L:RemapLootedGuid(oldGuid, dest.g)
+                        end
+                        dest.mc = (tonumber(dest.mc) or 1) + (tonumber(extra.mc) or 1)
+                        dest.ls = math.max(tonumber(dest.ls) or 0, tonumber(extra.ls) or 0)
+                        keepByBase[base] = dest
+                    else
+                        extra.g = newGuid
+                        db[newGuid] = extra
+                        if self.AddToZoneIndex then
+                            self:AddToZoneIndex(newGuid, authZ)
+                        end
+                        if L.RemapLootedGuid then
+                            L:RemapLootedGuid(oldGuid, newGuid)
+                        end
+                        keepByBase[base] = extra
+                        L:SendMessage("LootCollector_DiscoveriesUpdated", "update", extra.g, extra)
+                    end
+                    collapsed = collapsed + 1
+                end
+            end
+        end
+    end
+
+    if needSnap then
+        L.db.global.coordAuthorityRevision = rev
+    end
 
     if snapped > 0 or collapsed > 0 then
+        L.DataHasChanged = true
         self:InvalidateLookupIndices()
         local Map = L:GetModule("Map", true)
         if Map then
@@ -2338,6 +2434,8 @@ function Core:ApplyCoordAuthority()
         if Viewer and Viewer.NotifyDatabaseChanged then
             Viewer:NotifyDatabaseChanged()
         end
+    elseif needSnap then
+        L.DataHasChanged = true
     end
 
     return snapped, collapsed
@@ -5857,7 +5955,9 @@ function Core:RestoreStarterCoords(onlyItemID, quiet)
                 havePin[itemID .. ":" .. zoneID] = rec
                 havePin[base .. ":" .. zoneID] = rec
             end
-            if not (L.GetCoordAuthorityEntry and L:GetCoordAuthorityEntry(rec.i, rec.z)) then
+            local authLocked = L.GetCoordAuthorityEntry and L:GetCoordAuthorityEntry(rec.i, rec.z)
+            local zoneDenied = L.IsCoordAuthorityZoneAllowed and not L:IsCoordAuthorityZoneAllowed(rec.i, rec.z)
+            if not authLocked and not zoneDenied then
                 local starter = (coords[itemID] and coords[itemID][zoneID])
                     or (coords[base] and coords[base][zoneID])
                 if starter and starter.x and starter.y
@@ -5895,7 +5995,8 @@ function Core:RestoreStarterCoords(onlyItemID, quiet)
         if itemID and shouldSeed(itemID) and type(byZone) == "table" then
             for zoneID, starter in pairs(byZone) do
                 zoneID = tonumber(zoneID)
-                if zoneID and starter and starter.x and starter.y then
+                if zoneID and starter and starter.x and starter.y
+                    and (not L.IsCoordAuthorityZoneAllowed or L:IsCoordAuthorityZoneAllowed(itemID, zoneID)) then
                     local existing = havePin[itemID .. ":" .. zoneID]
                     if not existing then
                         local x = L:Round4(starter.x)

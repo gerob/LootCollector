@@ -11,15 +11,22 @@
 
 local L = LootCollector
 
-L.CoordAuthorityRevision = 1
+L.CoordAuthorityRevision = 2
 L.CoordAuthority = {
     [410154] = { [24] = { c = 2, x = 0.6156, y = 0.6831 } }, -- Plaguebloom Spear, Eastern Plaguelands
+    [515014] = { [21] = { c = 2, x = 0.4956, y = 0.3613 } }, -- Agamand Farmer Trousers, Tirisfal Glades
+    [521029] = { [21] = { c = 2, x = 0.4610, y = 0.2958 } }, -- Agamand Sharpshooter, Tirisfal Glades
+    [521034] = { [21] = { c = 2, x = 0.5669, y = 0.4996 } }, -- Ghostmoor Cloak, Tirisfal Glades
+    [521033] = { [21] = { c = 2, x = 0.5880, y = 0.3084 } }, -- Maggot Eye Musket, Tirisfal Glades
+    [521030] = { [21] = { c = 2, x = 0.6574, y = 0.5968 } }, -- Nightfallen Jerkin, Tirisfal Glades
+    [515007] = { [21] = { c = 2, x = 0.5318, y = 0.5779 } }, -- Old Wagon Wheel, Tirisfal Glades
+    [450869] = { [21] = { c = 2, x = 0.5982, y = 0.4809 } }, -- Ulag's Cleaver, Tirisfal Glades
+    [515043] = { [21] = { c = 2, x = 0.3500, y = 0.4343 } }, -- Waterlogged Sparkler, Tirisfal Glades
 }
 
-function LootCollector:GetCoordAuthorityEntry(itemID, zoneID)
+function LootCollector:GetCoordAuthorityZones(itemID)
     itemID = tonumber(itemID)
-    zoneID = tonumber(zoneID)
-    if not itemID or not zoneID or type(self.CoordAuthority) ~= "table" then
+    if not itemID or type(self.CoordAuthority) ~= "table" then
         return nil
     end
     local byItem = self.CoordAuthority[itemID]
@@ -29,8 +36,28 @@ function LootCollector:GetCoordAuthorityEntry(itemID, zoneID)
             byItem = self.CoordAuthority[base]
         end
     end
+    if type(byItem) ~= "table" or not next(byItem) then
+        return nil
+    end
+    return byItem
+end
+
+function LootCollector:GetCoordAuthorityEntry(itemID, zoneID)
+    zoneID = tonumber(zoneID)
+    if not zoneID then return nil end
+    local byItem = self:GetCoordAuthorityZones(itemID)
     if not byItem then return nil end
-    return byItem[zoneID]
+    return byItem[zoneID] or byItem[tostring(zoneID)]
+end
+
+-- If the item has CoordAuthority rows, only those zones are valid.
+-- No rows means unrestricted (StarterDB / live discovery still apply).
+function LootCollector:IsCoordAuthorityZoneAllowed(itemID, zoneID)
+    local zones = self:GetCoordAuthorityZones(itemID)
+    if not zones then return true end
+    zoneID = tonumber(zoneID)
+    if not zoneID then return false end
+    return zones[zoneID] ~= nil or zones[tostring(zoneID)] ~= nil
 end
 
 function LootCollector:LockDiscoveryToCoordAuthority(rec)

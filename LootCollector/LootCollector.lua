@@ -2679,10 +2679,14 @@ end
 
 -- StarterDB lists verified zones per base item. No entry means unrestricted.
 -- An entry whose zone is missing means the pin is off-list and must be dropped.
+-- CoordAuthority, if present for the item, is exhaustive and wins over StarterDB.
 function LootCollector:IsStarterDBZoneAllowed(itemID, zoneID)
     itemID = tonumber(itemID)
     zoneID = tonumber(zoneID)
     if not itemID or not zoneID then return true end
+    if self.IsCoordAuthorityZoneAllowed and not self:IsCoordAuthorityZoneAllowed(itemID, zoneID) then
+        return false
+    end
     local allowed = self.StarterDBItemZones and self.StarterDBItemZones[itemID]
     if not allowed then return true end
     return allowed[zoneID] == true or allowed[tostring(zoneID)] == true
