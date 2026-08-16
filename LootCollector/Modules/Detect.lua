@@ -531,7 +531,15 @@ function Detect:IsSpawnPickup(link, isWF)
         or (self._lastChannelAt and self._lastChannelAt > 0
             and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW)
     local lootID = ParseItemID(link)
-    local sameItem = self._pendingBindItemID and lootID and lootID == self._pendingBindItemID
+    local bindID = self._pendingBindItemID
+    local sameItem = false
+    if lootID and bindID then
+        if L.GetBaseItemID then
+            sameItem = L:GetBaseItemID(lootID) == L:GetBaseItemID(bindID)
+        else
+            sameItem = lootID == bindID
+        end
+    end
     return channelOk and sameItem
 end
 
@@ -710,6 +718,13 @@ function Detect:OnChatMsgLoot(_, msg)
         local lootID = ParseItemID(link)
         if lootID and lootID == self._pendingBindItemID then
             self:ClearPendingBind()
+        end
+    end
+    -- Looted flag is independent of pin create/move and of class usability.
+    if isWF then
+        local lootID = ParseItemID(link)
+        if lootID and L.MarkWorldforgedItemLooted then
+            L:MarkWorldforgedItemLooted(lootID)
         end
     end
     if isWF and src == "quest_reward" then
@@ -1006,7 +1021,11 @@ local function ProcessDirtyBags()
                                 skipKnownWF = true
                             end
                         end
-                        if not skipKnownWF then
+                        if skipKnownWF then
+                            if L.MarkWorldforgedItemLooted then
+                                L:MarkWorldforgedItemLooted(itemID)
+                            end
+                        else
                             Detect:ProcessPotentialDiscovery(link, "bag_update", UnitName("player"))
                         end
                     end

@@ -3181,6 +3181,12 @@ function Core:HandleLocalLoot(discovery)
     end
     discovery.dt = dt
 
+    -- Mark looted before zone/spawn gates. Usability does not matter.
+    if dt == (Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED)
+        and itemID ~= 0 and L.MarkWorldforgedItemLooted then
+        L:MarkWorldforgedItemLooted(itemID)
+    end
+
     -- Special vendors (Blackmarket Artisan / Exquisite Collectables / Ring
     -- Vendor / MS vendors) legitimately stand INSIDE capital cities, which
     -- are forbidden zones for regular loot discoveries. Bypass the zone

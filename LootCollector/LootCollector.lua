@@ -974,6 +974,42 @@ function LootCollector:MarkLooted(guid, timestamp)
     self:UpdateLootedHighWater()
 end
 
+-- WF is one spawn per item. Looting it marks every realm pin for that base ID.
+-- Class/weapon usability is not a gate.
+function LootCollector:MarkWorldforgedItemLooted(itemID, timestamp)
+    itemID = tonumber(itemID)
+    if not itemID or itemID == 0 then return 0 end
+    local db = self.GetDiscoveriesDB and self:GetDiscoveriesDB()
+    if not db then return 0 end
+    local Constants = self:GetModule("Constants", true)
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+    local base = (self.GetBaseItemID and self:GetBaseItemID(itemID)) or itemID
+    local ids = { [itemID] = true, [base] = true }
+    local upgrades = self.WorldforgedUpgrades and self.WorldforgedUpgrades[base]
+    if upgrades then
+        for _, uid in pairs(upgrades) do
+            uid = tonumber(uid)
+            if uid then ids[uid] = true end
+        end
+    end
+    local n = 0
+    for guid, rec in pairs(db) do
+        if type(rec) == "table" then
+            local ri = tonumber(rec.i)
+            if ri and ids[ri] and (not WF or rec.dt == nil or rec.dt == WF) then
+                self:MarkLooted(rec.g or guid, timestamp)
+                n = n + 1
+            end
+        end
+    end
+    if n > 0 then
+        local Map = self:GetModule("Map", true)
+        if Map then Map.cacheIsDirty = true end
+        self.DataHasChanged = true
+    end
+    return n
+end
+
 function LootCollector:UnmarkLooted(guid)
     if not guid or not (self.db and self.db.char and self.db.char.looted) then return end
     self.db.char.looted[guid] = nil
