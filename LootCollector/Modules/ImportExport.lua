@@ -511,7 +511,13 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
                 if L.LockDiscoveryToCoordAuthority then
                     L:LockDiscoveryToCoordAuthority(existing)
                 end
-                existing.ls = math.max(tonumber(existing.ls) or 0, tonumber(d.lastSeen) or 0)
+                if isStarterDB then
+                    existing.ls = currentTime
+                    existing.s = (Constants and Constants.STATUS and Constants.STATUS.CONFIRMED) or "CONFIRMED"
+                    existing.st = currentTime
+                else
+                    existing.ls = math.max(tonumber(existing.ls) or 0, tonumber(d.lastSeen) or 0)
+                end
                 existing.mc = (tonumber(existing.mc) or 1) + (tonumber(d.mergeCount) or 1)
                 
                 local imp_t0 = tonumber(d.timestamp) or currentTime
@@ -556,9 +562,9 @@ function ImportExport:ApplyImport(parsed, mode, withOverlays, skipBlacklist, ski
                     il = itemLink,
                     q = d.itemQuality or 0,
                     t0 = d.timestamp,
-                    ls = d.lastSeen,
-                    st = d.statusTs,
-                    s = d.status,
+                    ls = isStarterDB and currentTime or d.lastSeen,
+                    st = isStarterDB and currentTime or d.statusTs,
+                    s = isStarterDB and ((Constants and Constants.STATUS and Constants.STATUS.CONFIRMED) or "CONFIRMED") or d.status,
                     mc = d.mergeCount,
                     fp = d.foundBy_player,
                     o = d.originator,

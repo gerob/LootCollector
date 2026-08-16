@@ -103,39 +103,13 @@ local function GetLast3AsciiSum(name)
 end
 
 local function compareVersions(v1, v2)
+    local Constants = L:GetModule("Constants", true)
+    if Constants and Constants.CompareVersions then
+        return Constants:CompareVersions(v1, v2)
+    end
     if v1 == v2 then return 0 end
     if not v1 or v1 == "" then return -1 end
     if not v2 or v2 == "" then return 1 end
-
-    local function parseVersion(v)
-        if type(v) ~= "string" then return 0, 0, 0 end
-        
-        local versionString = v:match("(%d+%.%d+%.?%d*)")
-        if not versionString then
-            return 0, 0, 0 
-        end
-
-        local parts = {}
-        
-        for part in versionString:gmatch("([^%.]+)") do
-            table.insert(parts, tonumber(part) or 0)
-        end
-        
-        return parts[1] or 0, parts[2] or 0, parts[3] or 0
-    end
-
-    local major1, minor1, patch1 = parseVersion(v1)
-    local major2, minor2, patch2 = parseVersion(v2)
-
-    if major1 > major2 then return 1 end
-    if major1 < major2 then return -1 end
-
-    if minor1 > minor2 then return 1 end
-    if minor1 < minor2 then return -1 end
-
-    if patch1 > patch2 then return 1 end
-    if patch1 < patch2 then return -1 end
-    
     return 0
 end
 
@@ -2384,8 +2358,10 @@ local function isVersionCompatible(av)
     if not av or av == "" then return false end
 
     -- Track the seen version dynamically
-    if L.db and L.db.profile and L.db.profile.sharing and L.db.profile.sharing.seenVersions then
+    if L.db and L.db.profile and L.db.profile.sharing then
+        L.db.profile.sharing.seenVersions = L.db.profile.sharing.seenVersions or {}
         L.db.profile.sharing.seenVersions[av] = true
+        L.db.profile.sharing.blockedVersions = L.db.profile.sharing.blockedVersions or {}
     end
 
     -- Check if version is explicitly blocked by user
@@ -2397,15 +2373,25 @@ local function isVersionCompatible(av)
 
     if not Comm._minCompatibleVersion then
         local Constants = L:GetModule("Constants", true)
-        Comm._minCompatibleVersion = Constants and Constants.GetMinCompatibleVersion and Constants:GetMinCompatibleVersion() or "0.0.0"
+        Comm._minCompatibleVersion = Constants and Constants.GetMinCompatibleVersion and Constants:GetMinCompatibleVersion() or "1.0.0"
     end
     
     local minVer = Comm._minCompatibleVersion
     if L.db and L.db.profile and L.db.profile.sharing and L.db.profile.sharing.minVersionGateOverride then
-        minVer = L.db.profile.sharing.minVersionGateOverride
+        local override = L.db.profile.sharing.minVersionGateOverride
+        if compareVersions(override, minVer) >= 0 then
+            minVer = override
+        end
     end
-    
-    return compareVersions(av, minVer) >= 0
+
+    if compareVersions(av, minVer) < 0 then
+        if L.db and L.db.profile and L.db.profile.sharing then
+            L.db.profile.sharing.blockedVersions = L.db.profile.sharing.blockedVersions or {}
+            L.db.profile.sharing.blockedVersions[av] = true
+        end
+        return false
+    end
+    return true
 end
 
 local MAX_CHUNKS_PER_MSG = 25      

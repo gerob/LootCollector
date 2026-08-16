@@ -46,14 +46,14 @@ Detect._ctx = {
 local LOOT_VALIDITY_WINDOW = 20
 local ITEM_EXPECTATION_WINDOW = 9.0
 local CHANNEL_STAMP_WINDOW = 15.0
-local BIND_CONFIRM_WINDOW = 5.0
 
 Detect._expectingItemUntil = 0
 Detect._expectedItemLink = nil
 Detect._lastChannelAt = 0
 Detect._channelContext = nil
 Detect._pendingBindItemID = nil
-Detect._pendingBindUntil = 0
+Detect._lootWindowOpen = false
+Detect._lootCloseGen = 0
 
 function Detect:Debug(msg, ...) return end
 
@@ -510,31 +510,41 @@ function Detect:OnLootBindConfirm(event, slot)
     local itemID = ParseItemID(link)
     if not itemID then return end
     self._pendingBindItemID = itemID
-    self._pendingBindUntil = GetTime() + BIND_CONFIRM_WINDOW
 end
 
 function Detect:ClearPendingBind()
     self._pendingBindItemID = nil
-    self._pendingBindUntil = 0
+end
+
+function Detect:ClearSpawnPickupStamps()
+    self:ClearPendingBind()
+    self._lastChannelAt = 0
+    self._channelContext = nil
 end
 
 function Detect:IsSpawnPickup(link, isWF)
     if not isWF or not link then return false end
     local nowSession = GetTime()
-    local channelOk = self._lastChannelAt and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW
-    local bindOk = self._pendingBindItemID and self._pendingBindUntil and nowSession <= self._pendingBindUntil
+    -- Window still open: original channel counts even past 15s (bags-full reloot).
+    -- Window just closed: CHAT_MSG_LOOT may fire the same frame; channel stamp still required.
+    local channelOk = self._lootWindowOpen
+        or (self._lastChannelAt and self._lastChannelAt > 0
+            and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW)
     local lootID = ParseItemID(link)
-    local sameItem = bindOk and lootID and lootID == self._pendingBindItemID
+    local sameItem = self._pendingBindItemID and lootID and lootID == self._pendingBindItemID
     return channelOk and sameItem
 end
 
 function Detect:OnLootOpened()
+    self._lootWindowOpen = true
+    self._lootCloseGen = (self._lootCloseGen or 0) + 1
     self._ctx.lastLootOpenedAt = time()
     lastLootContext.openedAt = time()
 
     local ctx = CapturePlayerLootPosition()
     local nowSession = GetTime()
-    if self._lastChannelAt and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW and self._channelContext then
+    if self._lastChannelAt and self._lastChannelAt > 0
+        and (nowSession - self._lastChannelAt) <= CHANNEL_STAMP_WINDOW and self._channelContext then
         ctx = self._channelContext
     end
     lastLootContext.x = ctx.x or 0
@@ -546,7 +556,19 @@ function Detect:OnLootOpened()
 end
 
 function Detect:OnLootClosed()
+    self._lootWindowOpen = false
     self._expectingItemUntil = GetTime() + ITEM_EXPECTATION_WINDOW
+    local gen = self._lootCloseGen or 0
+    -- CHAT_MSG_LOOT can fire on the same close; clear stamps next frame.
+    if L.ScheduleAfter then
+        L:ScheduleAfter(0.01, function()
+            if Detect._lootWindowOpen then return end
+            if (Detect._lootCloseGen or 0) ~= gen then return end
+            Detect:ClearSpawnPickupStamps()
+        end)
+    else
+        self:ClearSpawnPickupStamps()
+    end
 end
 
 function Detect:OnSystemMessage(_, msg)

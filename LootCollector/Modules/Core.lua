@@ -4130,6 +4130,12 @@ function Core:_ProcessItemDiscovery(d, options, op, t0)
         if L.LockDiscoveryToCoordAuthority then
             L:LockDiscoveryToCoordAuthority(rec)
         end
+        if (rec.s == Constants.STATUS.FADING or rec.s == Constants.STATUS.STALE)
+            and L.IsAuthorityPin and L:IsAuthorityPin(rec)
+            and not (L.IsVoteFaded and L:IsVoteFaded(rec)) then
+            rec.s = Constants.STATUS.CONFIRMED
+            rec.st = t0
+        end
 
         db[guid] = rec
         
@@ -4211,9 +4217,12 @@ function Core:_ProcessItemDiscovery(d, options, op, t0)
                 rec.st = t0
                 changed = true
             elseif normalizedStatus == Constants.STATUS.FADING or normalizedStatus == Constants.STATUS.STALE then
-                rec.s = normalizedStatus
-                rec.st = t0
-                changed = true
+                local remoteFadeOk = not (L.IsAuthorityPin and L:IsAuthorityPin(rec))
+                if remoteFadeOk then
+                    rec.s = normalizedStatus
+                    rec.st = t0
+                    changed = true
+                end
             end
         end
 

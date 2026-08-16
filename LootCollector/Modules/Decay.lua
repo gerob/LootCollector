@@ -106,22 +106,31 @@ function Decay:ProcessNextChunk()
             if not k then break end 
             
             if type(d) == "table" and not d.onHold and not d.vendorType then
-                local lastSeen = tonumber(d.ls) or tonumber(d.t0) or 0
-                if lastSeen > 0 then
-                    local age = tnow - lastSeen
-                    if age >= removeSecs then
-                        table.insert(guidsToRemove, k)
-                    elseif age >= staleSecs then
-                        if d.s ~= STATUS_STALE then
-                            d.s = STATUS_STALE
-                            d.st = tnow
-                            self._scanChangedCount = self._scanChangedCount + 1
-                        end
-                    elseif age >= fadeSecs then
-                        if d.s ~= STATUS_STALE and d.s ~= STATUS_FADING then
-                            d.s = STATUS_FADING
-                            d.st = tnow
-                            self._scanChangedCount = self._scanChangedCount + 1
+                if L.IsAuthorityPin and L:IsAuthorityPin(d) then
+                    if (d.s == STATUS_FADING or d.s == STATUS_STALE)
+                        and not (L.IsVoteFaded and L:IsVoteFaded(d)) then
+                        d.s = STATUS_CONFIRMED
+                        d.st = tnow
+                        self._scanChangedCount = self._scanChangedCount + 1
+                    end
+                else
+                    local lastSeen = tonumber(d.ls) or tonumber(d.t0) or 0
+                    if lastSeen > 0 then
+                        local age = tnow - lastSeen
+                        if age >= removeSecs then
+                            table.insert(guidsToRemove, k)
+                        elseif age >= staleSecs then
+                            if d.s ~= STATUS_STALE then
+                                d.s = STATUS_STALE
+                                d.st = tnow
+                                self._scanChangedCount = self._scanChangedCount + 1
+                            end
+                        elseif age >= fadeSecs then
+                            if d.s ~= STATUS_STALE and d.s ~= STATUS_FADING then
+                                d.s = STATUS_FADING
+                                d.st = tnow
+                                self._scanChangedCount = self._scanChangedCount + 1
+                            end
                         end
                     end
                 end

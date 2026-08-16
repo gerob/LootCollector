@@ -1989,21 +1989,51 @@ function LootCollector:EnsureDatabaseInitialized()
     self.databaseInitialized = true
 
     local discoveries = self:GetDiscoveriesDB()
-    local isNewDatabase = (not discoveries) or (not next(discoveries))
+    local hasLiveDiscovery = false
+    if discoveries then
+        for _, rec in pairs(discoveries) do
+            if type(rec) == "table" and not rec.vendorType then
+                local s = rec.s
+                if s == "CONFIRMED" or s == "UNCONFIRMED" or s == nil then
+                    hasLiveDiscovery = true
+                    break
+                end
+            end
+        end
+    end
+    local isNewDatabase = not hasLiveDiscovery
+    local realmBucket = self.db.global.realms and self.activeRealmKey and self.db.global.realms[self.activeRealmKey]
 
     if isNewDatabase then
+        -- Per-realm: an empty Vol'jin bucket must merge even if Rexxar already
+        -- set profile.offeredOptionalDB on the shared Default profile.
         local loaded, reason = LoadAddOn("LootCollector_StarterDB")
-        if loaded and _G.LootCollector_OptionalDB_Data and type(_G.LootCollector_OptionalDB_Data) == "table" then
-            local dbData = _G.LootCollector_OptionalDB_Data
-            if dbData.version and dbData.data and self.db.profile and self.db.profile.offeredOptionalDB ~= dbData.version then
-                print("|cff00ff00LootCollector:|r New installation detected. Automatically merging starter database...")
-                local ImportExport = self:GetModule("ImportExport", true)
-                if ImportExport and ImportExport.ApplyImportString then
-                    ImportExport:ApplyImportString(dbData.data, "MERGE", false, true, true)
-                end
-                if self.db and self.db.profile then
-                    self.db.profile.offeredOptionalDB = dbData.version
-                end
+        local dbData = _G.LootCollector_OptionalDB_Data
+        if loaded and type(dbData) == "table" and dbData.version and dbData.data then
+            print("|cff00ff00LootCollector:|r No confirmed discoveries on this realm. Automatically merging starter database...")
+            local ImportExport = self:GetModule("ImportExport", true)
+            if ImportExport and ImportExport.ApplyImportString then
+                ImportExport:ApplyImportString(dbData.data, "MERGE", false, true, true)
+            end
+            if realmBucket then
+                realmBucket.starterMergedVersion = dbData.version
+            end
+            if self.db.profile then
+                self.db.profile.offeredOptionalDB = dbData.version
+            end
+            discoveries = self:GetDiscoveriesDB()
+            if (not discoveries) or (not next(discoveries)) then
+                print("|cffff7f00LootCollector:|r Starter database merge ran but this realm still has no discoveries. Open /lcv and use Merge Starter Database, or /lcimport.")
+            end
+        else
+            local name, _, _, enabled, loadable, infoReason = GetAddOnInfo("LootCollector_StarterDB")
+            local why = reason or infoReason
+            if why == "MISSING" or not name or name == "" then
+                print("|cffff7f00LootCollector:|r No discoveries on this realm. Install LootCollector_StarterDB, enable it at character select, then /reload.")
+            elseif why == "DISABLED" or enabled == false or (loadable == false and enabled ~= true) then
+                print("|cffff7f00LootCollector:|r No discoveries on this realm. Enable LootCollector_StarterDB at character select, then /reload.")
+            else
+                print(string.format("|cffff7f00LootCollector:|r No discoveries on this realm. Starter database could not be merged. Reason: %s", tostring(why or "unknown")))
             end
         end
     else
@@ -2107,6 +2137,18 @@ function LootCollector:OnInitialize()
         self.db.profile.perCharacterFavorites = false
     end
     self.db.profile.favorites = self.db.profile.favorites or {}
+
+    -- Floor saved version gate at MIN_COMPATIBLE_VERSION (1.0.0). An old
+    -- override of 0.8.5 would still accept beta-0.8.5 packets.
+    self.db.profile.sharing = self.db.profile.sharing or {}
+    do
+        local override = self.db.profile.sharing.minVersionGateOverride
+        local minVer = (Constants and Constants.MIN_COMPATIBLE_VERSION) or "1.0.0"
+        if override and override ~= "" and Constants and Constants.CompareVersions
+            and Constants:CompareVersions(override, minVer) < 0 then
+            self.db.profile.sharing.minVersionGateOverride = nil
+        end
+    end
 
     -- Migrate legacy "Filter by Deep Filter" into Filter Map (once).
     local cmf = self.db.char.mapFilters
@@ -2558,6 +2600,35 @@ function LootCollector:IsStarterDBZoneAllowed(itemID, zoneID)
     local allowed = self.StarterDBItemZones and self.StarterDBItemZones[itemID]
     if not allowed then return true end
     return allowed[zoneID] == true or allowed[tostring(zoneID)] == true
+end
+
+-- True only when StarterDB lists this item and this zone (not "unrestricted").
+function LootCollector:HasStarterDBZoneEntry(itemID, zoneID)
+    itemID = tonumber(itemID)
+    zoneID = tonumber(zoneID)
+    if not itemID or not zoneID or not self.StarterDBItemZones then return false end
+    local function zoneOk(id)
+        local allowed = self.StarterDBItemZones[id]
+        if not allowed then return false end
+        return allowed[zoneID] == true or allowed[tostring(zoneID)] == true
+    end
+    if zoneOk(itemID) then return true end
+    local base = self.GetBaseItemID and self:GetBaseItemID(itemID)
+    return (base and zoneOk(base)) or false
+end
+
+function LootCollector:IsAuthorityPin(d)
+    if type(d) ~= "table" then return false end
+    if (tonumber(d.mc) or 0) >= 5 then return true end
+    if self.GetCoordAuthorityEntry and self:GetCoordAuthorityEntry(d.i, d.z) then return true end
+    return self:HasStarterDBZoneEntry(d.i, d.z)
+end
+
+function LootCollector:IsVoteFaded(d)
+    if type(d) ~= "table" then return false end
+    local Constants = self:GetModule("Constants", true)
+    local fadeThresh = Constants and Constants.DELETION_THRESHOLD_FADING or 5
+    return (tonumber(d.adc) or 0) >= fadeThresh
 end
 
 function LootCollector:_ResolveStarterDBBaseByName(name, incomingID)

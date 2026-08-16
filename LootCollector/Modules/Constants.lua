@@ -3,7 +3,7 @@ local Constants = L:NewModule("Constants")
 
 Constants.PROTO_V = 5
 
-Constants.MIN_COMPATIBLE_VERSION = "0.8.4"
+Constants.MIN_COMPATIBLE_VERSION = "1.0.0"
 
 Constants.OP = {
     DISC = "DISC",
@@ -270,7 +270,7 @@ Constants.CLASS_PROFICIENCIES = {
     DEMONHUNTER = { armor = {1, 2}, weapons = {30, 31, 32, 35, 36, 37, 38, 39, 40, 41, 42, 44}, }, 
     PROPHET = { armor = {1, 2, 3}, weapons = {32, 34, 35, 36, 39, 41, 42, 43, 44}, }, 
     GUARDIAN = { armor = {1, 2, 3, 4, 5}, weapons = {30, 32, 33, 34, 36, 37, 40, 42, 43}, },
-    SPIRITMAGE = { armor = {1, 2}, weapons = {30, 31, 36, 37, 38, 39, 42, 44}, }, 
+    SPIRITMAGE = { armor = {1, 2}, weapons = {30, 31, 36, 37, 38, 39, 41, 42, 44}, }, 
     SUNCLERIC = { armor = {1, 2, 3, 4, 5}, weapons = {32, 34, 35, 36, 37, 38, 39, 43, 44}, },
     MONK = { armor = {1, 2, 3}, weapons = {30, 31, 32, 34, 35, 36, 37, 38, 39, 43}, }, 
     STORMBRINGER = { armor = {1}, weapons = {34, 39, 41, 44}, },
@@ -562,6 +562,33 @@ function Constants._DevOverrideCompression(level) if type(level) == "number" and
 
 function Constants:GetProtocolVersion() return Constants.PROTO_V end
 function Constants:GetMinCompatibleVersion() return Constants.MIN_COMPATIBLE_VERSION end
+
+-- Numeric compare of version strings (beta-0.8.5 parses as 0.8.5).
+-- Returns -1, 0, or 1 like strcmp.
+function Constants:CompareVersions(v1, v2)
+    if v1 == v2 then return 0 end
+    if not v1 or v1 == "" then return -1 end
+    if not v2 or v2 == "" then return 1 end
+    local function parseVersion(v)
+        if type(v) ~= "string" then return 0, 0, 0 end
+        local versionString = v:match("(%d+%.%d+%.?%d*)")
+        if not versionString then return 0, 0, 0 end
+        local parts = {}
+        for part in versionString:gmatch("([^%.]+)") do
+            table.insert(parts, tonumber(part) or 0)
+        end
+        return parts[1] or 0, parts[2] or 0, parts[3] or 0
+    end
+    local major1, minor1, patch1 = parseVersion(v1)
+    local major2, minor2, patch2 = parseVersion(v2)
+    if major1 > major2 then return 1 end
+    if major1 < major2 then return -1 end
+    if minor1 > minor2 then return 1 end
+    if minor1 < minor2 then return -1 end
+    if patch1 > patch2 then return 1 end
+    if patch1 < patch2 then return -1 end
+    return 0
+end
 function Constants:GetAllowedDiscoveryTypes() return Constants.ALLOWED_DISCOVERY_TYPES end
 function Constants:GetOp() return Constants.OP end
 function Constants:GetAct() return Constants.ACT end
