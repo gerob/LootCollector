@@ -2276,6 +2276,9 @@ function LootCollector:InitializeStarterDBLookup()
                                         if itemID and zoneID then
                                             self.StarterDBItemZones[itemID] = self.StarterDBItemZones[itemID] or {}
                                             self.StarterDBItemZones[itemID][zoneID] = true
+                                            self.StarterDBZoneCounts = self.StarterDBZoneCounts or {}
+                                            self.StarterDBZoneCounts[itemID] = self.StarterDBZoneCounts[itemID] or {}
+                                            self.StarterDBZoneCounts[itemID][zoneID] = (self.StarterDBZoneCounts[itemID][zoneID] or 0) + 1
                                             local x = d.coords and tonumber(d.coords.x)
                                             local y = d.coords and tonumber(d.coords.y)
                                             if x and y and x > 0 and y > 0 and x <= 1 and y <= 1 then
@@ -2303,6 +2306,9 @@ function LootCollector:InitializeStarterDBLookup()
                 end
             end
         end
+    end
+    if self.FilterStarterDBLeftoverZones then
+        self:FilterStarterDBLeftoverZones()
     end
 end
 
@@ -2690,6 +2696,140 @@ function LootCollector:IsStarterDBZoneAllowed(itemID, zoneID)
     local allowed = self.StarterDBItemZones and self.StarterDBItemZones[itemID]
     if not allowed then return true end
     return allowed[zoneID] == true or allowed[tostring(zoneID)] == true
+end
+
+LootCollector.LEFTOVER_XY_EPS = 0.02
+
+local LEFTOVER_CONTINENT_MAPS = {
+    [14] = true, [15] = true, [467] = true, [486] = true,
+}
+local LEFTOVER_CITY_MAPS = {
+    [302] = true, [322] = true, [342] = true, [363] = true,
+    [382] = true, [383] = true, [472] = true, [481] = true,
+    [482] = true, [505] = true,
+}
+
+function LootCollector:IsLeftoverXyMatch(x1, y1, x2, y2)
+    x1, y1 = tonumber(x1) or 0, tonumber(y1) or 0
+    x2, y2 = tonumber(x2) or 0, tonumber(y2) or 0
+    local eps = self.LEFTOVER_XY_EPS or 0.02
+    return math.abs(x1 - x2) < eps and math.abs(y1 - y2) < eps
+end
+
+function LootCollector:IsLeftoverMicroMap(zoneID)
+    zoneID = tonumber(zoneID) or 0
+    if zoneID >= 1211 and zoneID <= 1245 then return true end
+    if LEFTOVER_CONTINENT_MAPS[zoneID] then return true end
+    if LEFTOVER_CITY_MAPS[zoneID] then return true end
+    return false
+end
+
+function LootCollector:StarterDBZoneCount(itemID, zoneID)
+    itemID, zoneID = tonumber(itemID), tonumber(zoneID)
+    if not itemID or not zoneID then return 0 end
+    local counts = self.StarterDBZoneCounts and self.StarterDBZoneCounts[itemID]
+    if counts and counts[zoneID] then return tonumber(counts[zoneID]) or 0 end
+    if self.GetBaseItemID then
+        local base = self:GetBaseItemID(itemID)
+        if base and base ~= itemID then
+            counts = self.StarterDBZoneCounts and self.StarterDBZoneCounts[base]
+            if counts and counts[zoneID] then return tonumber(counts[zoneID]) or 0 end
+        end
+    end
+    return 0
+end
+
+-- Higher is better. CoordAuthority > StarterDB count > outdoor > liveCount.
+function LootCollector:LeftoverKeepRank(itemID, zoneID, liveCount)
+    itemID, zoneID = tonumber(itemID), tonumber(zoneID)
+    liveCount = tonumber(liveCount) or 0
+    local ca = 0
+    if zoneID and self.GetCoordAuthorityEntry and self:GetCoordAuthorityEntry(itemID, zoneID) then
+        ca = 1
+    end
+    local starter = self:StarterDBZoneCount(itemID, zoneID)
+    local outdoor = (zoneID and not self:IsLeftoverMicroMap(zoneID)) and 1 or 0
+    return ca, starter, outdoor, liveCount
+end
+
+function LootCollector:LeftoverKeepBetter(itemID, zoneA, liveA, zoneB, liveB)
+    local a1, a2, a3, a4 = self:LeftoverKeepRank(itemID, zoneA, liveA)
+    local b1, b2, b3, b4 = self:LeftoverKeepRank(itemID, zoneB, liveB)
+    if a1 ~= b1 then return a1 > b1 end
+    if a2 ~= b2 then return a2 > b2 end
+    if a3 ~= b3 then return a3 > b3 end
+    if a4 ~= b4 then return a4 > b4 end
+    return (tonumber(zoneA) or 0) < (tonumber(zoneB) or 0)
+end
+
+function LootCollector:FilterStarterDBLeftoverZones()
+    local coords = self.StarterDBCoords
+    local allowed = self.StarterDBItemZones
+    if not coords or not allowed then return end
+
+    for itemID, byZone in pairs(coords) do
+        if type(byZone) == "table" then
+            local zones = {}
+            for z, rec in pairs(byZone) do
+                z = tonumber(z)
+                if z and rec and rec.x and rec.y then
+                    zones[#zones + 1] = { z = z, x = rec.x, y = rec.y }
+                end
+            end
+            if #zones >= 2 then
+                local parent = {}
+                for i = 1, #zones do parent[i] = i end
+                local function find(i)
+                    while parent[i] ~= i do
+                        parent[i] = parent[parent[i]]
+                        i = parent[i]
+                    end
+                    return i
+                end
+                local function union(a, b)
+                    a, b = find(a), find(b)
+                    if a ~= b then parent[a] = b end
+                end
+                for i = 1, #zones do
+                    for j = i + 1, #zones do
+                        if self:IsLeftoverXyMatch(zones[i].x, zones[i].y, zones[j].x, zones[j].y) then
+                            union(i, j)
+                        end
+                    end
+                end
+                local clusters = {}
+                for i = 1, #zones do
+                    local root = find(i)
+                    clusters[root] = clusters[root] or {}
+                    clusters[root][#clusters[root] + 1] = zones[i]
+                end
+                for _, group in pairs(clusters) do
+                    if #group >= 2 then
+                        local keepZ = group[1].z
+                        for n = 2, #group do
+                            if self:LeftoverKeepBetter(itemID, group[n].z, 0, keepZ, 0) then
+                                keepZ = group[n].z
+                            end
+                        end
+                        for n = 1, #group do
+                            local z = group[n].z
+                            if z ~= keepZ then
+                                if allowed[itemID] then
+                                    allowed[itemID][z] = nil
+                                    allowed[itemID][tostring(z)] = nil
+                                    if not next(allowed[itemID]) then
+                                        allowed[itemID] = nil
+                                    end
+                                end
+                                byZone[z] = nil
+                                byZone[tostring(z)] = nil
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 end
 
 -- True only when StarterDB lists this item and this zone (not "unrestricted").

@@ -11,9 +11,10 @@
 
 local L = LootCollector
 
-L.CoordAuthorityRevision = 2
+L.CoordAuthorityRevision = 3
 L.CoordAuthority = {
     [410154] = { [24] = { c = 2, x = 0.6156, y = 0.6831 } }, -- Plaguebloom Spear, Eastern Plaguelands
+    [415038] = { [17] = { c = 2, x = 0.4011, y = 0.3038 } }, -- Plains Bolter, Arathi Highlands
     [515014] = { [21] = { c = 2, x = 0.4956, y = 0.3613 } }, -- Agamand Farmer Trousers, Tirisfal Glades
     [521029] = { [21] = { c = 2, x = 0.4610, y = 0.2958 } }, -- Agamand Sharpshooter, Tirisfal Glades
     [521034] = { [21] = { c = 2, x = 0.5669, y = 0.4996 } }, -- Ghostmoor Cloak, Tirisfal Glades

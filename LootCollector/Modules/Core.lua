@@ -541,6 +541,24 @@ local function FindWorldforgedInZone(continent, zoneID, itemID, db)
     return nil
 end
 
+local function FindWorldforgedLeftover(itemID, x, y, db)
+    if not db or not itemID or not L.IsLeftoverXyMatch then return nil end
+    x, y = tonumber(x) or 0, tonumber(y) or 0
+    if x == 0 and y == 0 then return nil end
+    local base = (L.GetBaseItemID and L:GetBaseItemID(itemID)) or itemID
+    local Constants = L:GetModule("Constants", true)
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+    for _, d in pairs(db) do
+        if type(d) == "table" and d.i and d.xy and not d.vendorType and (not WF or not d.dt or d.dt == WF) then
+            local di = (L.GetBaseItemID and L:GetBaseItemID(d.i)) or d.i
+            if (di == base or d.i == itemID) and L:IsLeftoverXyMatch(x, y, d.xy.x, d.xy.y) then
+                return d
+            end
+        end
+    end
+    return nil
+end
+
 function Core:GetWorldforgedInZone(continent, zoneID, itemID)
     local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
     if not db then return nil end
@@ -2441,6 +2459,126 @@ function Core:ApplyCoordAuthority()
     return snapped, collapsed
 end
 
+function Core:CollapseLeftoverZoneCopies()
+    local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not db or not L.IsLeftoverXyMatch then return 0 end
+
+    local Constants = L:GetModule("Constants", true)
+    local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+
+    local byBase = {}
+    for guid, d in pairs(db) do
+        if type(d) == "table" and d.i and d.z and d.xy and not d.vendorType and d.dt ~= BM and (not WF or not d.dt or d.dt == WF) then
+            local base = (L.GetBaseItemID and L:GetBaseItemID(d.i)) or d.i
+            byBase[base] = byBase[base] or {}
+            byBase[base][#byBase[base] + 1] = d
+        end
+    end
+
+    local function mergeOnto(keep, extra)
+        if not (extra and extra.g and keep and keep.g and extra.g ~= keep.g) then
+            return false
+        end
+        if L.RemapLootedGuid then
+            L:RemapLootedGuid(extra.g, keep.g)
+        end
+        keep.mc = (tonumber(keep.mc) or 1) + (tonumber(extra.mc) or 1)
+        if extra.fp_votes then
+            keep.fp_votes = keep.fp_votes or {}
+            for voter, vData in pairs(extra.fp_votes) do
+                if not keep.fp_votes[voter] then
+                    keep.fp_votes[voter] = vData
+                else
+                    keep.fp_votes[voter].score = (keep.fp_votes[voter].score or 0) + (vData.score or 0)
+                end
+            end
+        end
+        keep.ls = math.max(tonumber(keep.ls) or 0, tonumber(extra.ls) or 0)
+        self:RemoveDiscoveryByGuid(extra.g, "Collapsed leftover-map Worldforged pin.", true)
+        return true
+    end
+
+    local collapsed = 0
+    for base, recs in pairs(byBase) do
+        if #recs >= 2 then
+            local parent = {}
+            for i = 1, #recs do parent[i] = i end
+            local function find(i)
+                while parent[i] ~= i do
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                end
+                return i
+            end
+            local function union(a, b)
+                a, b = find(a), find(b)
+                if a ~= b then parent[a] = b end
+            end
+            for i = 1, #recs do
+                local ix = recs[i].xy and recs[i].xy.x
+                local iy = recs[i].xy and recs[i].xy.y
+                for j = i + 1, #recs do
+                    if L:IsLeftoverXyMatch(ix, iy, recs[j].xy and recs[j].xy.x, recs[j].xy and recs[j].xy.y) then
+                        union(i, j)
+                    end
+                end
+            end
+            local clusters = {}
+            for i = 1, #recs do
+                local root = find(i)
+                clusters[root] = clusters[root] or {}
+                clusters[root][#clusters[root] + 1] = recs[i]
+            end
+            for _, group in pairs(clusters) do
+                local zoneSeen, zoneCount, distinct = {}, {}, 0
+                for _, rec in ipairs(group) do
+                    local z = tonumber(rec.z)
+                    if z then
+                        zoneCount[z] = (zoneCount[z] or 0) + 1
+                        if not zoneSeen[z] then
+                            zoneSeen[z] = true
+                            distinct = distinct + 1
+                        end
+                    end
+                end
+                if distinct >= 2 then
+                    local keep = group[1]
+                    for n = 2, #group do
+                        local rec = group[n]
+                        if L:LeftoverKeepBetter(base, rec.z, zoneCount[tonumber(rec.z)] or 0, keep.z, zoneCount[tonumber(keep.z)] or 0) then
+                            keep = rec
+                        end
+                    end
+                    for _, extra in ipairs(group) do
+                        if extra.g ~= keep.g and db[extra.g] then
+                            if mergeOnto(keep, extra) then
+                                collapsed = collapsed + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if collapsed > 0 then
+        L.DataHasChanged = true
+        self:InvalidateLookupIndices()
+        local Map = L:GetModule("Map", true)
+        if Map then
+            Map.cacheIsDirty = true
+            if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then Map:Update() end
+            if Map.UpdateMinimap then Map:UpdateMinimap() end
+        end
+        local Viewer = L:GetModule("Viewer", true)
+        if Viewer and Viewer.NotifyDatabaseChanged then
+            Viewer:NotifyDatabaseChanged()
+        end
+    end
+    return collapsed
+end
+
 function Core:PerformOnLoginMaintenance()
     local pTime = L.ProfileStart and L:ProfileStart() 
 
@@ -2465,6 +2603,10 @@ function Core:PerformOnLoginMaintenance()
     self:FixCorruptedTimestamps()    
     self:FixInvalidContinentIDs()
     self:FixMismappedZones()
+    local leftoverEarly = self:CollapseLeftoverZoneCopies()
+    if leftoverEarly > 0 and not hideMsgs then
+        print(string.format("|cff00ff00LootCollector:|r Collapsed %d leftover-map duplicate pin(s).", leftoverEarly))
+    end
     local purgedOffZone = self:PurgeOffStarterZoneDiscoveries()
     if purgedOffZone > 0 and not hideMsgs then
         print(string.format("|cff00ff00LootCollector:|r Removed %d pin(s) whose zone is not in Starter DB for that item.", purgedOffZone))
@@ -2622,6 +2764,11 @@ function Core:PerformOnLoginMaintenance()
             table.insert(parts, string.format("collapsed %d extra spawn(s)", collapsed))
         end
         print("|cff00ff00LootCollector:|r " .. table.concat(parts, ", ") .. ".")
+    end
+
+    local leftover = self:CollapseLeftoverZoneCopies()
+    if leftover > 0 and not hideMsgs then
+        print(string.format("|cff00ff00LootCollector:|r Collapsed %d leftover-map duplicate pin(s).", leftover))
     end
     
     if pTime then L:ProfileStop("Core:PerformOnLoginMaintenance", pTime) end 
@@ -3610,6 +3757,9 @@ function Core:HandleLocalLoot(discovery)
     if not rec then
         if dt == Constants.DISCOVERY_TYPE.WORLDFORGED then
             rec = FindWorldforgedInZone(c, z, itemID, db)
+            if not rec then
+                rec = FindWorldforgedLeftover(itemID, x, y, db)
+            end
         else
             rec = FindNearbyDiscovery(c, z, itemID, x, y, db)
         end
@@ -3673,9 +3823,12 @@ function Core:HandleLocalLoot(discovery)
         
         local oldX = (rec.xy and type(rec.xy) == "table" and rec.xy.x) or 0
         local oldY = (rec.xy and type(rec.xy) == "table" and rec.xy.y) or 0
-        local dist = L:ComputeDistance(c, z, x, y, rec.c, rec.z, oldX, oldY)
+        local leftoverOtherZone = isWF and tonumber(rec.z) ~= z
+        local dist = leftoverOtherZone and nil or L:ComputeDistance(c, z, x, y, rec.c, rec.z, oldX, oldY)
         
-        if L.LockDiscoveryToCoordAuthority and L:LockDiscoveryToCoordAuthority(rec) then
+        if leftoverOtherZone then
+            -- Same spawn stamped on a leftover AreaID; keep the stored zone/xy.
+        elseif L.LockDiscoveryToCoordAuthority and L:LockDiscoveryToCoordAuthority(rec) then
             -- Verified coords: ignore this loot's xy.
         else
             local radius = GetClusterRadius(rec.dt)
@@ -4219,6 +4372,9 @@ function Core:_ProcessItemDiscovery(d, options, op, t0)
         local nearby = nil
         if Constants and d.dt == Constants.DISCOVERY_TYPE.WORLDFORGED then
             nearby = FindWorldforgedInZone(d.c, d.z, d.i, db)
+            if not nearby then
+                nearby = FindWorldforgedLeftover(d.i, d.xy and d.xy.x, d.xy and d.xy.y, db)
+            end
         elseif FindNearbyDiscovery then
             nearby = FindNearbyDiscovery(d.c, d.z, d.i, d.xy.x, d.xy.y, db)
         end

@@ -379,6 +379,19 @@ function DBSync:ApplyRecord(c, z, i, x4, y4, s, fp_t0, foundBy, q, dt, it, ist, 
                 end
             end
         end
+        if isWF and not existing and L.IsLeftoverXyMatch then
+            local base = (L.GetBaseItemID and L:GetBaseItemID(i)) or i
+            for g, ex in pairs(target_db) do
+                if type(ex) == "table" and ex.i and ex.xy and not ex.vendorType then
+                    local di = (L.GetBaseItemID and L:GetBaseItemID(ex.i)) or ex.i
+                    if (di == base or ex.i == i) and L:IsLeftoverXyMatch(x, y, ex.xy.x, ex.xy.y) then
+                        existing = ex
+                        guid = g
+                        break
+                    end
+                end
+            end
+        end
     end
 
     local sName = type(s) == "number" and (STATUS_REV[s] or "UNCONFIRMED") or (s or "UNCONFIRMED")
