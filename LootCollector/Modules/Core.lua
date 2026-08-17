@@ -2459,6 +2459,55 @@ function Core:ApplyCoordAuthority()
     return snapped, collapsed
 end
 
+function Core:ApplyForbiddenItemZones()
+    if not (L.db and L.db.global) then return 0 end
+    local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    local rev = tonumber(L.ForbiddenZoneRevision) or 0
+    if not db then
+        L.db.global.forbiddenZoneRevision = rev
+        return 0
+    end
+
+    local Constants = L:GetModule("Constants", true)
+    local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+
+    local removed = 0
+    local work = {}
+    for _, d in pairs(db) do
+        if type(d) == "table" and d.i and d.z and d.g and not d.vendorType and d.dt ~= BM then
+            if (L.IsUntrackedWorldforged and L:IsUntrackedWorldforged(d.i))
+                or (L.IsItemZoneForbidden and L:IsItemZoneForbidden(d.i, d.z)) then
+                work[#work + 1] = d.g
+            end
+        end
+    end
+    for _, guid in ipairs(work) do
+        if db[guid] then
+            if self:RemoveDiscoveryByGuid(guid, "Removed pin from a forbidden zone for that item.", true) then
+                removed = removed + 1
+            end
+        end
+    end
+
+    L.db.global.forbiddenZoneRevision = rev
+
+    if removed > 0 then
+        L.DataHasChanged = true
+        self:InvalidateLookupIndices()
+        local Map = L:GetModule("Map", true)
+        if Map then
+            Map.cacheIsDirty = true
+            if Map.Update and WorldMapFrame and WorldMapFrame:IsShown() then Map:Update() end
+            if Map.UpdateMinimap then Map:UpdateMinimap() end
+        end
+        local Viewer = L:GetModule("Viewer", true)
+        if Viewer and Viewer.NotifyDatabaseChanged then
+            Viewer:NotifyDatabaseChanged()
+        end
+    end
+    return removed
+end
+
 function Core:CollapseLeftoverZoneCopies()
     local db = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
     if not db or not L.IsLeftoverXyMatch then return 0 end
@@ -2752,6 +2801,14 @@ function Core:PerformOnLoginMaintenance()
                 L._debug("Core", "Pruned " .. cleared .. " stale NEW flags")
             end
         end
+    end
+
+    local forbiddenRemoved = self:ApplyForbiddenItemZones()
+    if (forbiddenRemoved or 0) > 0 and not hideMsgs then
+        print(string.format(
+            "|cff00ff00LootCollector:|r Removed %d pin(s) from zones that item does not spawn in.",
+            forbiddenRemoved
+        ))
     end
 
     local snapped, collapsed = self:ApplyCoordAuthority()
@@ -6152,6 +6209,8 @@ function Core:RestoreStarterCoords(onlyItemID, quiet)
             for zoneID, starter in pairs(byZone) do
                 zoneID = tonumber(zoneID)
                 if zoneID and starter and starter.x and starter.y
+                    and (not L.IsUntrackedWorldforged or not L:IsUntrackedWorldforged(itemID))
+                    and (not L.IsItemZoneForbidden or not L:IsItemZoneForbidden(itemID, zoneID))
                     and (not L.IsCoordAuthorityZoneAllowed or L:IsCoordAuthorityZoneAllowed(itemID, zoneID)) then
                     local existing = havePin[itemID .. ":" .. zoneID]
                     if not existing then
@@ -6232,6 +6291,7 @@ SlashCmdList["LOOTCOLLECTORDIAG"] = function(msg)
     if msg == "" or msg == "help" then
         print("|cff00ff00LootCollector:|r /lcdiag <itemID|itemLink> - dump c/z/iz/xy/mc for one item")
         print("|cffaaaaaa/lclowmc [maxMc] - list Worldforged pins with mc < maxMc (default 5)|r")
+        print("|cffaaaaaa/lcdupnames - list Worldforged display names with 2+ pins|r")
         return
     end
     local itemID = tonumber(msg)
@@ -6359,4 +6419,111 @@ SlashCmdList["LOOTCOLLECTORLOWMC"] = function(msg)
         end
     end
     CoreMod:ListLowMcWorldforged(maxMc)
+end
+
+-- Maintainer helper: Worldforged pins that share a display name (leftover / multi-zone hunt).
+-- Usage: /lcdupnames
+local DUPNAME_PRINT_CAP = 50
+
+function Core:ListDuplicateNameWorldforged()
+    local discoveries = L.GetDiscoveriesDB and L:GetDiscoveriesDB()
+    if not discoveries then
+        print("|cffff7f00LootCollector:|r Discovery database not ready.")
+        return 0
+    end
+
+    local Constants = L:GetModule("Constants", true)
+    local WF = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.WORLDFORGED
+    local BM = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.BLACKMARKET
+    local MS = Constants and Constants.DISCOVERY_TYPE and Constants.DISCOVERY_TYPE.MYSTIC_SCROLL
+
+    local groups = {}
+    local uncached = 0
+    for _, d in pairs(discoveries) do
+        if type(d) == "table" and d.i and not d.vendorType and d.dt ~= BM and d.dt ~= MS
+            and (not WF or not d.dt or d.dt == WF) then
+            local name = (d.il and d.il:match("%[(.-)%]")) or select(1, GetItemInfo(d.i)) or "?"
+            if name == "?" then
+                uncached = uncached + 1
+                if d.i then GetItemInfo(d.i) end
+            else
+                local key = string.lower(name)
+                local g = groups[key]
+                if not g then
+                    g = { name = name, recs = 0, ids = {}, idList = {}, zones = {}, zoneList = {} }
+                    groups[key] = g
+                end
+                g.recs = g.recs + 1
+                local id = tonumber(d.i)
+                if id and not g.ids[id] then
+                    g.ids[id] = true
+                    g.idList[#g.idList + 1] = id
+                end
+                local c = tonumber(d.c) or 0
+                local z = tonumber(d.z) or 0
+                local iz = tonumber(d.iz) or 0
+                local zoneName = (L.ResolveZoneDisplay and L.ResolveZoneDisplay(c, z, iz)) or "Unknown"
+                if not g.zones[zoneName] then
+                    g.zones[zoneName] = true
+                    g.zoneList[#g.zoneList + 1] = zoneName
+                end
+            end
+        end
+    end
+
+    local rows = {}
+    for _, g in pairs(groups) do
+        if g.recs >= 2 then
+            table.sort(g.idList)
+            table.sort(g.zoneList)
+            rows[#rows + 1] = g
+        end
+    end
+    table.sort(rows, function(a, b)
+        if a.recs ~= b.recs then return a.recs > b.recs end
+        return a.name < b.name
+    end)
+
+    print(string.format(
+        "|cff00ff00LootCollector:|r Worldforged names with 2+ pins: %d",
+        #rows
+    ))
+    if uncached > 0 then
+        print(string.format("|cffaaaaaa%d pin(s) uncached (no name). /reload and run /lcdupnames again.|r", uncached))
+    end
+    if #rows == 0 then
+        return 0
+    end
+
+    local shown = math.min(#rows, DUPNAME_PRINT_CAP)
+    for i = 1, shown do
+        local g = rows[i]
+        print(string.format(
+            "  %d  %s  ids=%s  zones=%s",
+            g.recs,
+            g.name,
+            table.concat(g.idList, ","),
+            table.concat(g.zoneList, ", ")
+        ))
+    end
+    if #rows > shown then
+        print(string.format("|cffaaaaaa... %d more|r", #rows - shown))
+    end
+    print("|cffaaaaaaThen /lcdiag <itemID>|r")
+    return #rows
+end
+
+SLASH_LOOTCOLLECTORDUPNAMES1 = "/lcdupnames"
+SlashCmdList["LOOTCOLLECTORDUPNAMES"] = function(msg)
+    local CoreMod = L:GetModule("Core", true)
+    if not (CoreMod and CoreMod.ListDuplicateNameWorldforged) then
+        print("|cffff7f00LootCollector:|r Core diagnostics not available.")
+        return
+    end
+    msg = tostring(msg or ""):match("^%s*(.-)%s*$") or ""
+    if msg == "help" then
+        print("|cff00ff00LootCollector:|r /lcdupnames - list Worldforged display names with 2+ pins")
+        return
+    end
+    CoreMod:ListDuplicateNameWorldforged()
 end

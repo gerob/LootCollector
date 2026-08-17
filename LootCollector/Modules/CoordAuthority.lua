@@ -25,6 +25,55 @@ L.CoordAuthority = {
     [515043] = { [21] = { c = 2, x = 0.3500, y = 0.4343 } }, -- Waterlogged Sparkler, Tirisfal Glades
 }
 
+-- Item must not exist in this zone. Delete the pin; do not merge onto
+-- another zone of the same item (that would steal a different spawn's xy).
+-- Bump ForbiddenZoneRevision once at RELEASE_Notes, not per row.
+-- Apply runs every login (DISC can reintroduce the pin).
+L.ForbiddenZoneRevision = 1
+L.UntrackedItemIDs = {
+    [500816] = true, -- Supply Runner's Pants: not in game
+    [500817] = true, -- Scholar's Ring of Enlightenment: not in game
+}
+L.ForbiddenItemZones = {
+    [217842] = { -- Bonechopper: Stranglethorn Vale only
+        [29] = true,  -- Searing Gorge
+    },
+    [410224] = { -- Charbite Mace: Burning Steppes only
+        [1205] = true, -- Blackrock Mountain
+    },
+    [354149] = { -- Kixxle's Experimental Potion: Wetlands is real
+        [36] = true,  -- Loch Modan
+        [38] = true,  -- Stranglethorn Vale
+    },
+    [354292] = { -- Recipe: Freshly Brewed Firewater: Felwood only
+        [25] = true,  -- Hillsbrad Foothills
+        [705] = true, -- Blackrock Depths
+    },
+    [354467] = { -- Recipe: Miru Berry Wine: Deadwind Pass only
+        [23] = true,  -- Western Plaguelands
+        [24] = true,  -- Eastern Plaguelands
+    },
+    [451107] = { -- Travel Sack upgrade: not in Mulgore
+        [10] = true,  -- Mulgore
+    },
+    [500811] = { -- Morin's Jug: Loch Modan only
+        [25] = true,  -- Hillsbrad Foothills
+        [763] = true, -- Scarlet Monastery
+    },
+    [500813] = { -- Melika's Ring: none of the listed stamps are real
+        [31] = true,  -- Elwynn Forest (Lexicon Ring spawn)
+        [36] = true,  -- Loch Modan
+        [40] = true,  -- Westfall
+        [692] = true, -- Gnomeregan
+        [754] = true, -- Blackrock Caverns
+        [763] = true, -- Scarlet Monastery
+    },
+    [824378] = { -- Ancient Femur: Sinister Lair only (cave inside Valley of Trials)
+        [5] = true,    -- Durotar
+        [1244] = true, -- Valley of Trials
+    },
+}
+
 function LootCollector:GetCoordAuthorityZones(itemID)
     itemID = tonumber(itemID)
     if not itemID or type(self.CoordAuthority) ~= "table" then
@@ -59,6 +108,42 @@ function LootCollector:IsCoordAuthorityZoneAllowed(itemID, zoneID)
     zoneID = tonumber(zoneID)
     if not zoneID then return false end
     return zones[zoneID] ~= nil or zones[tostring(zoneID)] ~= nil
+end
+
+function LootCollector:IsItemZoneForbidden(itemID, zoneID)
+    itemID = tonumber(itemID)
+    zoneID = tonumber(zoneID)
+    if not itemID or not zoneID or type(self.ForbiddenItemZones) ~= "table" then
+        return false
+    end
+    local byItem = self.ForbiddenItemZones[itemID]
+    if not byItem and self.GetBaseItemID then
+        local base = self:GetBaseItemID(itemID)
+        if base and base ~= itemID then
+            byItem = self.ForbiddenItemZones[base]
+        end
+    end
+    if type(byItem) ~= "table" then
+        return false
+    end
+    return byItem[zoneID] == true or byItem[tostring(zoneID)] == true
+end
+
+function LootCollector:IsUntrackedWorldforged(itemID)
+    itemID = tonumber(itemID)
+    if not itemID or type(self.UntrackedItemIDs) ~= "table" then
+        return false
+    end
+    if self.UntrackedItemIDs[itemID] then
+        return true
+    end
+    if self.GetBaseItemID then
+        local base = self:GetBaseItemID(itemID)
+        if base and self.UntrackedItemIDs[base] then
+            return true
+        end
+    end
+    return false
 end
 
 function LootCollector:LockDiscoveryToCoordAuthority(rec)

@@ -2638,6 +2638,9 @@ function LootCollector:IsTrackableDiscovery(itemID, name, dt, opts)
     end
 
     if itemID > 0 then
+        if self.IsUntrackedWorldforged and self:IsUntrackedWorldforged(itemID) then
+            return false
+        end
         if self.IsWorldforgedListItem and self:IsWorldforgedListItem(itemID) then
             return true
         end
@@ -2690,7 +2693,13 @@ function LootCollector:IsStarterDBZoneAllowed(itemID, zoneID)
     itemID = tonumber(itemID)
     zoneID = tonumber(zoneID)
     if not itemID or not zoneID then return true end
+    if self.IsUntrackedWorldforged and self:IsUntrackedWorldforged(itemID) then
+        return false
+    end
     if self.IsCoordAuthorityZoneAllowed and not self:IsCoordAuthorityZoneAllowed(itemID, zoneID) then
+        return false
+    end
+    if self.IsItemZoneForbidden and self:IsItemZoneForbidden(itemID, zoneID) then
         return false
     end
     local allowed = self.StarterDBItemZones and self.StarterDBItemZones[itemID]

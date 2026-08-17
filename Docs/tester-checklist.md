@@ -102,7 +102,7 @@ If the map is empty: enable LootCollector_StarterDB, then Merge Starter. Do not 
 Reply Pass / Fail / Skip per section.
 
 1) Version / load
-Do: Open Discoveries, hover version (top-left). Check minimap tooltip. Type /lcvendor.
+Do: Open Discoveries (left click Minimap icon), observe version (top-left). Check minimap tooltip has same version. Close window Type /lcv, window reopens.
 Expect: Same build in both places. /lcvendor runs. No red Lua errors.
 
 2) Map
@@ -110,30 +110,31 @@ Do: /reload with map closed, then open the world map. Change zones with map open
 Expect: Pins appear, no endless flicker. Pins update on zone change, no long freeze. LC icon on both buttons.
 
 3) Discoveries and Filter Map
-Do: Type a name (e.g. Fenris) → Add/Enter → chip. Add a 2nd chip. Remove with X. Clear.
+Do: Type a partial name (e.g. Blackrock) → Add/Enter → chip. Add a 2nd chip (e.g. stamina). Remove with X. Clear.
 Expect: List shrinks, then returns to normal.
 Do: Set a filter → Filter Map On (gold) → check world map + minimap → Filter Map Off.
 Expect: Pins match the list while On. Pins back to normal when Off.
 
 4) Looted
 Do: Loot a tracked item (any class/weapon). Turn on hide looted. /reload.
-Expect: Pin marks looted. Hide looted hides it. Still looted after /reload on this character.
+Expect: Pin marks looted. Hide looted (map menu) hides it. Still looted after /reload on this character.
 Do: (Rexxar / Vol'jin) same character name on the other realm.
 Expect: Pins in the same places. Looted does not carry over.
 
 5) Worldforged pickup
-Do: Pick up a Worldforged from the world spawn (BoP Okay). Later loot the same item from bags or a mob.
+Do: Loot a Worldforged item and then kill a few mearby mobs, icon stays in proper spot and doesn't travel to where you killed the mob.
 Expect: Pin stays in that zone (confirmation can go up). Bag/mob loot only marks looted; pin does not move.
 
 6) Pause and arrow
-Do: /lcpause → play 1–2 min → /lcpause again. Auto-track nearest unlooted → /reload. Arrow Skip / Clear.
-Expect: Paused, then resumes. Auto-track starts again after /reload. Skip is this session only.
+Do: /lcpause → play 1–2 min → /lcpause again.
+Expect: Paused, then resumes. 
+Do: Open map, left click LC icon->Arrow->Auto-track nearest unlooted → /reload. TomTom (must have installed) Arrow shows Skip / Clear beneath it.
+Expect: Auto-track starts again after /reload. Skip points arrow to next item, clear resets this, pointing to nearest item again.
 
 7) Fade, Enchant, Vendors
-Do: Fade All / Hide / Only. Look for Enchant (between Looted and Date). Open Vendors tab.
-Expect: Fade changes the list (and map if Filter Map On). Enchant hidden on CoA (Rexxar / Vol'jin), shown on WR. Vendors tab opens. No errors.
+Do: Fade All / Hide / Only. Look for Enchant (not on CoA realm). Open Vendors tab.
+Expect: Fade changes the list (and map if Filter Map On). Enchant hidden on CoA (Rexxar / Vol'jin), shown on other realms. Vendors tab opens. No errors.
 
-Skip unless asked: share/import, Report as Gone, Mystic Scrolls, CustomImport.
 If a pin looks wrong: zone name, item name, screenshot.
 
 Send back:
