@@ -1,12 +1,11 @@
-# LootCollector 1.0.5 (No more beta!)
-
-## Features added
-
-- **Public channel on for new users** — Public sync and Auto-Pause Shield default on (5000 msgs/min). Existing profiles keep their on/off choice. A one-time Enable/Not now prompt appears if sync was off. This will ensure better pin accuracy overall.
-- **Decay and Fade** — Discoveries fade after 30 days without a sighting, go stale at 90, and are removed at 120. Report as Gone uses community votes (5 / 6 / 7). Discoveries has Fade: All / Hide / Only. Filter Map applies Fade to map, minimap, and Arrow.
-- **LC icon** — Custom LC art on the world-map filter button and the minimap button.
-- **Arrow Skip / Clear** — Skip and Clear buttons under the TomTom arrow. Skip works for auto-track and Navigate here (this session only). `/lcarrow clearskip` still clears the list.
+# LootCollector 1.0.6
 
 ## Bug fixes
 
-- **Auto-track resume** — Auto-track Nearest Unlooted starts again after `/reload` and login.
+- **Leftover map stamps** — Worldforged pins copied onto leftover/wrong maps (same item, same map fractions) merge onto the real pin on login. Looted marks move with the pin that stays.
+- **Verified coordinates** — Plains Bolter is locked to Arathi Highlands. Several Tirisfal leftover AreaID copies are locked to Tirisfal Glades. Extra-zone copies collapse onto those pins; looted marks move with them.
+- **Wrong-zone copies** — Fake stamps are removed for items that only spawn in one place (for example Kixxle’s potion in Wetlands, Morin’s Jug in Loch Modan, Bonechopper in Stranglethorn). Those pins are deleted, not merged onto a different item.
+- **Not in the game** — Supply Runner’s Pants and Scholar’s Ring of Enlightenment are untracked. Existing pins are removed and will not come back from loot, channel, or Starter DB.
+- **Worldforged upgrade tooltips** — Dung–T3 upgrade lines show again on Worldforged items when Enhanced WF Tooltip is on.
+
+Looted marks on real pins are kept. You do not need to reset data.

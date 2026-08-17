@@ -4781,6 +4781,12 @@ function Viewer:CreateWindow()
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT", 0, -2)
         GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
+Version 1.0.6:
+- Leftover map stamps merge onto the real pin on login; looted marks move with it.
+- Hand-Verified coords for multiple items that were giving multiple locations.
+- Wrong-zone copies removed (not merged onto a different item). Couple items not in the game were removed.
+- Worldforged Dung–T3 upgrade lines show again when Enhanced WF Tooltip is on.
+
 Version 1.0.5:
 - Public channel on for new users; Auto-Pause Shield at 5000 msgs/min; existing keep on/off.
 - Decay FADING/STALE/remove; Fade All/Hide/Only; Filter Map applies Fade.

@@ -211,7 +211,7 @@ The client has not cached that item yet (“Unknown Item” / ?). The addon retr
 
 ### Enhanced Worldforged tooltips do nothing?
 
-Install **AtlasLoot** with **AtlasLoot_Cache** enabled.
+Turn on **Enhanced WF Tooltip** (Settings → Viewer Setup, Map → Show, or `/lcwf`). Hover a Worldforged item. If upgrade lines show `?`, hover again — the client has not cached that item yet. AtlasLoot is not required.
 
 ---
 
