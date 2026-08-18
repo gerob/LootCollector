@@ -34,6 +34,7 @@ L.UntrackedItemIDs = {
     [500814] = true, -- Goldshire Traveler's Boots: not in game
     [500816] = true, -- Supply Runner's Pants: not in game
     [500817] = true, -- Scholar's Ring of Enlightenment: not in game
+    [521127] = true, -- not in game
 }
 L.ForbiddenItemZones = {
     [217842] = { -- Bonechopper: Stranglethorn Vale only
