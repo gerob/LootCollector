@@ -2,18 +2,38 @@
 
 ### Pin cleanup (login)
 - Leftover-xy merge: same Worldforged item, similar map fractions, different leftover maps → one pin. Looted remaps to the keep pin.
-- CoordAuthority revision **4**: Prancefin Ring 515415 → Un'Goro 202 at `0.6300, 0.6185`. Other-zone copies collapse onto the authority pin.
-- Forbidden zones (delete, do not merge onto another item): Kixxle 354149, Firewater 354292, Miru 354467, Morin 500811, Melika 500813, Travel Sack 451107 Mulgore, Bonechopper 217842, Charbite 410224, Ancient Femur 824378.
-- Untracked (all zones): Supply Runner's Pants 500816, Scholar's Ring 500817, 521127.
+- CoordAuthority revision **4** (exhaustive zones for listed IDs; other-zone copies collapse onto the authority pin):
+  - Plains Bolter `415038` Arathi 17 `0.4011, 0.3038`
+  - Prancefin Ring `515415` Un'Goro 202 `0.6300, 0.6185`
+  - Plaguebloom Spear `410154` EPL 24; Tirisfal 21 locks: `515014` `521029` `521034` `521033` `521030` `515007` `450869` `515043`
+- ForbiddenZoneRevision **1** (delete, do not merge onto another item): Kixxle `354149`, Firewater `354292`, Miru `354467`, Morin `500811`, Melika `500813`, Travel Sack `451107` Mulgore, Bonechopper `217842`, Charbite `410224`, Ancient Femur `824378`.
+- Untracked (all zones; ingest + StarterDB blocked): Goldshire Traveler's Boots `500814`, Supply Runner's Pants `500816`, Scholar's Ring `500817`, The Vanishing Strap `521127`.
+
+### Arrow / TomTom
+- Arrow stays until loot (or Skip / Hide). No proximity Hide; Crazy Arrow arrival `0` (not `1e6`).
+- LC paints heading/yards when Astrolabe distance is nil; TomTom Hide is swallowed while LC owns the pin.
+- Bags-full then later take: open loot window counts as `world_loot`; bag-count increase of the tracked item dismisses the arrow.
+- Skip / Clear under the arrow and auto-track resume after `/reload` shipped in 1.0.5 and still apply.
+
+### Map
+- World map filter is a static title-bar `UIPanelButton` labeled **LootCollector**. Parks left of shrink/expand; slides further left if Mapster is shown. Drag / unlock / Ctrl+Right-Click reset removed. Minimap button still uses the LC icon (size bump in this cycle).
+
+### Loot / Detect
+- `MarkWorldforgedItemLooted`: looting a WF marks every realm pin for that base ID on this character (class/weapon usability is not a gate).
+- Spawn pickup uses channel + BoP bind stamps; loot window staying open (bags-full) still counts as world loot.
+- Untracked IDs and forbidden item-zones reject create/restore from loot, channel, and StarterDB.
+
+### Sharing
+- Minimum compatible version gate is **1.0.0** (builds below that are untrusted and dropped). Settings lists untrusted seen versions; they cannot be checked as trusted.
+- Public channel join/leave timing: longer ready delay; leave does not fight auto-join.
 
 ### Tooltip
 - Worldforged Dung–T3 upgrade lines show again when Enhanced WF Tooltip is on (`/lcwf`). AtlasLoot is not required.
 
-### Map
-- World map filter control is a static title-bar button labeled **LootCollector** (UIPanelButton, same chrome as Mapster). Parks left of shrink/expand; slides further left if Mapster is shown. Drag/unlock/reset-position removed.
-
 ### Maintainer
 - `/lcdupnames` lists Worldforged display names with 2+ pins.
+- `/lcsetcoords [itemID]` snaps a WF pin to the player and prints a CoordAuthority row.
+- Docs: `Docs/tester-checklist.md`, `Docs/regression-checklist.md`.
 
 ## Version 1.0.5
 

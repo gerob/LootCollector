@@ -39,7 +39,7 @@ Refresh canary IDs when updating RELEASE_Notes.
 2. Search chip add/remove; Fade All / Hide / Only; hide looted.
 3. `/lcpause` / unpause; auto-track nearest unlooted resumes after `/reload`.
 4. Arrow Skip / Clear; `/lcarrow` still points at a pin.
-5. Discoveries version hover; CoA hides Enchant filter; vendors tab opens; `/lcvendor` runs.
+5. Discoveries version hover; world map title-bar **LootCollector** button (not the old circular icon); CoA hides Enchant filter; vendors tab opens; `/lcvendor` runs.
 
 Skip unless you touched that code: decay Gone votes, `/lcdecay`, `/lcwf` tooltip, MS pins, CustomImport.
 

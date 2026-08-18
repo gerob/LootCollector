@@ -30,8 +30,8 @@ If a pin looks wrong: zone name, item name, screenshot. No `/lcdiag` unless aske
 - **Do:** Keep the map open and change zones.
 - **Expect:** Pins update. No long freeze.
 
-- **Do:** Look at the world-map filter button and the minimap button.
-- **Expect:** Both use the LC icon.
+- **Do:** Look at the world-map title bar and the minimap button.
+- **Expect:** Title bar shows a **LootCollector** button (left of shrink/expand; left of Mapster if present). Minimap still uses the LC icon. The title-bar button cannot be dragged.
 
 ### 3. Discoveries and Filter Map
 
@@ -106,8 +106,8 @@ Do: Open Discoveries (left click Minimap icon), observe version (top-left). Chec
 Expect: Same build in both places. /lcvendor runs. No red Lua errors.
 
 2) Map
-Do: /reload with map closed, then open the world map. Change zones with map open. Look at map filter button + minimap button.
-Expect: Pins appear, no endless flicker. Pins update on zone change, no long freeze. LC icon on both buttons.
+Do: /reload with map closed, then open the world map. Change zones with map open. Look at the map title-bar **LootCollector** button and the minimap button.
+Expect: Pins appear, no endless flicker. Pins update on zone change, no long freeze. Title-bar LootCollector button; LC icon on minimap only.
 
 3) Discoveries and Filter Map
 Do: Type a partial name (e.g. Blackrock) → Add/Enter → chip. Add a 2nd chip (e.g. stamina). Remove with X. Clear.
@@ -128,7 +128,7 @@ Expect: Pin stays in that zone (confirmation can go up). Bag/mob loot only marks
 6) Pause and arrow
 Do: /lcpause → play 1–2 min → /lcpause again.
 Expect: Paused, then resumes. 
-Do: Open map, left click LC icon->Arrow->Auto-track nearest unlooted → /reload. TomTom (must have installed) Arrow shows Skip / Clear beneath it.
+Do: Open map, left click title-bar **LootCollector** → Arrow → Auto-track nearest unlooted → /reload. TomTom (must have installed) Arrow shows Skip / Clear beneath it. Arrow stays until loot (or Skip / Hide).
 Expect: Auto-track starts again after /reload. Skip points arrow to next item, clear resets this, pointing to nearest item again.
 
 7) Fade, Enchant, Vendors

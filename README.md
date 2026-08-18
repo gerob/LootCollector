@@ -77,7 +77,7 @@ Settings About tab with Download link
 
 1. **Open Discoveries:** `/lcv`. If the list is empty, use the on-screen prompt to merge the **Starter DB** (when `LootCollector_StarterDB` is installed), or import a string with `/lcimport`.
 2. **Open Settings:** `/lc` — turn on sharing / public sync if you want community updates (**Behavior & Sharing**).
-3. **Open the world map** — discovery pins appear when your database has entries for the current zone. Use the **LootCollector** map filter button for quick hide/show options, or enable **Filter Map** in Discoveries to apply Viewer filters to pins.
+3. **Open the world map** — discovery pins appear when your database has entries for the current zone. Use the **LootCollector** button in the map title bar (left of shrink/expand) for quick hide/show options, or enable **Filter Map** in Discoveries to apply Viewer filters to pins. The minimap button still uses the LC icon.
 4. **Optional:** Install **TomTom** for the navigation arrow (`/lcarrow`).
 
 Databases are **per realm**. An empty map on a new realm or character is normal until you merge Starter DB, import/share data, or collect discoveries in the world.
@@ -175,7 +175,7 @@ Vendors tab in the Viewer
 
 - Databases are **per realm**. Import a community string with `/lcimport`, sync via `/lcshare`, merge **Starter DB** from the Discoveries empty-state prompt, or play until discoveries (and public sync, if enabled) fill data.
 - In Discoveries, clear filters / turn off **Filter Map** if filters are hiding everything.
-- Check the map filter button: **Hide All Discoveries** or hibernation (`/lcpause`) will clear pins.
+- Check the **LootCollector** button in the world map title bar: **Hide All Discoveries** or hibernation (`/lcpause`) will clear pins.
 
 
 
