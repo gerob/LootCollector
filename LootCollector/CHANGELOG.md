@@ -2,7 +2,7 @@
 
 ### Pin cleanup (login)
 - Leftover-xy merge: same Worldforged item, similar map fractions, different leftover maps → one pin. Looted remaps to the keep pin.
-- CoordAuthority revision **3**: Plains Bolter → Arathi 17; Tirisfal leftover AreaID rows stay on zone 21. Other-zone copies collapse onto the authority pin.
+- CoordAuthority revision **4**: Prancefin Ring 515415 → Un'Goro 202 at `0.6300, 0.6185`. Other-zone copies collapse onto the authority pin.
 - Forbidden zones (delete, do not merge onto another item): Kixxle 354149, Firewater 354292, Miru 354467, Morin 500811, Melika 500813, Travel Sack 451107 Mulgore, Bonechopper 217842, Charbite 410224, Ancient Femur 824378.
 - Untracked (all zones): Supply Runner's Pants 500816, Scholar's Ring 500817, 521127.
 

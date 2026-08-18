@@ -11,10 +11,11 @@ Refresh canary IDs when updating RELEASE_Notes.
 ## A. Canaries (after every `/reload` that touched CA / leftover)
 
 1. `/lcdiag 415038` — Plains Bolter: **one** pin, Arathi 17, xy `0.4011, 0.3038` (CA).
-2. `/lcdiag 450983` — Apprentice Staff: **multiple** starter pins still present (1244, 1240, and the rest). Not collapsed.
-3. `/lcdiag 515323` — Bottled Oozeling: still tracked; do not untrack.
-4. Map open in Arathi: Bolter pin on the Arathi map, not Dun Morogh.
-5. No Lua error on login; leftover-collapse chat only for true leftover-xy, not starter-family wipes.
+2. `/lcdiag 515415` — Prancefin Ring: **one** pin, Un'Goro 202, xy `0.6300, 0.6185` Up in a tree after jump puzzle.
+3. `/lcdiag 450983` — Apprentice Staff: **multiple** starter pins still present (1244, 1240, and the rest). Not collapsed.
+4. `/lcdiag 515323` — Bottled Oozeling: still tracked; do not untrack.
+5. Map open in Arathi: Bolter pin on the Arathi map, not Dun Morogh.
+6. No Lua error on login; leftover-collapse chat only for true leftover-xy, not starter-family wipes.
 
 ## B. Login / authority (hot)
 

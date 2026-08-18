@@ -11,7 +11,7 @@
 
 local L = LootCollector
 
-L.CoordAuthorityRevision = 3
+L.CoordAuthorityRevision = 4
 L.CoordAuthority = {
     [410154] = { [24] = { c = 2, x = 0.6156, y = 0.6831 } }, -- Plaguebloom Spear, Eastern Plaguelands
     [415038] = { [17] = { c = 2, x = 0.4011, y = 0.3038 } }, -- Plains Bolter, Arathi Highlands
@@ -23,6 +23,7 @@ L.CoordAuthority = {
     [515007] = { [21] = { c = 2, x = 0.5318, y = 0.5779 } }, -- Old Wagon Wheel, Tirisfal Glades
     [450869] = { [21] = { c = 2, x = 0.5982, y = 0.4809 } }, -- Ulag's Cleaver, Tirisfal Glades
     [515043] = { [21] = { c = 2, x = 0.3500, y = 0.4343 } }, -- Waterlogged Sparkler, Tirisfal Glades
+    [515415] = { [202] = { c = 1, x = 0.6300, y = 0.6185 } }, -- Prancefin Ring, Un'Goro Crater
 }
 
 -- Item must not exist in this zone. Delete the pin; do not merge onto
