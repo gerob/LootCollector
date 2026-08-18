@@ -9,6 +9,9 @@
 ### Tooltip
 - Worldforged Dung–T3 upgrade lines show again when Enhanced WF Tooltip is on (`/lcwf`). AtlasLoot is not required.
 
+### Map
+- World map filter control is a static title-bar button labeled **LootCollector** (UIPanelButton, same chrome as Mapster). Parks left of shrink/expand; slides further left if Mapster is shown. Drag/unlock/reset-position removed.
+
 ### Maintainer
 - `/lcdupnames` lists Worldforged display names with 2+ pins.
 

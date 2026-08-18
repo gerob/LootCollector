@@ -4788,6 +4788,7 @@ Version 1.0.6:
 - Not in the game — Supply Runner’s Pants, Scholar’s Ring of Enlightenment, and The Vanishing Strap are untracked. Existing pins are removed and will not come back from loot, channel, or Starter DB.
 - Worldforged upgrade tooltips — Dung–T3 upgrade lines show again on Worldforged items when Enhanced WF Tooltip is on.
 - TomTom Arrow — Arrow clears on item loot correctly. No longer disappears randomly.
+- Map filter button — LootCollector sits in the world map title bar now, makes it easier to find as it was floating around. Will play nice with map addon buttons like Mapster.
 - Looted marks on real pins are kept. You do not need to reset any data.
 
 Version 1.0.5:

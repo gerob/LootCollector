@@ -1931,20 +1931,24 @@ local function BuildFilterEasyMenu()
   return menu
 end
 
--- Resolve a stable World Map chrome control (not Magnify/Mapster canvas).
--- Avoid WorldMapTrackQuest itself: that is only the checkbox, and anchoring
--- to its RIGHT covers the "Track Quest" label.
+local function ShownChromeButton(name)
+  local f = _G[name]
+  if f and f.IsShown and f:IsShown() then return f end
+end
+
+-- Right-hand neighbor in the title bar. Slide left of Mapster (or size/close)
+-- so LC never sits on top of another chrome button.
 local function GetFilterButtonChromeAnchor()
-  -- Mapster title button (optional): place to its LEFT on the top bar.
   local mapsterCandidates = {
+    "MapsterOptionsButton",
     "MapsterButton",
     "MapsterWorldMapButton",
     "MapsterToggle",
   }
-  for _, anchorName in ipairs(mapsterCandidates) do
-    local anchorFrame = _G[anchorName]
-    if anchorFrame and anchorFrame:IsShown() then
-      return anchorFrame, "RIGHT", "LEFT", -5, 0
+  for _, name in ipairs(mapsterCandidates) do
+    local anchorFrame = ShownChromeButton(name)
+    if anchorFrame and anchorFrame ~= FilterButton then
+      return anchorFrame, "RIGHT", "LEFT", -2, 0
     end
   end
   if WorldMapFrame then
@@ -1953,69 +1957,73 @@ local function GetFilterButtonChromeAnchor()
       local child = select(i, WorldMapFrame:GetChildren())
       if not child then break end
       i = i + 1
-      if child:IsObjectType("Button") and child:IsShown() and child.GetText then
+      if child ~= FilterButton and child:IsObjectType("Button") and child:IsShown() and child.GetText then
         local text = child:GetText()
         if text and text:find("Mapster") then
-          return child, "RIGHT", "LEFT", -5, 0
+          return child, "RIGHT", "LEFT", -2, 0
         end
       end
     end
   end
 
-  -- Bottom-right chrome: sit just left of the close/corner area, clear of
-  -- Track Quest (bottom-left) and to the right of Quest Objectives / Blobs.
-  -- Returned as WorldMapFrame + offsets via PlaceFilterButton fallbacks.
-  return nil, nil, nil, nil, nil
+  local sizeBtn = ShownChromeButton("WorldMapFrameSizeDownButton")
+      or ShownChromeButton("WorldMapFrameSizeUpButton")
+  if sizeBtn then
+    return sizeBtn, "RIGHT", "LEFT", -2, 0
+  end
+  local closeBtn = ShownChromeButton("WorldMapFrameCloseButton")
+  if closeBtn then
+    return closeBtn, "RIGHT", "LEFT", -2, 0
+  end
+  if _G.WorldMapPositioningGuide then
+    return WorldMapPositioningGuide, "TOPRIGHT", "TOPRIGHT", -43, -2
+  end
+  return WorldMapFrame, "TOPRIGHT", "TOPRIGHT", -43, -2
+end
+
+local function FilterButtonChromeKey()
+  local mapster = ShownChromeButton("MapsterOptionsButton")
+      or ShownChromeButton("MapsterButton")
+  local size = ShownChromeButton("WorldMapFrameSizeDownButton") and "d"
+      or (ShownChromeButton("WorldMapFrameSizeUpButton") and "u")
+      or "n"
+  return (mapster and "m1" or "m0") .. size
 end
 
 local function PlaceFilterButton(btn)
-  if not btn or btn.isDragging then return end
-  if not WorldMapFrame then return end
-
-  if L.db and L.db.profile and L.db.profile.mapFilters
-      and L.db.profile.mapFilters.filterButtonDragged
-      and L.db.profile.mapFilters.filterButtonPos then
-    local pos = L.db.profile.mapFilters.filterButtonPos
-    btn:ClearAllPoints()
-    btn:SetPoint(pos.point or "TOPLEFT", WorldMapFrame, pos.relPoint or "TOPLEFT", pos.x or 0, pos.y or 0)
-    return
-  end
-
+  if not btn or not WorldMapFrame then return end
   btn:ClearAllPoints()
   local anchor, myPoint, relPoint, x, y = GetFilterButtonChromeAnchor()
   if anchor then
     btn:SetPoint(myPoint, anchor, relPoint, x, y)
-    return
   end
-  -- Default: bottom-right map chrome bar (does not overlap Track Quest).
-  btn:SetPoint("BOTTOMRIGHT", WorldMapFrame, "BOTTOMRIGHT", -18, 10)
 end
 
 function Map:EnsureFilterUI()
   if not WorldMapFrame then return end
   if L.db and L.db.profile and L.db.profile.mapFilters then
-    -- One-shot clear of Magnify-skewed / old canvas-relative drag coords.
-    if not L.db.profile.mapFilters.filterButtonReset_104r then
+    if not L.db.profile.mapFilters.filterButtonReset_106 then
       L.db.profile.mapFilters.filterButtonPos = nil
       L.db.profile.mapFilters.filterButtonDragged = false
-      L.db.profile.mapFilters.filterButtonReset_104r = true
-    end
-    if not L.db.profile.mapFilters.filterButtonReset_087r then
-      L.db.profile.mapFilters.filterButtonPos = nil
-      L.db.profile.mapFilters.filterButtonDragged = false
-      L.db.profile.mapFilters.filterButtonReset_087r = true
+      L.db.profile.mapFilters.filterButtonLocked = true
+      L.db.profile.mapFilters.filterButtonReset_106 = true
     end
   end
   if not FilterButton then
-    -- Parent to WorldMapFrame chrome so Magnify canvas zoom does not move us.
-    FilterButton = CreateFrame("Button", "LootCollectorFilterButton", WorldMapFrame)
-    FilterButton:SetSize(31, 31)
+    -- Mapster-style title-bar button. Parent WorldMapFrame so Magnify
+    -- canvas zoom does not move us.
+    FilterButton = CreateFrame("Button", "LootCollectorFilterButton", WorldMapFrame, "UIPanelButtonTemplate")
+    FilterButton:SetHeight(18)
+    FilterButton:SetText("LootCollector")
+    local fs = FilterButton.GetFontString and FilterButton:GetFontString()
+    local textW = fs and fs.GetStringWidth and fs:GetStringWidth() or 90
+    FilterButton:SetWidth(math.max(110, (textW or 90) + 24))
     FilterButton:SetFrameStrata(WorldMapFrame:GetFrameStrata() or "FULLSCREEN_DIALOG")
     FilterButton:SetFrameLevel((WorldMapFrame:GetFrameLevel() or 1) + 50)
     FilterButton:EnableMouse(true)
+    FilterButton:SetMovable(false)
     FilterButton:Hide()
 
-    -- Show/hide with the map only — no canvas scale chasing.
     local poller = CreateFrame("Frame", nil, WorldMapFrame)
     poller.lastVisible = nil
     poller.lastChromeKey = nil
@@ -2036,169 +2044,43 @@ function Map:EnsureFilterUI()
                     LootCollectorViewerWindow:SetFrameLevel(50)
                 end
             end
-        elseif isVisible and not FilterButton.isDragging then
-            -- No chrome-key reanchor needed for fixed BOTTOMRIGHT default;
-            -- Mapster presence can change after map open — recheck lightly.
-            local dragged = L.db and L.db.profile and L.db.profile.mapFilters
-                and L.db.profile.mapFilters.filterButtonDragged
-            if not dragged then
-                local hasMapster = false
-                if _G.MapsterButton and _G.MapsterButton:IsShown() then
-                    hasMapster = true
-                end
-                local chromeKey = hasMapster and "m1" or "m0"
-                if self.lastChromeKey ~= chromeKey then
-                    self.lastChromeKey = chromeKey
-                    PlaceFilterButton(FilterButton)
-                end
+        elseif isVisible then
+            local chromeKey = FilterButtonChromeKey()
+            if self.lastChromeKey ~= chromeKey then
+                self.lastChromeKey = chromeKey
+                PlaceFilterButton(FilterButton)
             end
         end
     end)
-    
-    FilterButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
-    FilterButton:SetPushedTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Down")
-    
-    local icon = FilterButton:CreateTexture(nil, "ARTWORK")
-    icon:SetWidth(20)
-    icon:SetHeight(20)
-    icon:SetPoint("CENTER", FilterButton, "CENTER", 2, 0)
-    icon:SetTexture("Interface\\AddOns\\LootCollector\\media\\LCicon.tga")
-    icon:SetTexCoord(0, 1, 0, 1)
-    icon:SetVertexColor(1, 1, 1, 1)
-    FilterButton.icon = icon
-    
-    local border = FilterButton:CreateTexture(nil, "OVERLAY")
-    border:SetSize(53, 53)
-    border:SetPoint("TOPLEFT", FilterButton, "TOPLEFT", 1, -1)
-    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-    FilterButton.border = border
-    
-    FilterButton:SetMovable(true)
-    FilterButton:RegisterForDrag("LeftButton")
-    FilterButton:SetScript("OnDragStart", function(self)
-        if L.db and L.db.profile and L.db.profile.mapFilters then
-            if L.db.profile.mapFilters.filterButtonLocked == nil then
-                L.db.profile.mapFilters.filterButtonLocked = true
-            end
-            if not L.db.profile.mapFilters.filterButtonLocked then
-                self.isDragging = true
-                self:StartMoving()
-            end
-        end
-    end)
-    FilterButton:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        self.isDragging = false
-        
-        if L.db and L.db.profile and WorldMapFrame then
-            local selfScale = self:GetEffectiveScale() or 1
-            local mapScale = WorldMapFrame:GetEffectiveScale() or 1
-            local selfLeft = self:GetLeft() or 0
-            local selfTop = self:GetTop() or 0
-            local mapLeft = WorldMapFrame:GetLeft() or 0
-            local mapTop = WorldMapFrame:GetTop() or 0
-            
-            local xOfs = (selfLeft * selfScale - mapLeft * mapScale) / selfScale
-            local yOfs = (selfTop * selfScale - mapTop * mapScale) / selfScale
-            
-            L.db.profile.mapFilters = L.db.profile.mapFilters or {}
-            L.db.profile.mapFilters.filterButtonPos = {
-                point = "TOPLEFT",
-                relPoint = "TOPLEFT",
-                x = xOfs,
-                y = yOfs
-            }
-            L.db.profile.mapFilters.filterButtonDragged = true
-        end
-    end)
-    
+
     FilterButton:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("LootCollector Filters")
         GameTooltip:AddLine("Left-Click to open menu", 1, 1, 1)
-        
-        local locked = true
-        local dragged = false
-        if L.db and L.db.profile and L.db.profile.mapFilters then
-            if L.db.profile.mapFilters.filterButtonLocked == nil then
-                L.db.profile.mapFilters.filterButtonLocked = true
-            end
-            locked = L.db.profile.mapFilters.filterButtonLocked
-            dragged = L.db.profile.mapFilters.filterButtonDragged
-        end
-        
-        if locked then
-            GameTooltip:AddLine("Right-Click to unlock & move", 0.7, 0.7, 1)
-        else
-            GameTooltip:AddLine("Drag to move |cff00ff00[Unlocked]|r", 0.7, 1, 0.7)
-            GameTooltip:AddLine("Right-Click to lock", 0.7, 0.7, 1)
-        end
-        
-        if dragged then
-            GameTooltip:AddLine("Ctrl + Right-Click to reset to default", 0.7, 0.7, 1)
-        end
-        
         GameTooltip:Show()
-        GameTooltip:SetFrameStrata("TOOLTIP") 
+        GameTooltip:SetFrameStrata("TOOLTIP")
     end)
     FilterButton:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
- 
-    FilterButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+    FilterButton:RegisterForClicks("LeftButtonUp")
     PlaceFilterButton(FilterButton)
-    
-    
+
     FilterButton:SetScript("OnClick", function(self, button)
-        if button == "RightButton" then
-            if L.db and L.db.profile and L.db.profile.mapFilters then
-                if IsControlKeyDown() then
-                    L.db.profile.mapFilters.filterButtonPos = nil
-                    L.db.profile.mapFilters.filterButtonDragged = false
-                    L.db.profile.mapFilters.filterButtonLocked = true
-                    PlaySound("igMainMenuOptionCheckBoxOn")
-                    print("|cffff7f00LootCollector:|r Map button position reset to default and locked.")
-                    PlaceFilterButton(self)
-                    if GetMouseFocus() == self then
-                        self:GetScript("OnEnter")(self)
-                    end
-                    return
-                end
-
-                if L.db.profile.mapFilters.filterButtonLocked == nil then
-                    L.db.profile.mapFilters.filterButtonLocked = true
-                end
-                L.db.profile.mapFilters.filterButtonLocked = not L.db.profile.mapFilters.filterButtonLocked
-                
-                if L.db.profile.mapFilters.filterButtonLocked then
-                    PlaySound("igMainMenuOptionCheckBoxOn")
-                    print("|cffff7f00LootCollector:|r Map button locked.")
-                else
-                    PlaySound("igMainMenuOptionCheckBoxOff")
-                    print("|cffff7f00LootCollector:|r Map button unlocked. Drag it anywhere!")
-                end
-                
-                if GetMouseFocus() == self then
-                    self:GetScript("OnEnter")(self)
-                end
-            end
-            return
-        end
-
         local dropdown = _G["DropDownList1"]
-        
-        
+
         if dropdown and dropdown:IsShown() and FilterMenuHost and FilterMenuHost:IsShown() then
             HideDropDownMenu(1)
             return
         end
 
         local menu = BuildFilterEasyMenu()
-        
+
         local btnTop = self:GetTop() or 0
         local screenHeight = UIParent:GetHeight() or 768
         local spaceAbove = screenHeight - btnTop
-        
+
         local estimatedMenuHeight = #menu * 20
-        
+
         if spaceAbove > estimatedMenuHeight then
             EasyMenu(menu, FilterMenuHost, self, 0, 0, "MENU", 2)
             if dropdown then
@@ -2213,7 +2095,7 @@ function Map:EnsureFilterUI()
             end
         end
     end)
-    
+
     FilterButton:SetScript("OnShow", function(self) PlaceFilterButton(self) end)
   else
     PlaceFilterButton(FilterButton)
@@ -2221,19 +2103,8 @@ function Map:EnsureFilterUI()
 end
 
 function Map:ResetFilterButtonPosition()
-	if L.db and L.db.profile and L.db.profile.mapFilters then
-		L.db.profile.mapFilters.filterButtonPos = nil
-		L.db.profile.mapFilters.filterButtonDragged = false
-		L.db.profile.mapFilters.filterButtonLocked = true
-		if FilterButton then
-			PlaceFilterButton(FilterButton)
-			if FilterButton.SetUserPlaced then
-				FilterButton:SetUserPlaced(false)
-			end
-			print("|cffff7f00LootCollector:|r Map button position has been reset to default and locked.")
-		else
-			print("|cffff7f00LootCollector:|r Map button position reset to default. Open map to see it.")
-		end
+	if FilterButton then
+		PlaceFilterButton(FilterButton)
 	end
 end
 
