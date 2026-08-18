@@ -31,6 +31,7 @@ L.CoordAuthority = {
 -- Apply runs every login (DISC can reintroduce the pin).
 L.ForbiddenZoneRevision = 1
 L.UntrackedItemIDs = {
+    [500814] = true, -- Goldshire Traveler's Boots: not in game
     [500816] = true, -- Supply Runner's Pants: not in game
     [500817] = true, -- Scholar's Ring of Enlightenment: not in game
 }
@@ -67,6 +68,9 @@ L.ForbiddenItemZones = {
         [692] = true, -- Gnomeregan
         [754] = true, -- Blackrock Caverns
         [763] = true, -- Scarlet Monastery
+    },
+    [500819] = { -- Tome of Second Chances: not in Elwynn; Redridge Mountains stays
+        [31] = true,  -- Elwynn Forest
     },
     [824378] = { -- Ancient Femur: Sinister Lair only (cave inside Valley of Trials)
         [5] = true,    -- Durotar

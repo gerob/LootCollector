@@ -796,27 +796,36 @@ function Map:GetPlayerLocation()
         return cache.c, cache.mapID, cache.px, cache.py
     else
         
-        local sc, sz, sdl = SaveMapState()
-        
-        
-        Map:UnregisterEvent("WORLD_MAP_UPDATE")
-        
-        if SetMapToCurrentZone then SetMapToCurrentZone() end
+        -- Prefer a no-swap read. SetMapToCurrentZone every minimap tick while
+        -- moving makes TomTom/Astrolabe drop the Crazy Arrow.
+        local px, py = GetPlayerMapPosition("player")
         local c = GetCurrentMapContinent()
         local mapID = GetCurrentMapAreaID()
-        local px, py = GetPlayerMapPosition("player")
-        
+        if c and mapID and px and py and (px > 0 or py > 0) then
+            cache.c = c
+            cache.mapID = mapID
+            cache.px = px
+            cache.py = py
+            return cache.c, cache.mapID, cache.px, cache.py
+        end
+
+        Map:UnregisterEvent("WORLD_MAP_UPDATE")
+        if SetMapToCurrentZone then SetMapToCurrentZone() end
+        c = GetCurrentMapContinent()
+        mapID = GetCurrentMapAreaID()
+        px, py = GetPlayerMapPosition("player")
+
         if c and mapID and px and py and (px > 0 or py > 0) then
             cache.c = c
             cache.mapID = mapID
             cache.px = px
             cache.py = py
         end
-        
-        RestoreMapState(sc, sz, sdl)
-        
+
+        -- World map is closed: leave the map on the player zone. Restoring a
+        -- saved GetCurrentMapZone index flaps on subzones and hides TomTom.
         Map:BindWorldMapUpdate()
-        
+
         return cache.c, cache.mapID, cache.px, cache.py
     end
 end

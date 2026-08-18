@@ -659,6 +659,8 @@ local function classifySource(ctx, now)
   if _G.C_MysticEnchant and _G.C_MysticEnchant.HasNearbyMysticAltar and _G.C_MysticEnchant.HasNearbyMysticAltar() then return "mystic_altar" end
   if ctx.lastBuybackAt and (now - ctx.lastBuybackAt <= 3) then return "vendor_buyback" end
   if ctx.lastMerchantAt and (now - ctx.lastMerchantAt <= 5) then return "vendor" end
+  -- Bags-full: window stays open while the player frees a slot, often >5s.
+  if Detect._lootWindowOpen then return "world_loot" end
   if ctx.lastLootOpenedAt and (now - ctx.lastLootOpenedAt <= 5) then return "world_loot" end
   if ctx.lastGossipAt and (now - ctx.lastGossipAt <= 5) then return "npc_gossip" end
   if ctx.lastEmoteAt and (now - ctx.lastEmoteAt <= 5) then return "emote_event" end
@@ -749,7 +751,8 @@ function Detect:OnChatMsgLoot(_, msg)
         return 
     end
 
-    if src == "world_loot" and (nowTime - lastLootContext.openedAt) > LOOT_VALIDITY_WINDOW then 
+    if src == "world_loot" and not self._lootWindowOpen
+        and (nowTime - lastLootContext.openedAt) > LOOT_VALIDITY_WINDOW then 
         L._ddebug("Detect", "Dropped: world_loot timeframe expired (Window closed).")
         if pTime then L:ProfileStop("Detect:OnChatMsgLoot", pTime) end 
         return 
@@ -963,8 +966,9 @@ local function ProcessDirtyBags()
     end
     
     -- Session clock must match _expectingItemUntil (set via GetTime()).
+    -- Keep scanning while the loot window is open (bags-full, then a later take).
     local nowSession = GetTime()
-    if nowSession > Detect._expectingItemUntil then
+    if nowSession > Detect._expectingItemUntil and not Detect._lootWindowOpen then
         wipe(Detect._dirtyBags)
         if pTime then L:ProfileStop("Detect:ProcessDirtyBags", pTime) end 
         return
@@ -1025,6 +1029,14 @@ local function ProcessDirtyBags()
                             if L.MarkWorldforgedItemLooted then
                                 L:MarkWorldforgedItemLooted(itemID)
                             end
+                            L:SendMessage(
+                                "LOOTCOLLECTOR_PLAYER_LOOTED_ITEM",
+                                itemID,
+                                lastLootContext.c,
+                                lastLootContext.z,
+                                lastLootContext.x,
+                                lastLootContext.y
+                            )
                         else
                             Detect:ProcessPotentialDiscovery(link, "bag_update", UnitName("player"))
                         end

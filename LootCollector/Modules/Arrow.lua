@@ -2,7 +2,9 @@ local L = LootCollector
 local Arrow = L:NewModule("Arrow", "AceEvent-3.0")
 
 local UPDATE_INTERVAL = 2.0
-local ARRIVAL_DISTANCE_YARDS = 15 
+-- 0 = never switch to TomTom's down graphic. Arrow stays directional until
+-- loot (Hide if auto-track off, next pin if on). Do not use 1e6 (always down).
+local CRAZY_ARROW_ARRIVAL_YARDS = 0
 local LOOT_DISTANCE_THRESHOLD_SQ = (0.01 * 0.01) 
 
 local Arrow_updateFrame = nil
@@ -74,11 +76,40 @@ end
 
 local function IsTomTomAvailable() return _G.TomTomAddZWaypoint or (_G.TomTom and _G.TomTom.AddZWaypoint) end
 
+local function EmptyTomTomCallbacks()
+    return { minimap = {}, world = {}, distance = {} }
+end
+
+local function StripTomTomDistanceCallbacks(uid)
+    if type(uid) ~= "table" then return end
+    if uid.dlist then wipe(uid.dlist) end
+    if uid.callbacks and uid.callbacks.distance then wipe(uid.callbacks.distance) end
+end
+
 local function TT_AddZWaypoint(c, z, x, y, desc)
     if not IsTomTomAvailable() then return end
     x, y = (x or 0) * 100, (y or 0) * 100
-    if _G.TomTom and _G.TomTom.AddZWaypoint then return TomTom:AddZWaypoint(c, z, x, y, desc, false, false, true, nil, true, false)
-    elseif _G.TomTomAddZWaypoint then return TomTomAddZWaypoint(c, z, x, y, desc, false, false, true, nil, true, false) end
+
+    -- AddZWaypoint always stamps profile.persistence.cleardistance onto the
+    -- callback table (default 10yd -> RemoveWaypoint). Force 0 for this pin.
+    local persist = (_G.TomTom and TomTom.profile and TomTom.profile.persistence)
+        or (_G.TomTom and TomTom.db and TomTom.db.profile and TomTom.db.profile.persistence)
+    local oldClear = persist and persist.cleardistance
+    if persist then persist.cleardistance = 0 end
+
+    local uid
+    local ok = pcall(function()
+        if _G.TomTom and _G.TomTom.AddZWaypoint then
+            uid = TomTom:AddZWaypoint(c, z, x, y, desc, false, false, true, EmptyTomTomCallbacks(), true, false)
+        elseif _G.TomTomAddZWaypoint then
+            uid = TomTomAddZWaypoint(c, z, x, y, desc, false, false, true, EmptyTomTomCallbacks(), true, false)
+        end
+    end)
+
+    if persist then persist.cleardistance = oldClear end
+    if not ok then return nil end
+    StripTomTomDistanceCallbacks(uid)
+    return uid
 end
 
 local function TT_RemoveWaypoint(uid)
@@ -89,8 +120,18 @@ end
 
 local function TT_SetCrazyArrow(uid, title)
     if not IsTomTomAvailable() then return end
-    if _G.TomTom and _G.TomTom.SetCrazyArrow then TomTom:SetCrazyArrow(uid, ARRIVAL_DISTANCE_YARDS, title)
-    elseif _G.TomTomSetCrazyArrow then TomTomSetCrazyArrow(uid, ARRIVAL_DISTANCE_YARDS, title) end
+    if _G.TomTom and _G.TomTom.SetCrazyArrow then TomTom:SetCrazyArrow(uid, CRAZY_ARROW_ARRIVAL_YARDS, title)
+    elseif _G.TomTomSetCrazyArrow then TomTomSetCrazyArrow(uid, CRAZY_ARROW_ARRIVAL_YARDS, title) end
+end
+
+local function WaypointTitle(d)
+    return (d and d.il and d.il:match("%[(.+)%]")) or "Discovery"
+end
+
+local function ValidPlayerMapPos(px, py)
+    if not px or not py then return nil, nil end
+    if px == 0 and py == 0 then return nil, nil end
+    return px, py
 end
 
 local function TT_ClearCrazyArrow()
@@ -105,40 +146,179 @@ local function TT_GetDistanceToWaypoint(uid)
     elseif _G.TomTomGetDistanceToWaypoint then return TomTomGetDistanceToWaypoint(uid) end
 end
 
-local function SaveMapState() 
-    return GetCurrentMapContinent and GetCurrentMapContinent() or 0, 
-           GetCurrentMapZone and GetCurrentMapZone() or 0, 
-           GetCurrentMapDungeonLevel and GetCurrentMapDungeonLevel() or 0 
+-- TomTom Crazy Arrow OnUpdate Hide()s when Astrolabe returns nil distance
+-- (subzone / map-index flap). Swallowing Hide kept the frame visible but
+-- froze heading and yards. While LC owns the pin, paint from LC distance.
+local TWOPI = math.pi * 2
+local lcPaintLastDist, lcPaintSpeed, lcPaintTta = 0, 0, 0
+
+local function ArrowOwnsCrazyArrow()
+    if Arrow._allowCrazyHide then return false end
+    if not Arrow.enabled or not Arrow.tomtomUID then return false end
+    if not (Arrow.manualTarget or Arrow.currentTarget) then return false end
+    if IsInInstance and IsInInstance() then return false end
+    return true
 end
 
-local function RestoreMapState(c,z,dl) 
-    if SetMapZoom and c and z then SetMapZoom(c,z) end
-    if SetDungeonMapLevel and dl then SetDungeonMapLevel(dl) end 
+local function RefreshPlayerMapIfClosed()
+    if WorldMapFrame and WorldMapFrame:IsVisible() then return end
+    if not SetMapToCurrentZone then return end
+    local now = GetTime and GetTime() or 0
+    if now - (Arrow._lastMapFix or 0) < 0.5 then return end
+    Arrow._lastMapFix = now
+    SetMapToCurrentZone()
+end
+
+local function PaintLCCrazyArrow(self, elapsed)
+    local target = Arrow.manualTarget or Arrow.currentTarget
+    if not target or not target.xy then return false end
+
+    local px, py, pc, pz = Arrow:GetPlayerSnapshot()
+    if not px then
+        RefreshPlayerMapIfClosed()
+        px, py, pc, pz = Arrow:GetPlayerSnapshot()
+    end
+    if not px then return false end
+
+    local dist, xDelta, yDelta = L:ComputeDistance(
+        pc, pz, px, py,
+        target.c, target.z, target.xy.x or 0, target.xy.y or 0
+    )
+    if not dist then
+        RefreshPlayerMapIfClosed()
+        px, py, pc, pz = Arrow:GetPlayerSnapshot()
+        if px then
+            dist, xDelta, yDelta = L:ComputeDistance(
+                pc, pz, px, py,
+                target.c, target.z, target.xy.x or 0, target.xy.y or 0
+            )
+        end
+    end
+    if not dist or not xDelta then return false end
+
+    if not self:IsShown() then self:Show() end
+    if self.status then
+        self.status:SetText(string.format("%d yards", dist))
+    end
+
+    local arrow = self.arrow
+    if arrow then
+        -- Astrolabe-0.4 GetDirectionToIcon, then TomTom subtracts facing.
+        local dir = math.atan2(xDelta, -(yDelta))
+        if dir > 0 then
+            dir = TWOPI - dir
+        else
+            dir = -dir
+        end
+        local facing = (GetPlayerFacing and GetPlayerFacing()) or 0
+        local angle = dir - facing
+        local cell = math.floor(angle / TWOPI * 108 + 0.5) % 108
+        if cell < 0 then cell = cell + 108 end
+        local column = cell % 9
+        local row = math.floor(cell / 9)
+        arrow:SetHeight(56)
+        arrow:SetWidth(42)
+        arrow:SetTexture("Interface\\AddOns\\TomTom\\Images\\Arrow")
+        arrow:SetTexCoord(
+            (column * 56) / 512, ((column + 1) * 56) / 512,
+            (row * 42) / 512, ((row + 1) * 42) / 512
+        )
+        local db = _G.TomTom and TomTom.db and TomTom.db.profile and TomTom.db.profile.arrow
+        if db and db.goodcolor then
+            arrow:SetVertexColor(unpack(db.goodcolor))
+        end
+    end
+
+    lcPaintTta = lcPaintTta + (elapsed or 0)
+    if self.tta and lcPaintTta >= 1.0 then
+        local currentSpeed = (lcPaintLastDist - dist) / lcPaintTta
+        if lcPaintLastDist == 0 then currentSpeed = 0 end
+        lcPaintSpeed = currentSpeed
+        if lcPaintSpeed > 0 then
+            local eta = math.abs(dist / lcPaintSpeed)
+            self.tta:SetFormattedText("%01d:%02d", eta / 60, eta % 60)
+        else
+            self.tta:SetText("***")
+        end
+        lcPaintLastDist = dist
+        lcPaintTta = 0
+    end
+    return true
+end
+
+local function HookCrazyArrowKeepAlive()
+    local crazy = _G.TomTomCrazyArrow
+    if not crazy then return end
+
+    if not crazy._lcKeepVisible then
+        crazy._lcKeepVisible = true
+        local origHide = crazy.Hide
+        crazy.Hide = function(self)
+            if ArrowOwnsCrazyArrow() then
+                return
+            end
+            return origHide(self)
+        end
+    end
+
+    if crazy._lcOnUpdateWrapped then return end
+    local origOnUpdate = crazy:GetScript("OnUpdate")
+    if not origOnUpdate then return end
+    crazy._lcOnUpdateWrapped = true
+    crazy:SetScript("OnUpdate", function(self, elapsed)
+        if ArrowOwnsCrazyArrow() then
+            if not PaintLCCrazyArrow(self, elapsed) then
+                -- Keep last heading/yards; TomTom's OnUpdate would freeze here.
+                if not self:IsShown() then self:Show() end
+            end
+            return
+        end
+        origOnUpdate(self, elapsed)
+    end)
+end
+
+local function SaveMapState()
+    if WorldMapFrame and WorldMapFrame:IsVisible() then
+        return GetCurrentMapContinent and GetCurrentMapContinent() or 0,
+               GetCurrentMapZone and GetCurrentMapZone() or 0,
+               GetCurrentMapDungeonLevel and GetCurrentMapDungeonLevel() or 0
+    end
+    return nil, nil, nil
+end
+
+local function RestoreMapState(c,z,dl)
+    if c and z and SetMapZoom then SetMapZoom(c,z) end
+    if dl and SetDungeonMapLevel then SetDungeonMapLevel(dl) end
+end
+
+-- One read, no Restore when the world map is closed. Reuses Map's cache so
+-- Arrow does not SetMapToCurrentZone on top of the minimap ticker.
+function Arrow:GetPlayerSnapshot()
+    local Map = L:GetModule("Map", true)
+    if Map and Map.GetPlayerLocation then
+        local c, mapID, px, py = Map:GetPlayerLocation()
+        px, py = ValidPlayerMapPos(px, py)
+        return px, py, c, mapID
+    end
+    if WorldMapFrame and WorldMapFrame:IsVisible() then
+        local px, py = ValidPlayerMapPos(GetPlayerMapPosition("player"))
+        return px, py, GetCurrentMapContinent and GetCurrentMapContinent() or 0,
+            GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
+    end
+    if SetMapToCurrentZone then SetMapToCurrentZone() end
+    local px, py = ValidPlayerMapPos(GetPlayerMapPosition("player"))
+    return px, py, GetCurrentMapContinent and GetCurrentMapContinent() or 0,
+        GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
 end
 
 function Arrow:GetPlayerPos()
-    if WorldMapFrame and WorldMapFrame:IsVisible() then
-        return GetPlayerMapPosition("player")
-    else
-        local sc,sz,sdl = SaveMapState()
-        if SetMapToCurrentZone then SetMapToCurrentZone() end 
-        local px,py = GetPlayerMapPosition("player")
-        RestoreMapState(sc,sz,sdl) 
-        return px, py
-    end
+    local px, py = self:GetPlayerSnapshot()
+    return px, py
 end
 
 function Arrow:GetPlayerLocation()
-    if WorldMapFrame and WorldMapFrame:IsVisible() then
-        return GetCurrentMapContinent(), GetCurrentMapAreaID()
-    else
-        local sc, sz, sdl = SaveMapState()
-        if SetMapToCurrentZone then SetMapToCurrentZone() end 
-        local c = GetCurrentMapContinent and GetCurrentMapContinent() or 0
-        local mapID = GetCurrentMapAreaID and GetCurrentMapAreaID() or 0
-        RestoreMapState(sc,sz,sdl) 
-        return c, mapID
-    end
+    local _, _, c, mapID = self:GetPlayerSnapshot()
+    return c, mapID
 end
 
 function Arrow:ClearSessionSkipList()
@@ -168,11 +348,10 @@ function Arrow:SkipNearest()
     self.sessionSkipList[guid] = true
     print(string.format("|cff00ff00LootCollector:|r Skipped tracking of: %s", target.il or "discovery"))
 
+    -- Leave currentTarget set so UpdateArrow can pick the next pin before
+    -- replacing the waypoint (avoids a blank Crazy Arrow / Skip bar).
     if self.manualTarget and self.manualTarget.g == guid then
         self.manualTarget = nil
-    end
-    if self.currentTarget and self.currentTarget.g == guid then
-        self.currentTarget = nil
     end
     if self.lastTrackedTarget and self.lastTrackedTarget.g == guid then
         self.lastTrackedTarget = nil
@@ -186,6 +365,89 @@ local function IsAutoTrackEnabled()
     local f = L.GetFilters and L:GetFilters()
     if f then return f.autoTrackNearest and true or false end
     return L.db and L.db.char and L.db.char.mapFilters and L.db.char.mapFilters.autoTrackNearest and true or false
+end
+
+local function ItemMatchesTracked(itemID, trackedID)
+    itemID, trackedID = tonumber(itemID), tonumber(trackedID)
+    if not itemID or not trackedID then return false end
+    if itemID == trackedID then return true end
+    if L.GetBaseItemID and L:GetBaseItemID(itemID) == L:GetBaseItemID(trackedID) then
+        return true
+    end
+    return false
+end
+
+local function CountTrackedItemInBags(trackedID)
+    trackedID = tonumber(trackedID)
+    if not trackedID or not GetContainerNumSlots or not GetContainerItemLink then return 0 end
+    local n = 0
+    for bag = 0, 4 do
+        local slots = GetContainerNumSlots(bag) or 0
+        for slot = 1, slots do
+            local link = GetContainerItemLink(bag, slot)
+            local id = link and tonumber(link:match("item:(%d+)"))
+            if id and ItemMatchesTracked(id, trackedID) then
+                local count = 1
+                if GetContainerItemInfo then
+                    local _, c = GetContainerItemInfo(bag, slot)
+                    count = tonumber(c) or 1
+                end
+                n = n + count
+            end
+        end
+    end
+    return n
+end
+
+function Arrow:SnapshotTrackedBagCount(d)
+    local id = d and tonumber(d.i)
+    self._bagCountAtNav = id and CountTrackedItemInBags(id) or 0
+end
+
+function Arrow:DismissBecauseLooted()
+    local target = self.manualTarget or self.currentTarget
+    if not target then return end
+    L._debug("Arrow", "DismissBecauseLooted: " .. tostring(target.g))
+    if target.g then
+        self.sessionSkipList[target.g] = true
+    end
+    self.manualTarget = nil
+    if not IsAutoTrackEnabled() then
+        self:Hide()
+    else
+        self:UpdateArrow(true)
+        if self.currentTarget then
+            print("|cff00ff00LootCollector:|r Tracking next nearest unlooted.")
+        else
+            self:Hide()
+        end
+    end
+end
+
+function Arrow:ClearIfTrackedItemArrivedInBags()
+    if not self.enabled then return end
+    local target = self.manualTarget or self.currentTarget
+    if not target or not target.i then return end
+    local n = CountTrackedItemInBags(target.i)
+    if n > (self._bagCountAtNav or 0) then
+        self._bagCountAtNav = n
+        self:DismissBecauseLooted()
+    end
+end
+
+function Arrow:OnBagUpdate()
+    if not self.enabled then return end
+    if self._bagClearPending then return end
+    self._bagClearPending = true
+    local function check()
+        self._bagClearPending = nil
+        self:ClearIfTrackedItemArrivedInBags()
+    end
+    if L.ScheduleAfter then
+        L:ScheduleAfter(0.2, check)
+    else
+        check()
+    end
 end
 
 local function MakeSkipBarButton(parent, label, onClick, tooltip)
@@ -210,6 +472,7 @@ local function MakeSkipBarButton(parent, label, onClick, tooltip)
 end
 
 function Arrow:EnsureSkipBar()
+    HookCrazyArrowKeepAlive()
     local parent = _G.TomTomCrazyArrow
     if not parent then return nil end
 
@@ -307,36 +570,30 @@ end
 
 function Arrow:OnPlayerLootedItem(event, itemID, c, z, x, y)
     L._debug("Arrow", "OnPlayerLootedItem() event received.")
-    
-    if not IsAutoTrackEnabled() then
-        L._debug("Arrow", "-> OnPlayerLootedItem ignored, auto-tracking is disabled.")
-        return 
+    if not self.enabled then return end
+
+    local target = self.manualTarget or self.currentTarget
+    if not target then return end
+
+    if not ItemMatchesTracked(itemID, target.i) then return end
+
+    -- Chat loot can fire after bags-full retry with stale/zero coords.
+    -- Same item in-zone is enough; bag-count is the backup if this is skipped.
+    local sameZone = (not c or not z or not target.c or not target.z)
+        or (target.c == c and target.z == z)
+    if not sameZone then return end
+
+    local dist = L:ComputeDistance(target.c, target.z, target.xy.x, target.xy.y, c, z, x, y)
+    local Constants = L:GetModule("Constants", true)
+    local CLUSTER_YARDS = 40
+    if Constants then
+        if target.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL then CLUSTER_YARDS = Constants.CLUSTER_YARDS_MS or 200
+        elseif target.dt == Constants.DISCOVERY_TYPE.BLACKMARKET then CLUSTER_YARDS = Constants.CLUSTER_YARDS_VEND or 20
+        else CLUSTER_YARDS = Constants.CLUSTER_YARDS_WF or 100 end
     end
-    if not self.enabled or not self.currentTarget then return end
 
-    local target = self.currentTarget
-    
-    if target.i == itemID and target.c == c and target.z == z then
-        local dist = L:ComputeDistance(target.c, target.z, target.xy.x, target.xy.y, c, z, x, y)
-        local Constants = L:GetModule("Constants", true)
-        
-        local CLUSTER_YARDS = 40
-        if Constants then
-            if target.dt == Constants.DISCOVERY_TYPE.MYSTIC_SCROLL then CLUSTER_YARDS = Constants.CLUSTER_YARDS_MS or 200
-            elseif target.dt == Constants.DISCOVERY_TYPE.BLACKMARKET then CLUSTER_YARDS = Constants.CLUSTER_YARDS_VEND or 20
-            else CLUSTER_YARDS = Constants.CLUSTER_YARDS_WF or 100 end
-        end
-        
-        if dist and dist <= CLUSTER_YARDS then            
-            L._debug("Arrow", "Player looted current auto-tracked target: " .. tostring(target.g))
-            
-            if target.g then
-                self.sessionSkipList[target.g] = true
-            end
-
-            self.manualTarget = nil 
-            self:UpdateArrow(true) 
-        end
+    if dist == nil or dist <= CLUSTER_YARDS then
+        self:DismissBecauseLooted()
     end
 end
 
@@ -353,11 +610,14 @@ function Arrow:OnInitialize()
     if L.LEGACY_MODE_ACTIVE then return end
     self:RegisterMessage("LOOTCOLLECTOR_PLAYER_LOOTED_ITEM", "OnPlayerLootedItem")
     self:RegisterEvent("PLAYER_ENTERING_WORLD", "OnPlayerEnteringWorld")
+    self:RegisterEvent("BAG_UPDATE", "OnBagUpdate")
+    HookCrazyArrowKeepAlive()
     self:ScheduleAutoTrackResume()
 end
 
 function Arrow:StartUpdates() 
     L._debug("Arrow", "StartUpdates() called.")
+    HookCrazyArrowKeepAlive()
     
     
     if type(C_Timer) == "table" and type(C_Timer.NewTicker) == "function" then
@@ -405,7 +665,11 @@ function Arrow:NavigateTo(discovery)
     end
     self.enabled=true
     self.manualTarget=discovery
+    if discovery and discovery.g then
+        self.sessionSkipList[discovery.g] = nil
+    end
     self:RememberTrackedTarget(discovery)
+    self:SnapshotTrackedBagCount(discovery)
     self:UpdateArrow(true)
     self:StartUpdates()
     self:UpdateSkipBar()
@@ -482,14 +746,45 @@ function Arrow:SlashCommandHandler(msg)
     end
 end
 
-function Arrow:ClearTomTomWaypoint() 
-    if self.tomtomUID then 
-        
+function Arrow:ClearTomTomWaypoint()
+    self._allowCrazyHide = true
+    if self.tomtomUID then
         L._debug("Arrow", "ClearTomTomWaypoint() called. Current TomTom UID: " .. tostring(self.tomtomUID))
         TT_RemoveWaypoint(self.tomtomUID)
-        self.tomtomUID=nil
-        TT_ClearCrazyArrow() 
-    end 
+        self.tomtomUID = nil
+        TT_ClearCrazyArrow()
+    end
+    self._allowCrazyHide = false
+end
+
+function Arrow:ApplyTomTomWaypoint(d)
+    if not d or not d.xy then return false end
+    HookCrazyArrowKeepAlive()
+    local itemName = WaypointTitle(d)
+    local mapOpen = WorldMapFrame and WorldMapFrame:IsVisible()
+    local userC, userZ, userDL
+    if mapOpen then
+        userC, userZ, userDL = SaveMapState()
+    end
+    if SetMapByID then SetMapByID((d.z or 0) - 1) end
+    L._debug("Arrow", string.format("Sending waypoint to TomTom. Continent: %s, AreaID: %s", tostring(d.c), tostring(d.z)))
+    self.tomtomUID = TT_AddZWaypoint(d.c, d.z, d.xy.x or 0, d.xy.y or 0, itemName)
+    if mapOpen then
+        RestoreMapState(userC, userZ, userDL)
+    elseif SetMapToCurrentZone then
+        SetMapToCurrentZone()
+    end
+    if self.tomtomUID then
+        self.waypointFailed = nil
+        self._invalidWaypointTicks = 0
+        lcPaintLastDist, lcPaintSpeed, lcPaintTta = 0, 0, 0
+        TT_SetCrazyArrow(self.tomtomUID, itemName)
+        L._debug("Arrow:UpdateArrow", "Successfully set TomTom waypoint. New UID: " .. tostring(self.tomtomUID))
+        return true
+    end
+    self.waypointFailed = true
+    L._debug("Arrow:UpdateArrow", "Failed to set TomTom waypoint (TT_AddZWaypoint returned nil). Blocked retries.")
+    return false
 end
 
 local function BuildArrowScanKey(continent, zoneID, filterMapOn, viewerHash, filters)
@@ -565,21 +860,24 @@ local function IsArrowTargetStillValid(self, d, currentContinent, currentZoneID,
     return true
 end
 
-function Arrow:FindBestTarget()
+function Arrow:FindBestTarget(px, py, currentContinent, currentZoneID)
     local db = L:GetDiscoveriesDB()
     if not db then self.currentTarget=nil; self._scanKey = nil; return end
     
     local filters = L:GetFilters()
     if filters.hideAll then self.currentTarget=nil; self._scanKey = nil; return end
     
-    local px,py=self:GetPlayerPos()
-    if not px or not py then 
-        L._debug("Arrow:FindBestTarget", "Failed to get player position, cannot find best target.")
-        self.currentTarget=nil
-        return 
+    if not px or not py or not currentContinent or not currentZoneID then
+        local spx, spy, sc, sz = self:GetPlayerSnapshot()
+        px = px or spx
+        py = py or spy
+        currentContinent = currentContinent or sc
+        currentZoneID = currentZoneID or sz
     end
-
-    local currentContinent, currentZoneID = self:GetPlayerLocation()
+    if not px or not py then
+        L._debug("Arrow:FindBestTarget", "Failed to get player position; keeping current target.")
+        return
+    end
     local autoTrackEnabled = filters.autoTrackNearest and true or false
     local Viewer = L:GetModule("Viewer", true)
     local filterMapOn = Viewer and Viewer.IsFilterMapEnabled and Viewer:IsFilterMapEnabled()
@@ -676,6 +974,14 @@ function Arrow:FindBestTarget()
         end
     end
 
+    if not bestTarget and self.currentTarget and self.currentTarget.g
+        and not self.sessionSkipList[self.currentTarget.g]
+        and not L:IsLootedByChar(self.currentTarget.g) then
+        -- Zone/subzone flap: keep the live waypoint instead of clearing.
+        -- Never sticky-keep a looted pin (auto-track off used to).
+        return
+    end
+
     self.currentTarget = bestTarget
     self._scanKey = scanKey
 end
@@ -687,24 +993,10 @@ function Arrow:UpdateArrow(forceUpdate)
         return 
     end
 
-    local player_x, player_y = self:GetPlayerPos()
+    local player_x, player_y, playerC, playerZ = self:GetPlayerSnapshot()
     if not player_x or not player_y then
         L._debug("Arrow:UpdateArrow", "Could not get player position this frame. Aborting update.")
         return
-    end
-
-    if self.manualTarget and self.tomtomUID then
-        local dist = TT_GetDistanceToWaypoint(self.tomtomUID)
-        if dist and dist < ARRIVAL_DISTANCE_YARDS then
-            print("|cff00ff00LootCollector:|r Arrived at manual destination. Switching to auto-navigation.")
-            local arrivedGuid = self.manualTarget.g
-            if arrivedGuid then
-                self.sessionSkipList[arrivedGuid] = true
-            end
-            self.manualTarget = nil
-            self:ClearTomTomWaypoint()
-            forceUpdate = true 
-        end
     end
 
     local oldTargetGUID = self.currentTarget and self.currentTarget.g
@@ -716,74 +1008,16 @@ function Arrow:UpdateArrow(forceUpdate)
         if forceUpdate then
             self._scanKey = nil
         end
-        self:FindBestTarget()
+        self:FindBestTarget(player_x, player_y, playerC, playerZ)
         targetThisUpdate = self.currentTarget
-    end
-
-    local autoTrackMode = IsAutoTrackEnabled()
-    if autoTrackMode and not self.manualTarget and targetThisUpdate then
-        local currentC, currentZ = self:GetPlayerLocation()
-        if currentC and currentZ then
-            local dist = L:ComputeDistance(targetThisUpdate.c, targetThisUpdate.z, targetThisUpdate.xy.x, targetThisUpdate.xy.y, currentC, currentZ, player_x, player_y)
-            
-            if dist and dist <= ARRIVAL_DISTANCE_YARDS then
-                L._debug("Arrow:UpdateArrow", "Auto-track target is very close, clearing waypoint to prevent clutter.")
-                if targetThisUpdate.g then
-                    self.sessionSkipList[targetThisUpdate.g] = true
-                end
-                self:ClearTomTomWaypoint()
-                self.currentTarget = nil
-                self._scanKey = nil
-                -- Pick the next-nearest target instead of leaving the arrow blank.
-                self:FindBestTarget()
-                targetThisUpdate = self.currentTarget
-            end
-        end
     end
     
     self.currentTarget = targetThisUpdate
     local newTargetGUID = targetThisUpdate and targetThisUpdate.g
 
-    local needsReapply = false
-
-    if forceUpdate then
-        needsReapply = true
-    elseif newTargetGUID ~= oldTargetGUID then
-        needsReapply = true
-        self.waypointFailed = nil 
-    elseif not self.tomtomUID and newTargetGUID and not self.waypointFailed then
-        needsReapply = true
-    elseif self.tomtomUID then
-        -- TomTom can report a just-created (or map-changed) waypoint as invalid.
-        -- Re-apply a couple of times while enabled; do not Hide() (that broke /lcarrow
-        -- toggle-on). Use /lcarrow to dismiss intentionally.
-        if _G.TomTom and _G.TomTom.IsValidWaypoint and not _G.TomTom:IsValidWaypoint(self.tomtomUID) then
-            self._invalidWaypointTicks = (self._invalidWaypointTicks or 0) + 1
-            L._debug("Arrow:UpdateArrow", "TomTom waypoint invalid (tick " .. self._invalidWaypointTicks .. ").")
-            -- ClearTomTomWaypoint removes via UID then nils; do not nil first or the pin is orphaned.
-            self:ClearTomTomWaypoint()
-            if self._invalidWaypointTicks <= 2 then
-                needsReapply = true
-            else
-                self.waypointFailed = true
-            end
-        else
-            self._invalidWaypointTicks = 0
-            local ttDist = TT_GetDistanceToWaypoint(self.tomtomUID)
-            if not ttDist then
-                self._ttMissingTicks = (self._ttMissingTicks or 0) + 1
-                if self._ttMissingTicks > 3 then
-                    L._debug("Arrow:Resurrection", "CRITICAL: Astrolabe glitch confirmed. Forcefully resurrecting the TomTom waypoint!")
-                    needsReapply = true
-                    self._ttMissingTicks = 0
-                end
-            else
-                self._ttMissingTicks = 0
-            end
-        end
-    end
-
     if not newTargetGUID then
+        -- Empty on purpose (hideAll, skipped last pin). Zone flaps keep
+        -- currentTarget via FindBestTarget sticky, so they do not land here.
         if self.tomtomUID then
             self:ClearTomTomWaypoint()
         end
@@ -791,36 +1025,34 @@ function Arrow:UpdateArrow(forceUpdate)
         return
     end
 
-    if needsReapply then
-        L._debug("Arrow:UpdateArrow", "Target changed, forced update, or resurrected. Old: " .. tostring(oldTargetGUID) .. " New: " .. tostring(newTargetGUID))
+    -- Recreate when the GUID changes, UID is missing, or the user explicitly
+    -- Navigate/Skip/Clear (forceUpdate). Same-UID SetCrazyArrow on an arrived
+    -- pin only flashes one frame then TomTom hides it again.
+    if forceUpdate or newTargetGUID ~= oldTargetGUID or not self.tomtomUID then
+        if forceUpdate then self.waypointFailed = nil end
+        L._debug("Arrow:UpdateArrow", "Target changed or forced. Old: " .. tostring(oldTargetGUID) .. " New: " .. tostring(newTargetGUID))
         self:ClearTomTomWaypoint()
-
-        local d = self.currentTarget
-        local mapC = d.c
-        local mapZ_areaID = d.z 
-        local x = d.xy and d.xy.x or 0
-        local y = d.xy and d.xy.y or 0
-        local itemName = (d.il and d.il:match("%[(.+)%]")) or "Discovery"
-
-        local userC, userZ, userDL = SaveMapState()
-        
-        if SetMapByID then SetMapByID(mapZ_areaID - 1) end
-        
-        L._debug("Arrow", string.format("Sending waypoint to TomTom. Continent: %s, AreaID: %s", tostring(mapC), tostring(mapZ_areaID)))
-        self.tomtomUID = TT_AddZWaypoint(mapC, mapZ_areaID, x, y, itemName)
-        
-        if userC and userZ then
-            RestoreMapState(userC, userZ, userDL)
-        end
-        
-        if self.tomtomUID then 
-            self.waypointFailed = nil
-            self._invalidWaypointTicks = 0
-            TT_SetCrazyArrow(self.tomtomUID, itemName) 
-            L._debug("Arrow:UpdateArrow", "Successfully set TomTom waypoint. New UID: " .. tostring(self.tomtomUID))
+        self:ApplyTomTomWaypoint(self.currentTarget)
+        self:SnapshotTrackedBagCount(self.currentTarget)
+        self._deadUidTicks = 0
+    else
+        -- Keep the same pin. Recreate only if TomTom deleted the waypoint.
+        -- Hide is swallowed while we own it (HookCrazyArrowKeepAlive).
+        local crazy = _G.TomTomCrazyArrow
+        local uidDead = _G.TomTom and _G.TomTom.IsValidWaypoint
+            and not _G.TomTom:IsValidWaypoint(self.tomtomUID)
+        if uidDead then
+            self._deadUidTicks = (self._deadUidTicks or 0) + 1
+            if self._deadUidTicks >= 2 then
+                self._deadUidTicks = 0
+                self:ClearTomTomWaypoint()
+                self:ApplyTomTomWaypoint(self.currentTarget)
+            end
         else
-            self.waypointFailed = true 
-            L._debug("Arrow:UpdateArrow", "Failed to set TomTom waypoint (TT_AddZWaypoint returned nil). Blocked retries.")
+            self._deadUidTicks = 0
+            if crazy and not crazy:IsShown() then
+                TT_SetCrazyArrow(self.tomtomUID, WaypointTitle(self.currentTarget))
+            end
         end
     end
 
@@ -900,8 +1132,13 @@ function Arrow:PointToRecordV5(rec)
         label = resolveZoneName(rec),
     }
 
+    if rec.g then
+        self.sessionSkipList[rec.g] = nil
+    end
+
     self.enabled = true
     self:RememberTrackedTarget(self.manualTarget)
+    self:SnapshotTrackedBagCount(self.manualTarget)
 
     if self.UpdateArrow then
         self:UpdateArrow(true)
