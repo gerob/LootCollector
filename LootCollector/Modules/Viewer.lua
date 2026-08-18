@@ -4782,10 +4782,13 @@ function Viewer:CreateWindow()
         GameTooltip:SetText("LootCollector Changelog", 1, 0.82, 0)
         local text = [=[
 Version 1.0.6:
-- Leftover map stamps merge onto the real pin on login; looted marks move with it.
-- Hand-Verified coords for multiple items that were giving multiple locations.
-- Wrong-zone copies removed (not merged onto a different item). Couple items not in the game were removed.
-- Worldforged Dung–T3 upgrade lines show again when Enhanced WF Tooltip is on.
+- Leftover map stamps — Worldforged pins copied onto wrong maps (same item, same map fractions) merge onto the real pin on login. Looted marks move with the pin that stays.
+- Verified coordinates — Verified a lot of coordinates by hand. Extra-zone copies collapse onto those pins; looted marks move with them.
+- Wrong-zone copies — Fake stamps are removed for items that only spawn in one place (for example Kixxle’s potion in Wetlands, Morin’s Jug in Loch Modan, Bonechopper in Stranglethorn). Those pins are deleted, not merged onto a different item.
+- Not in the game — Supply Runner’s Pants and Scholar’s Ring of Enlightenment are untracked. Existing pins are removed and will not come back from loot, channel, or Starter DB.
+- Worldforged upgrade tooltips — Dung–T3 upgrade lines show again on Worldforged items when Enhanced WF Tooltip is on.
+- TomTom Arrow — Arrow clears on item loot correctly. No longer disappears randomly.
+- Looted marks on real pins are kept. You do not need to reset any data.
 
 Version 1.0.5:
 - Public channel on for new users; Auto-Pause Shield at 5000 msgs/min; existing keep on/off.
@@ -4859,7 +4862,7 @@ beta-0.8.6r:
         for line in string.gmatch(text, "([^\n\r]+)") do
             if string.find(line, "^%-") then
                 local bullet = string.gsub(line, "^%-%s*", "")
-                GameTooltip:AddLine("• " .. bullet, 1, 1, 1, false)
+                GameTooltip:AddLine("• " .. bullet, 1, 1, 1, true)
             else
                 GameTooltip:AddLine(line, 1.0, 0.82, 0.0, false)
             end
